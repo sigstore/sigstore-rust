@@ -18,7 +18,7 @@ EXCLUDE_FEATURES="rustls default tuf"
 
 # Packages to skip entirely (space-separated)
 # Use this for packages that are known to require the forbidden crate
-SKIP_PACKAGES=""
+SKIP_PACKAGES="sigstore-trust-root"
 
 # =============================================================================
 # Script logic - typically no changes needed below
