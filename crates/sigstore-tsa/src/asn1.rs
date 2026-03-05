@@ -5,7 +5,7 @@
 
 use const_oid::ObjectIdentifier;
 use der::{
-    asn1::{BitString, GeneralizedTime, Int, OctetString},
+    asn1::{BitString, GeneralizedTime, Int, OctetString, Uint},
     Decode, Encode, Sequence,
 };
 use rand::RngExt;
@@ -25,33 +25,15 @@ pub const OID_SHA512: ObjectIdentifier = const_oid::db::rfc5912::ID_SHA_512;
 pub const OID_TST_INFO: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.16.1.4");
 
-/// Generates a random nonce suitable for RFC 3161 timestamp requests.
+/// Generates a random nonce for RFC 3161 timestamp requests.
 ///
-/// The nonce is generated as 8 random bytes and encoded as a positive INTEGER
-/// according to DER rules:
-/// - If the high bit is clear (0x00-0x7F), no padding is needed
-/// - If the high bit is set (0x80-0xFF), prepend 0x00 to indicate positive
-///
-/// This ensures the nonce is always interpreted as a positive integer,
-/// which is required by RFC 3161.
-///
-/// # Returns
-///
-/// A `Vec<u8>` containing 8-9 bytes suitable for passing to `Int::new()`.
-pub fn generate_positive_nonce_bytes() -> Vec<u8> {
-    let mut rng = rand::rng();
-    let nonce_random: [u8; 8] = rng.random();
-
-    // Only prepend 0x00 if the high bit is set (to avoid negative number)
-    if nonce_random[0] & 0x80 != 0 {
-        // High bit set, need 0x00 padding to indicate positive
-        let mut padded = vec![0x00];
-        padded.extend_from_slice(&nonce_random);
-        padded
-    } else {
-        // High bit clear, no padding needed
-        nonce_random.to_vec()
-    }
+/// Uses `der::asn1::Uint` to guarantee correct minimal positive DER INTEGER
+/// encoding. Raw random bytes are passed through `Uint::new` which strips
+/// leading zeros and adds sign-bit padding as required by DER.
+pub fn generate_nonce() -> Int {
+    let nonce: u64 = rand::rng().random();
+    let uint = Uint::new(&nonce.to_be_bytes()).expect("valid uint from random u64");
+    Int::from(uint)
 }
 
 /// Algorithm identifier with optional parameters
@@ -161,15 +143,11 @@ fn default_false() -> bool {
 impl TimeStampReq {
     /// Create a new timestamp request with an automatically generated nonce
     pub fn new(message_imprint: Asn1MessageImprint) -> Self {
-        // Generate a random nonce for replay protection
-        let nonce_bytes = generate_positive_nonce_bytes();
-        let nonce = Int::new(&nonce_bytes).expect("valid nonce");
-
         Self {
             version: 1,
             message_imprint,
             req_policy: None,
-            nonce: Some(nonce),
+            nonce: Some(generate_nonce()),
             cert_req: true,
         }
     }
@@ -185,9 +163,10 @@ impl TimeStampReq {
         }
     }
 
-    /// Set the nonce manually (overrides auto-generated nonce)
-    pub fn with_nonce(mut self, nonce: Vec<u8>) -> Self {
-        self.nonce = Some(Int::new(&nonce).expect("valid integer"));
+    /// Set the nonce manually (overrides auto-generated nonce).
+    pub fn with_nonce(mut self, nonce: u64) -> Self {
+        let uint = Uint::new(&nonce.to_be_bytes()).expect("valid unsigned integer");
+        self.nonce = Some(Int::from(uint));
         self
     }
 
@@ -372,38 +351,49 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_positive_nonce_bytes() {
-        // Generate multiple nonces to test both paths (high bit set and clear)
-        for _ in 0..100 {
-            let nonce_bytes = generate_positive_nonce_bytes();
-
-            // Nonce should be 8 or 9 bytes
+    fn test_generate_nonce_roundtrips_as_canonical_der() {
+        // Encode → decode round-trip. The der crate's Int decoder calls
+        // `validate_canonical` internally, which rejects non-minimal
+        // encodings (e.g. 0x00 0x35 — the same check Go's encoding/asn1
+        // performs). If our nonce encoding is ever non-minimal, the
+        // decode step will fail with a non-canonical error.
+        for _ in 0..1000 {
+            let nonce = generate_nonce();
+            let encoded = Encode::to_der(&nonce).expect("DER encoding must succeed");
+            let decoded = Int::from_der(&encoded);
             assert!(
-                nonce_bytes.len() == 8 || nonce_bytes.len() == 9,
-                "Nonce length should be 8 or 9 bytes, got {}",
-                nonce_bytes.len()
+                decoded.is_ok(),
+                "nonce failed canonical DER round-trip: {:02x?} → {:?}",
+                encoded,
+                decoded.err()
             );
+        }
+    }
 
-            // If 9 bytes, first byte should be 0x00 and second byte should have high bit set
-            if nonce_bytes.len() == 9 {
-                assert_eq!(nonce_bytes[0], 0x00, "9-byte nonce should start with 0x00");
-                assert!(
-                    nonce_bytes[1] & 0x80 != 0,
-                    "9-byte nonce should have high bit set in second byte"
-                );
-            } else {
-                // If 8 bytes, first byte should not have high bit set
-                assert!(
-                    nonce_bytes[0] & 0x80 == 0,
-                    "8-byte nonce should not have high bit set in first byte"
-                );
-            }
+    #[test]
+    fn test_uint_produces_canonical_der_for_problematic_patterns() {
+        // These are the exact byte patterns that caused HTTP 400 with the
+        // old code. Encode via Uint→Int, then decode to trigger
+        // validate_canonical.
 
-            // Verify it can be converted to Int
-            let int_result = Int::new(&nonce_bytes);
+        let cases: &[&[u8]] = &[
+            &[0x00, 0x35],             // leading zero unnecessary (0x35 high bit clear)
+            &[0x00, 0xFF],             // leading zero IS needed (0xFF high bit set)
+            &[0x00, 0x00, 0x42],       // two leading zeros, both unnecessary
+            &[0x00, 0x00, 0x00, 0x01], // many leading zeros
+        ];
+
+        for input in cases {
+            let uint = Uint::new(input).unwrap();
+            let int = Int::from(uint);
+            let encoded = Encode::to_der(&int).unwrap();
+            let decoded = Int::from_der(&encoded);
             assert!(
-                int_result.is_ok(),
-                "Nonce bytes should be valid for Int::new()"
+                decoded.is_ok(),
+                "input {:02x?} produced non-canonical DER: {:02x?} → {:?}",
+                input,
+                encoded,
+                decoded.err()
             );
         }
     }
