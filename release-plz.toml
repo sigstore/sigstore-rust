@@ -5,5 +5,3 @@ git_release_enable = true
 # Use conventional commit parsing for changelogs
 changelog_update = true
 
-# Add DCO signoff to release commits
-commit_message = "chore: release {{version}}\n\nSigned-off-by: Wolf Vollprecht <w.vollprecht@gmail.com>"
