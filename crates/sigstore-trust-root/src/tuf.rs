@@ -382,7 +382,9 @@ impl TufClient {
         // Cache the target bytes for offline use
         if !self.config.disable_cache {
             if let Ok(cache_dir) = self.get_cache_dir() {
-                let targets_dir = cache_dir.join("targets");
+                // Store in our own subdirectory to avoid conflicts with
+                // tough's internal datastore layout.
+                let targets_dir = cache_dir.join("sigstore-rust");
                 if tokio::fs::create_dir_all(&targets_dir).await.is_ok() {
                     // Best-effort: don't fail the fetch if caching fails
                     let _ = tokio::fs::write(targets_dir.join(target_name), &bytes).await;
@@ -406,7 +408,7 @@ impl TufClient {
         // Try to read from cache first, with expiration check
         if !self.config.disable_cache {
             if let Ok(cache_dir) = self.get_cache_dir() {
-                let cached_path = cache_dir.join("targets").join(target_name);
+                let cached_path = cache_dir.join("sigstore-rust").join(target_name);
                 if let Ok(bytes) = tokio::fs::read(&cached_path).await {
                     // Check TUF metadata expiration before serving cached data.
                     // The timestamp.json file has the shortest expiration in TUF
@@ -848,7 +850,7 @@ mod tests {
             .unwrap();
 
         // Write a cached target (this should NOT be returned due to expiration)
-        let targets_dir = cache_dir.join("targets");
+        let targets_dir = cache_dir.join("sigstore-rust");
         tokio::fs::create_dir_all(&targets_dir).await.unwrap();
         tokio::fs::write(targets_dir.join(TRUSTED_ROOT_TARGET), b"CACHED_BUT_EXPIRED")
             .await
@@ -886,7 +888,7 @@ mod tests {
             .unwrap();
 
         // Write a cached target
-        let targets_dir = cache_dir.join("targets");
+        let targets_dir = cache_dir.join("sigstore-rust");
         tokio::fs::create_dir_all(&targets_dir).await.unwrap();
         let cached_content = EMBEDDED_PRODUCTION_TRUSTED_ROOT; // valid content
         tokio::fs::write(targets_dir.join(TRUSTED_ROOT_TARGET), cached_content)
