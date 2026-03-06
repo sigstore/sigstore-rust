@@ -67,21 +67,25 @@ pub const SIGNING_CONFIG_TARGET: &str = "signing_config.v0.2.json";
 /// Convert a URL to a safe directory name for caching
 ///
 /// This encodes special characters to create a filesystem-safe name while
-/// remaining human-readable.
+/// remaining human-readable. URLs are expected to be ASCII.
 fn url_to_dirname(url: &str) -> String {
     let mut result = String::with_capacity(url.len() * 3);
-    for c in url.chars() {
-        match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => result.push(c),
+    for &byte in url.as_bytes() {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
+                result.push(byte as char)
+            }
             _ => {
-                for byte in c.to_string().as_bytes() {
-                    result.push_str(&format!("%{:02X}", byte));
-                }
+                result.push('%');
+                result.push(char::from(HEX_CHARS[(byte >> 4) as usize]));
+                result.push(char::from(HEX_CHARS[(byte & 0xf) as usize]));
             }
         }
     }
     result
 }
+
+const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
 
 /// Configuration for TUF client
 #[derive(Debug, Clone)]
@@ -215,25 +219,21 @@ impl TufConfig {
     ///
     /// Returns the custom root if set, otherwise returns the embedded root
     /// for known URLs (production/staging).
-    ///
-    /// # Panics
-    ///
-    /// Panics if no root.json is available for the configured URL.
-    fn get_root_json(&self) -> &[u8] {
+    fn get_root_json(&self) -> Result<&[u8]> {
         if let Some(ref root) = self.root_json {
-            return root.as_slice();
+            return Ok(root.as_slice());
         }
 
         // Fall back to embedded roots for known URLs
         if self.url == DEFAULT_TUF_URL || self.url.starts_with(DEFAULT_TUF_URL) {
-            PRODUCTION_TUF_ROOT
+            Ok(PRODUCTION_TUF_ROOT)
         } else if self.url == STAGING_TUF_URL || self.url.starts_with(STAGING_TUF_URL) {
-            STAGING_TUF_ROOT
+            Ok(STAGING_TUF_ROOT)
         } else {
-            panic!(
+            Err(Error::Tuf(format!(
                 "No root.json provided for custom URL: {}. Use TufConfig::custom() to provide one.",
                 self.url
-            )
+            )))
         }
     }
 }
@@ -310,23 +310,42 @@ impl TufClient {
         if self.config.offline {
             return self.fetch_target_offline(target_name).await;
         }
+        let repo = self.load_repository().await?;
+        self.read_target_from_repo(&repo, target_name).await
+    }
 
-        // Online mode: use TUF protocol
-        // Parse URLs
+    /// Fetch multiple targets in a single TUF session
+    ///
+    /// This avoids the overhead of re-fetching and re-verifying TUF metadata
+    /// for each target (root.json, timestamp.json, snapshot.json, targets.json).
+    async fn fetch_targets(&self, target_names: &[&str]) -> Result<Vec<Vec<u8>>> {
+        if self.config.offline {
+            let mut results = Vec::with_capacity(target_names.len());
+            for name in target_names {
+                results.push(self.fetch_target_offline(name).await?);
+            }
+            return Ok(results);
+        }
+        let repo = self.load_repository().await?;
+        let mut results = Vec::with_capacity(target_names.len());
+        for name in target_names {
+            results.push(self.read_target_from_repo(&repo, name).await?);
+        }
+        Ok(results)
+    }
+
+    /// Load the TUF repository (fetches and verifies all metadata)
+    async fn load_repository(&self) -> Result<tough::Repository> {
         let base_url = Url::parse(&self.config.url).map_err(|e| Error::Tuf(e.to_string()))?;
         let metadata_url = base_url.clone();
         let targets_url = base_url
             .join("targets/")
             .map_err(|e| Error::Tuf(e.to_string()))?;
 
-        // Create repository loader with root.json
-        let root_bytes = self.config.get_root_json().to_vec();
+        let root_bytes = self.config.get_root_json()?.to_vec();
         let mut loader = RepositoryLoader::new(&root_bytes, metadata_url, targets_url);
-
-        // Use HTTP transport
         loader = loader.transport(HttpTransport::default());
 
-        // Optionally set datastore for caching
         if !self.config.disable_cache {
             let cache_dir = self.get_cache_dir()?;
             tokio::fs::create_dir_all(&cache_dir)
@@ -335,13 +354,18 @@ impl TufClient {
             loader = loader.datastore(cache_dir);
         }
 
-        // Load the repository (fetches and verifies all metadata)
-        let repo = loader
+        loader
             .load()
             .await
-            .map_err(|e| Error::Tuf(format!("TUF repository load failed: {}", e)))?;
+            .map_err(|e| Error::Tuf(format!("TUF repository load failed: {}", e)))
+    }
 
-        // Fetch the target
+    /// Read a single target from an already-loaded repository
+    async fn read_target_from_repo(
+        &self,
+        repo: &tough::Repository,
+        target_name: &str,
+    ) -> Result<Vec<u8>> {
         let target = TargetName::new(target_name)
             .map_err(|e| Error::Tuf(format!("Invalid target name: {}", e)))?;
         let stream = repo
@@ -350,7 +374,6 @@ impl TufClient {
             .map_err(|e| Error::Tuf(format!("Failed to read target: {}", e)))?
             .ok_or_else(|| Error::Tuf(format!("Target not found: {}", target_name)))?;
 
-        // Read all bytes from the stream
         let bytes = stream
             .into_vec()
             .await
@@ -619,6 +642,39 @@ impl SigningConfig {
     }
 }
 
+/// Fetch both the trusted root and signing config in a single TUF session.
+///
+/// This is more efficient than calling `TrustedRoot::from_tuf()` and
+/// `SigningConfig::from_tuf()` separately, as it only performs the TUF
+/// metadata exchange (root → timestamp → snapshot → targets) once.
+///
+/// # Example
+///
+/// ```no_run
+/// use sigstore_trust_root::tuf::{fetch_trust_material, TufConfig};
+///
+/// # async fn example() -> Result<(), sigstore_trust_root::Error> {
+/// let (root, config) = fetch_trust_material(TufConfig::production()).await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn fetch_trust_material(config: TufConfig) -> Result<(TrustedRoot, SigningConfig)> {
+    let client = TufClient::new(config);
+    let results = client
+        .fetch_targets(&[TRUSTED_ROOT_TARGET, SIGNING_CONFIG_TARGET])
+        .await?;
+
+    let root_json = String::from_utf8(results[0].clone())
+        .map_err(|e| Error::Tuf(format!("Invalid UTF-8 in {}: {}", TRUSTED_ROOT_TARGET, e)))?;
+    let config_json = String::from_utf8(results[1].clone())
+        .map_err(|e| Error::Tuf(format!("Invalid UTF-8 in {}: {}", SIGNING_CONFIG_TARGET, e)))?;
+
+    let root = TrustedRoot::from_json(&root_json)?;
+    let config = SigningConfig::from_json(&config_json)?;
+
+    Ok((root, config))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -675,25 +731,24 @@ mod tests {
     #[test]
     fn test_tuf_config_get_root_json_production() {
         let config = TufConfig::production();
-        assert_eq!(config.get_root_json(), PRODUCTION_TUF_ROOT);
+        assert_eq!(config.get_root_json().unwrap(), PRODUCTION_TUF_ROOT);
     }
 
     #[test]
     fn test_tuf_config_get_root_json_staging() {
         let config = TufConfig::staging();
-        assert_eq!(config.get_root_json(), STAGING_TUF_ROOT);
+        assert_eq!(config.get_root_json().unwrap(), STAGING_TUF_ROOT);
     }
 
     #[test]
     fn test_tuf_config_get_root_json_custom() {
         let root_json = b"custom root";
         let config = TufConfig::custom("https://custom.tuf/", root_json);
-        assert_eq!(config.get_root_json(), root_json);
+        assert_eq!(config.get_root_json().unwrap(), root_json);
     }
 
     #[test]
-    #[should_panic(expected = "No root.json provided for custom URL")]
-    fn test_tuf_config_get_root_json_unknown_url_panics() {
+    fn test_tuf_config_get_root_json_unknown_url_errors() {
         let config = TufConfig {
             url: "https://unknown.tuf/".to_string(),
             cache_dir: None,
@@ -701,7 +756,10 @@ mod tests {
             offline: false,
             root_json: None,
         };
-        let _ = config.get_root_json();
+        let err = config.get_root_json().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("No root.json provided for custom URL"));
     }
 
     #[test]
