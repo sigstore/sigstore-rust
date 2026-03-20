@@ -210,7 +210,7 @@ pub fn verify_consistency_proof(
 /// Returns (inner_path_length, border_path_length)
 fn decompose_inclusion_proof(index: u64, tree_size: u64) -> Result<(usize, usize)> {
     let inner = inner_proof_size(index, tree_size);
-    let border = bit_length((index >> inner) as u64) as usize;
+    let border = index.checked_shr(inner as u32).unwrap_or(0).count_ones() as usize;
     Ok((inner, border))
 }
 
@@ -303,13 +303,21 @@ mod tests {
         assert_eq!(border, 0);
 
         // For tree_size=2, index=1: 1 ^ 1 = 0, bit_length(0) = 0
-        // The border calculation: bit_length(1 >> 0) = bit_length(1) = 1
-        // Wait, this doesn't match. Let me trace through:
+        // The border calculation:
         // inner = bit_length(1 ^ (2-1)) = bit_length(1 ^ 1) = bit_length(0) = 0
-        // border = bit_length((1 >> 0) as u64) = bit_length(1) = 1
+        // border = count_ones(1 >> 0) = count_ones(1) = 1
         // So we expect 0 inner hashes and 1 border hash = 1 total
         let (inner, border) = decompose_inclusion_proof(1, 2).unwrap();
         assert_eq!(inner, 0);
+        assert_eq!(border, 1);
+
+        // Test a case where population count differs from bit length.
+        // index = 4, tree_size = 6.
+        // inner = bit_length(4 ^ 5) = bit_length(1) = 1.
+        // index >> inner = 4 >> 1 = 2 (binary 10).
+        // bit_length(2) = 2, but count_ones(2) = 1.
+        let (inner, border) = decompose_inclusion_proof(4, 6).unwrap();
+        assert_eq!(inner, 1);
         assert_eq!(border, 1);
     }
 
