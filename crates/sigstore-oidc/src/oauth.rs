@@ -389,6 +389,15 @@ impl OAuthClient {
             }
         }
 
+        // Drain request headers to avoid TCP RST
+        let mut header = String::new();
+        while let Ok(bytes_read) = reader.read_line(&mut header) {
+            if bytes_read == 0 || header == "\r\n" || header == "\n" {
+                break;
+            }
+            header.clear();
+        }
+
         // Send response to browser using templates
         let (status, html) = if let Some(ref err) = error {
             let error_msg = error_description.as_deref().unwrap_or(err);
