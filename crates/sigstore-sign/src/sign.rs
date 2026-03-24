@@ -233,20 +233,22 @@ impl Signer {
         // 3. Sign the artifact
         let signature = key_pair.sign(bytes)?;
 
-        // 4. Create Rekor entry (with certificate, not just public key)
+        // 4. Compute artifact hash
+        let artifact_hash = sigstore_crypto::sha256(bytes);
+
+        // 5. Create Rekor entry (with certificate, not just public key)
         let tlog_entry = self
-            .create_rekor_entry(bytes, &signature, &leaf_cert_der)
+            .create_rekor_entry(&artifact_hash, &signature, &leaf_cert_der)
             .await?;
 
-        // 5. Get timestamp from TSA (optional)
+        // 6. Get timestamp from TSA (optional)
         let timestamp = if let Some(tsa_url) = &self.tsa_url {
             Some(self.request_timestamp(tsa_url, &signature).await?)
         } else {
             None
         };
 
-        // 6. Build bundle
-        let artifact_hash = sigstore_crypto::sha256(bytes);
+        // 7. Build bundle
         let mut bundle =
             BundleV03::with_certificate_and_signature(leaf_cert_der, signature, artifact_hash)
                 .with_tlog_entry(tlog_entry.build());
@@ -291,13 +293,10 @@ impl Signer {
     /// Create a Rekor entry for the signed artifact
     async fn create_rekor_entry(
         &self,
-        artifact: &[u8],
+        artifact_hash: &Sha256Hash,
         signature: &SignatureBytes,
         certificate: &DerCertificate,
     ) -> Result<TlogEntryBuilder> {
-        // Compute artifact hash
-        let artifact_hash = sigstore_crypto::sha256(artifact);
-
         // Create Rekor client
         let rekor = RekorClient::new(&self.rekor_url);
 
@@ -305,14 +304,14 @@ impl Signer {
         let (log_entry, version) =
             match self.rekor_api_version {
                 RekorApiVersion::V1 => {
-                    let hashed_rekord = HashedRekord::new(&artifact_hash, signature, certificate);
+                    let hashed_rekord = HashedRekord::new(artifact_hash, signature, certificate);
                     let entry = rekor.create_entry(hashed_rekord).await.map_err(|e| {
                         Error::Signing(format!("Failed to create Rekor entry: {}", e))
                     })?;
                     (entry, "0.0.1")
                 }
                 RekorApiVersion::V2 => {
-                    let hashed_rekord = HashedRekordV2::new(&artifact_hash, signature, certificate);
+                    let hashed_rekord = HashedRekordV2::new(artifact_hash, signature, certificate);
                     let entry = rekor.create_entry_v2(hashed_rekord).await.map_err(|e| {
                         Error::Signing(format!("Failed to create Rekor entry: {}", e))
                     })?;
