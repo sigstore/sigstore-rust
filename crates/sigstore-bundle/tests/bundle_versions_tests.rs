@@ -182,6 +182,30 @@ fn test_v03_bundle_with_timestamp() {
 }
 
 #[test]
+fn test_v03_bundle_with_timestamp_and_no_tlog_entries() {
+    let mut bundle = Bundle::from_json(V03_BUNDLE_WITH_TIMESTAMP).expect("Failed to parse bundle");
+    bundle.verification_material.tlog_entries.clear();
+
+    let options = ValidationOptions {
+        require_inclusion_proof: false,
+        require_timestamp: true,
+    };
+
+    let result = validate_bundle_with_options(&bundle, &options);
+    assert!(
+        result.is_ok(),
+        "timestamp-backed bundle without tlog entries should validate when tlog verification is disabled: {:?}",
+        result.err()
+    );
+
+    let default_result = validate_bundle(&bundle);
+    assert!(
+        default_result.is_err(),
+        "default validation should still require tlog entries"
+    );
+}
+
+#[test]
 fn test_v03_bundle_serialization_roundtrip() {
     let bundle = Bundle::from_json(V03_BUNDLE_WITH_PROOF).expect("Failed to parse bundle");
 
