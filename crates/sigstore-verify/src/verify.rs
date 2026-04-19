@@ -248,6 +248,7 @@ impl Verifier {
             bundle,
             &signature,
             &self.trusted_root,
+            policy.verify_timestamp,
         )?;
 
         // (1): Verify that the signing certificate chains to the root of trust,

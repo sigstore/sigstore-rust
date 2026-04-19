@@ -194,16 +194,28 @@ pub fn determine_validation_time(
     bundle: &Bundle,
     signature: &SignatureBytes,
     trusted_root: &TrustedRoot,
+    verify_timestamp: bool,
 ) -> Result<i64> {
-    // Try TSA timestamp first (most authoritative)
-    if let Some(tsa_time) = extract_tsa_timestamp(bundle, signature.as_bytes(), trusted_root)? {
-        return Ok(tsa_time);
-    }
+    // Try TSA timestamp first (most authoritative), unless disabled by policy.
+    let timestamp_error = if verify_timestamp {
+        match extract_tsa_timestamp(bundle, signature.as_bytes(), trusted_root) {
+            Ok(Some(tsa_time)) => return Ok(tsa_time),
+            Ok(None) => None,
+            Err(err) => Some(err),
+        }
+    } else {
+        None
+    };
 
     // Try integrated time from V1 tlog entries with inclusion promises
     // Per sigstore-python: integrated_time only counts if accompanied by inclusion_promise
     if let Some(integrated_time) = extract_v1_integrated_time_with_promise(bundle) {
         return Ok(integrated_time);
+    }
+
+    // Preserve TSA verification errors when no Rekor v1 time can be used instead.
+    if let Some(err) = timestamp_error {
+        return Err(err);
     }
 
     // No verified timestamp found - fail verification
@@ -422,4 +434,106 @@ fn get_issuer_spki(
     Err(Error::Verification(
         "could not find issuer certificate for SCT verification".to_string(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sigstore_types::bundle::{
+        CertificateContent, Rfc3161Timestamp, TimestampVerificationData,
+        VerificationMaterialContent,
+    };
+    use sigstore_types::{
+        CanonicalizedBody, InclusionPromise, KindVersion, LogId, LogIndex, LogKeyId,
+        MessageSignature, SignatureContent, SignedTimestamp, TimestampToken, TransparencyLogEntry,
+        VerificationMaterial,
+    };
+
+    fn trusted_root() -> TrustedRoot {
+        TrustedRoot::from_json(
+            r#"{
+                "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
+                "tlogs": [],
+                "certificateAuthorities": [],
+                "ctlogs": [],
+                "timestampAuthorities": []
+            }"#,
+        )
+        .unwrap()
+    }
+
+    fn bundle(tlog_entries: Vec<TransparencyLogEntry>) -> Bundle {
+        Bundle {
+            media_type: "application/vnd.dev.sigstore.bundle.v0.3+json".to_string(),
+            verification_material: VerificationMaterial {
+                content: VerificationMaterialContent::Certificate(CertificateContent {
+                    raw_bytes: DerCertificate::from_bytes(b"cert"),
+                }),
+                tlog_entries,
+                timestamp_verification_data: TimestampVerificationData {
+                    rfc3161_timestamps: vec![Rfc3161Timestamp {
+                        signed_timestamp: TimestampToken::from_bytes(b"not a timestamp"),
+                    }],
+                },
+            },
+            content: SignatureContent::MessageSignature(MessageSignature {
+                message_digest: None,
+                signature: SignatureBytes::from_bytes(b"sig"),
+            }),
+        }
+    }
+
+    fn v1_tlog_entry(integrated_time: i64) -> TransparencyLogEntry {
+        TransparencyLogEntry {
+            log_index: LogIndex::new(0),
+            log_id: LogId {
+                key_id: LogKeyId::from_bytes(b"test-key-id"),
+            },
+            kind_version: KindVersion {
+                kind: "hashedrekord".to_string(),
+                version: "0.0.1".to_string(),
+            },
+            integrated_time,
+            inclusion_promise: Some(InclusionPromise {
+                signed_entry_timestamp: SignedTimestamp::from_bytes(b"set"),
+            }),
+            inclusion_proof: None,
+            canonicalized_body: CanonicalizedBody::from_bytes(b"body"),
+        }
+    }
+
+    #[test]
+    fn determine_validation_time_uses_tlog_when_timestamp_verification_disabled() {
+        let bundle = bundle(vec![v1_tlog_entry(1234)]);
+        let signature = SignatureBytes::from_bytes(b"sig");
+
+        let validation_time =
+            determine_validation_time(&bundle, &signature, &trusted_root(), false).unwrap();
+
+        assert_eq!(validation_time, 1234);
+    }
+
+    #[test]
+    fn determine_validation_time_falls_back_to_tlog_when_tsa_fails() {
+        let bundle = bundle(vec![v1_tlog_entry(1234)]);
+        let signature = SignatureBytes::from_bytes(b"sig");
+
+        let validation_time =
+            determine_validation_time(&bundle, &signature, &trusted_root(), true).unwrap();
+
+        assert_eq!(validation_time, 1234);
+    }
+
+    #[test]
+    fn determine_validation_time_preserves_tsa_error_without_tlog_fallback() {
+        let bundle = bundle(vec![]);
+        let signature = SignatureBytes::from_bytes(b"sig");
+
+        let err = determine_validation_time(&bundle, &signature, &trusted_root(), true)
+            .expect_err("invalid timestamp should fail without a tlog fallback");
+
+        assert!(err
+            .to_string()
+            .contains("TSA timestamp verification failed"));
+    }
 }
