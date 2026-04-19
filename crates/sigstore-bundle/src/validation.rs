@@ -105,21 +105,23 @@ fn validate_v0_3(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
 
 /// Common validation for all bundle versions
 fn validate_common(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
-    // Must have at least one tlog entry
-    if bundle.verification_material.tlog_entries.is_empty() {
+    let has_tlog_entries = !bundle.verification_material.tlog_entries.is_empty();
+    let has_timestamp = !bundle
+        .verification_material
+        .timestamp_verification_data
+        .rfc3161_timestamps
+        .is_empty();
+
+    // Bundles verified without transparency-log requirements may establish
+    // signing time from RFC3161 timestamp data alone.
+    if !has_tlog_entries && (options.require_inclusion_proof || !has_timestamp) {
         return Err(Error::Validation(
-            "bundle must have at least one tlog entry".to_string(),
+            "bundle must have at least one tlog entry or timestamp verification data".to_string(),
         ));
     }
 
     // Check timestamp if required
-    if options.require_timestamp
-        && bundle
-            .verification_material
-            .timestamp_verification_data
-            .rfc3161_timestamps
-            .is_empty()
-    {
+    if options.require_timestamp && !has_timestamp {
         return Err(Error::Validation(
             "bundle must have timestamp verification data".to_string(),
         ));
