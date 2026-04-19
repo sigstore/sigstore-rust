@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5](https://github.com/sigstore/sigstore-rust/compare/sigstore-sign-v0.6.4...sigstore-sign-v0.6.5) - 2026-04-19
+
+### Other
+
+- API for fetching / using the trust root ([#69](https://github.com/sigstore/sigstore-rust/pull/69))
+- Avoid hashing the payload twice
+
 ## [0.6.3](https://github.com/prefix-dev/sigstore-rust/compare/sigstore-sign-v0.6.2...sigstore-sign-v0.6.3) - 2026-02-06
 
 ### Added
