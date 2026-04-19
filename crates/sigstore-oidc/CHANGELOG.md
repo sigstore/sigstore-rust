@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5](https://github.com/sigstore/sigstore-rust/compare/sigstore-oidc-v0.6.4...sigstore-oidc-v0.6.5) - 2026-04-19
+
+### Other
+
+- Drain request before disconnection ([#78](https://github.com/sigstore/sigstore-rust/pull/78))
+
 ## [0.6.4](https://github.com/sigstore/sigstore-rust/compare/sigstore-oidc-v0.6.3...sigstore-oidc-v0.6.4) - 2026-03-06
 
 ### Other

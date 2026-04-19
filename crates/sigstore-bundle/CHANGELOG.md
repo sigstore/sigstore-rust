@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5](https://github.com/sigstore/sigstore-rust/compare/sigstore-bundle-v0.6.4...sigstore-bundle-v0.6.5) - 2026-04-19
+
+### Other
+
+- Allow timestamp-backed bundles without tlog entries ([#80](https://github.com/sigstore/sigstore-rust/pull/80))
+
 ## [0.6.2](https://github.com/prefix-dev/sigstore-rust/compare/sigstore-bundle-v0.6.1...sigstore-bundle-v0.6.2) - 2026-02-04
 
 ### Other
