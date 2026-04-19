@@ -39,8 +39,6 @@
 
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
-use serde::Deserialize;
 use tough::{HttpTransport, IntoVec, RepositoryLoader, TargetName};
 use url::Url;
 
@@ -69,8 +67,11 @@ pub const SIGNING_CONFIG_TARGET: &str = "signing_config.v0.2.json";
 /// This encodes special characters to create a filesystem-safe name while
 /// remaining human-readable. URLs are expected to be ASCII.
 fn url_to_dirname(url: &str) -> String {
-    let mut result = String::with_capacity(url.len() * 3);
-    for &byte in url.as_bytes() {
+    // Normalize trailing slashes so that `https://example.com` and
+    // `https://example.com/` resolve to the same cache directory.
+    let trimmed = url.trim_end_matches('/');
+    let mut result = String::with_capacity(trimmed.len() * 3);
+    for &byte in trimmed.as_bytes() {
         match byte {
             b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
                 result.push(byte as char)
@@ -252,20 +253,6 @@ const EMBEDDED_STAGING_TRUSTED_ROOT: &[u8] = include_bytes!("trusted_root_stagin
 const EMBEDDED_STAGING_SIGNING_CONFIG: &[u8] =
     include_bytes!("../repository/signing_config_staging.json");
 
-/// Minimal TUF metadata structure for parsing expiration dates.
-///
-/// TUF metadata files (timestamp.json, snapshot.json, etc.) contain a "signed"
-/// object with an "expires" field. We only need to parse this to check freshness.
-#[derive(Deserialize)]
-struct TufMetadata {
-    signed: TufSigned,
-}
-
-#[derive(Deserialize)]
-struct TufSigned {
-    expires: DateTime<Utc>,
-}
-
 /// Internal TUF client for fetching targets
 struct TufClient {
     config: TufConfig,
@@ -398,36 +385,23 @@ impl TufClient {
     /// Fetch target in offline mode (no network)
     ///
     /// Priority:
-    /// 1. Check local TUF cache — only if TUF metadata has not expired
-    /// 2. Fall back to embedded data (compile-time snapshot, no expiration check)
+    /// 1. Local TUF cache (from a previous online fetch, verified at download time)
+    /// 2. Embedded data (compile-time snapshot)
     ///
-    /// The TUF metadata expiration check prevents serving stale cached data after
-    /// a key rotation or revocation. This mirrors TUF's built-in freshness guarantees
-    /// that are normally enforced during online updates.
+    /// Cached data is preferred over embedded because it is at least as fresh as
+    /// the embedded snapshot. Freshness of the underlying TUF metadata is *not*
+    /// re-verified here — if the caller needs current key material, they should
+    /// run without `offline()` so the TUF client can fetch fresh metadata.
     async fn fetch_target_offline(&self, target_name: &str) -> Result<Vec<u8>> {
-        // Try to read from cache first, with expiration check
         if !self.config.disable_cache {
             if let Ok(cache_dir) = self.get_cache_dir() {
                 let cached_path = cache_dir.join("sigstore-rust").join(target_name);
                 if let Ok(bytes) = tokio::fs::read(&cached_path).await {
-                    // Check TUF metadata expiration before serving cached data.
-                    // The timestamp.json file has the shortest expiration in TUF
-                    // (typically 1 day) and is the primary freshness indicator.
-                    match self.check_cache_expiration(&cache_dir).await {
-                        Ok(()) => return Ok(bytes),
-                        Err(e) => {
-                            tracing::warn!(
-                                "Cached TUF metadata has expired ({}), falling back to embedded data",
-                                e
-                            );
-                            // Fall through to embedded data
-                        }
-                    }
+                    return Ok(bytes);
                 }
             }
         }
 
-        // Fall back to embedded data
         for (name, data) in self.embedded_targets {
             if *name == target_name {
                 return Ok(data.to_vec());
@@ -438,33 +412,6 @@ impl TufClient {
             "Target '{}' not found in cache or embedded data (offline mode)",
             target_name
         )))
-    }
-
-    /// Check whether cached TUF metadata is still fresh (not expired).
-    ///
-    /// Reads the `timestamp.json` from the datastore and checks its `expires` field.
-    /// TUF's timestamp metadata has the shortest expiration (typically 1 day) and
-    /// serves as the primary freshness indicator. If the timestamp has expired,
-    /// the cached data should not be trusted because a key rotation or revocation
-    /// may have occurred since the last online update.
-    async fn check_cache_expiration(&self, cache_dir: &Path) -> std::result::Result<(), String> {
-        let timestamp_path = cache_dir.join("timestamp.json");
-        let timestamp_bytes = tokio::fs::read(&timestamp_path)
-            .await
-            .map_err(|e| format!("cannot read timestamp.json: {}", e))?;
-
-        let metadata: TufMetadata = serde_json::from_slice(&timestamp_bytes)
-            .map_err(|e| format!("cannot parse timestamp.json: {}", e))?;
-
-        let now = Utc::now();
-        if now > metadata.signed.expires {
-            return Err(format!(
-                "timestamp.json expired at {} (now: {})",
-                metadata.signed.expires, now
-            ));
-        }
-
-        Ok(())
     }
 
     /// Get the cache directory path
@@ -687,12 +634,23 @@ mod tests {
             url_to_dirname("https://tuf-repo-cdn.sigstore.dev"),
             "https%3A%2F%2Ftuf-repo-cdn.sigstore.dev"
         );
-        assert_eq!(
-            url_to_dirname("https://sigstore.github.io/root-signing/"),
-            "https%3A%2F%2Fsigstore.github.io%2Froot-signing%2F"
-        );
         // Alphanumeric and safe chars should pass through
         assert_eq!(url_to_dirname("abc-123_test.json"), "abc-123_test.json");
+    }
+
+    #[test]
+    fn test_url_to_dirname_normalizes_trailing_slash() {
+        // URLs that differ only in trailing slash(es) should map to the same dir.
+        let no_slash = url_to_dirname("https://tuf-repo-cdn.sigstore.dev");
+        let one_slash = url_to_dirname("https://tuf-repo-cdn.sigstore.dev/");
+        let many_slashes = url_to_dirname("https://tuf-repo-cdn.sigstore.dev///");
+        assert_eq!(no_slash, one_slash);
+        assert_eq!(no_slash, many_slashes);
+
+        assert_eq!(
+            url_to_dirname("https://sigstore.github.io/root-signing/"),
+            url_to_dirname("https://sigstore.github.io/root-signing"),
+        );
     }
 
     #[test]
@@ -830,76 +788,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_offline_mode_expired_cache_falls_back_to_embedded() {
-        // Create a temp dir with expired TUF metadata and a cached target
+    async fn test_offline_mode_uses_cache_when_present() {
+        // Cached data should be preferred over embedded in offline mode.
         let tmp = tempfile::tempdir().unwrap();
         let cache_dir = tmp.path().to_path_buf();
 
-        // Write an expired timestamp.json
-        let expired_timestamp = r#"{
-            "signed": {
-                "_type": "timestamp",
-                "expires": "2020-01-01T00:00:00Z",
-                "version": 1,
-                "spec_version": "1.0"
-            },
-            "signatures": []
-        }"#;
-        tokio::fs::write(cache_dir.join("timestamp.json"), expired_timestamp)
-            .await
-            .unwrap();
-
-        // Write a cached target (this should NOT be returned due to expiration)
         let targets_dir = cache_dir.join("sigstore-rust");
         tokio::fs::create_dir_all(&targets_dir).await.unwrap();
-        tokio::fs::write(targets_dir.join(TRUSTED_ROOT_TARGET), b"CACHED_BUT_EXPIRED")
-            .await
-            .unwrap();
-
-        // Use offline mode pointing to our temp cache
-        let config = TufConfig::production().offline().with_cache_dir(cache_dir);
-        let client = TufClient::new(config);
-
-        // Should fall back to embedded data since cache is expired
-        let bytes = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap();
-        assert_ne!(bytes, b"CACHED_BUT_EXPIRED");
-        // Should be valid embedded trusted root
-        let _root: crate::TrustedRoot = serde_json::from_slice(&bytes).unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_offline_mode_fresh_cache_is_used() {
-        // Create a temp dir with fresh TUF metadata and a cached target
-        let tmp = tempfile::tempdir().unwrap();
-        let cache_dir = tmp.path().to_path_buf();
-
-        // Write a timestamp.json that expires far in the future
-        let fresh_timestamp = r#"{
-            "signed": {
-                "_type": "timestamp",
-                "expires": "2099-01-01T00:00:00Z",
-                "version": 1,
-                "spec_version": "1.0"
-            },
-            "signatures": []
-        }"#;
-        tokio::fs::write(cache_dir.join("timestamp.json"), fresh_timestamp)
-            .await
-            .unwrap();
-
-        // Write a cached target
-        let targets_dir = cache_dir.join("sigstore-rust");
-        tokio::fs::create_dir_all(&targets_dir).await.unwrap();
-        let cached_content = EMBEDDED_PRODUCTION_TRUSTED_ROOT; // valid content
+        let cached_content = EMBEDDED_PRODUCTION_TRUSTED_ROOT;
         tokio::fs::write(targets_dir.join(TRUSTED_ROOT_TARGET), cached_content)
             .await
             .unwrap();
 
-        // Use offline mode pointing to our temp cache
         let config = TufConfig::production().offline().with_cache_dir(cache_dir);
         let client = TufClient::new(config);
 
-        // Should use the cached data since it's fresh
         let bytes = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap();
         assert_eq!(bytes, cached_content);
     }
