@@ -318,17 +318,17 @@ fn verify_cms_signature(
         Error::SignatureVerificationError("no signed attributes found".to_string())
     })?;
 
+    // Get the digest algorithm OID from signer_info
+    let digest_alg_oid = &signer_info.digest_alg.oid;
+
     // Verify the message-digest attribute matches the TSTInfo
-    verify_message_digest_attribute(signed_attrs, tst_info_der)?;
+    verify_message_digest_attribute(signed_attrs, tst_info_der, digest_alg_oid)?;
 
     // Re-encode attributes for signature verification
     let signed_attrs_bytes = get_signed_attrs_for_verification(signed_attrs)?;
 
     // Verify the signature using the signer certificate's public key
     let signature_bytes = signer_info.signature.as_bytes();
-
-    // Get the digest algorithm OID from signer_info
-    let digest_alg_oid = &signer_info.digest_alg.oid;
 
     // Verify the signature
     verify_ecdsa_signature(
@@ -408,12 +408,17 @@ fn find_signer_certificate(
     }
 }
 
-/// Verify the message-digest attribute in signed_attrs matches the TSTInfo content
+/// Verify the message-digest attribute in signed_attrs matches the TSTInfo content.
+///
+/// The digest algorithm is taken from the `SignerInfo.digestAlgorithm` field (RFC 5652
+/// §5.3) rather than assumed to be SHA-256, so signers that use SHA-384 or SHA-512 —
+/// notably GitHub Actions's internal TSA, which uses SHA-384 — can still be verified.
 fn verify_message_digest_attribute(
     signed_attrs: &x509_cert::attr::Attributes,
     tst_info_der: &[u8],
+    digest_alg_oid: &ObjectIdentifier,
 ) -> Result<()> {
-    use aws_lc_rs::digest::{digest, SHA256};
+    use aws_lc_rs::digest::{digest, SHA256, SHA384, SHA512};
     use x509_cert::der::asn1::OctetStringRef;
     use x509_cert::der::{Decode, Encode};
 
@@ -455,8 +460,19 @@ fn verify_message_digest_attribute(
 
     let message_digest = message_digest_octets.as_bytes();
 
-    // Hash the TSTInfo content
-    let content_hash = digest(&SHA256, tst_info_der);
+    // Hash the TSTInfo content using the algorithm declared by the signer.
+    let content_hash = if digest_alg_oid == &OID_SHA256 {
+        digest(&SHA256, tst_info_der)
+    } else if digest_alg_oid == &OID_SHA384 {
+        digest(&SHA384, tst_info_der)
+    } else if digest_alg_oid == &OID_SHA512 {
+        digest(&SHA512, tst_info_der)
+    } else {
+        return Err(Error::ParseError(format!(
+            "unsupported signer digest algorithm: {}",
+            digest_alg_oid
+        )));
+    };
 
     // Compare the hashes
     if content_hash.as_ref() != message_digest {
@@ -812,6 +828,48 @@ mod tests {
             Error::HashMismatch { .. } => (),
             other => panic!("Expected HashMismatch error, got: {:?}", other),
         }
+    }
+
+    /// Regression test for the SHA-256 hardcode in `verify_message_digest_attribute`.
+    ///
+    /// GitHub Actions's internal TSA signs CMS `SignedData` with SHA-384, declared in
+    /// `SignerInfo.digestAlgorithm`. Before this fix the verifier assumed SHA-256 and
+    /// rejected every GitHub-issued attestation with `HashMismatch { expected: <48 hex
+    /// bytes>, actual: <32 hex bytes> }`. The bundle in
+    /// `test_data/timestamps/github_sha384_bundle.json` is a real attestation from
+    /// `jdx/communique@v0.1.9` and the trust root is GitHub's published TSA chain
+    /// from <https://tuf-repo.github.com/>, narrowed to just `timestampAuthorities`.
+    const GITHUB_SHA384_BUNDLE: &str =
+        include_str!("../test_data/timestamps/github_sha384_bundle.json");
+    const GITHUB_TRUSTED_ROOT: &str =
+        include_str!("../test_data/timestamps/github_trusted_root.json");
+
+    /// Helper to extract a DSSE envelope signature, matching how `sigstore-verify`'s
+    /// `extract_signature` feeds DSSE bundles into `verify_timestamp_response`.
+    fn extract_dsse_signature(bundle_json: &str) -> Vec<u8> {
+        let bundle: serde_json::Value = serde_json::from_str(bundle_json).unwrap();
+        let sig = bundle["dsseEnvelope"]["signatures"][0]["sig"]
+            .as_str()
+            .unwrap();
+        STANDARD.decode(sig).unwrap()
+    }
+
+    #[test]
+    fn test_verify_github_sha384_timestamp() {
+        let timestamp_token = extract_timestamp_token(GITHUB_SHA384_BUNDLE);
+        let signature = extract_dsse_signature(GITHUB_SHA384_BUNDLE);
+
+        // GitHub's TSA chain is not embedded in the CMS `SignedData.certificates`,
+        // so `find_signer_certificate` needs the chain provided out-of-band.
+        let tsa_certs = extract_tsa_certs(GITHUB_TRUSTED_ROOT);
+        let opts = VerifyOpts::new().with_tsa_certificates(tsa_certs);
+
+        let result = verify_timestamp_response(&timestamp_token, &signature, opts);
+        assert!(
+            result.is_ok(),
+            "GitHub SHA-384 timestamp should verify: {:?}",
+            result
+        );
     }
 
     #[test]
