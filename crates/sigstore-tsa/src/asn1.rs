@@ -8,7 +8,7 @@ use der::{
     asn1::{BitString, GeneralizedTime, Int, OctetString, Uint},
     Decode, Encode, Sequence,
 };
-use rand::RngExt;
+use rand::Rng;
 use sigstore_types::HashAlgorithm;
 use x509_cert::{ext::pkix::name::GeneralName, ext::Extensions};
 

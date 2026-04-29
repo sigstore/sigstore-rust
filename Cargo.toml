@@ -37,8 +37,8 @@ aws-lc-rs = "1.15"
 sha2 = "0.10"
 digest = "0.10"
 signature = "2.2"
-rand_core = { version = "0.10.0" }
-rand = "0.10.0"
+rand_core = { version = "0.9.5" }
+rand = "0.9.4"
 
 # ASN.1 / X.509
 der = { version = "0.7", features = ["alloc", "derive", "oid"] }
@@ -53,7 +53,7 @@ tls_codec = { version = "0.4", default-features = false, features = ["derive"] }
 cms = { version = "0.2", default-features = false }
 x509-tsp = { version = "0.1", default-features = false }
 cmpv2 = { version = "0.2", default-features = false }
-rustls-webpki = { version = "0.103", default-features = false, features = ["alloc", "std", "aws-lc-rs"] }
+rustls-webpki = { version = "0.102", default-features = false, features = ["alloc", "std", "aws_lc_rs"] }
 rustls-pki-types = { version = "1.14", default-features = false, features = ["alloc"] }
 
 # Ambient ID
@@ -83,7 +83,7 @@ tracing = { version = "0.1" }
 serde_json_canonicalizer = "0.3"
 
 # TUF / Package management
-tough = { version = "0.21", features = ["http"] }
+tough = { version = "0.22", features = ["http"] }
 
 # Async utilities
 futures = "0.3"
