@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6](https://github.com/sigstore/sigstore-rust/compare/sigstore-tsa-v0.6.5...sigstore-tsa-v0.6.6) - 2026-04-29
+
+### Fixed
+
+- *(sigstore-tsa)* honor SignerInfo digest algorithm in CMS verification ([#83](https://github.com/sigstore/sigstore-rust/pull/83))
+
 ## [0.6.4](https://github.com/sigstore/sigstore-rust/compare/sigstore-tsa-v0.6.3...sigstore-tsa-v0.6.4) - 2026-03-06
 
 ### Fixed
