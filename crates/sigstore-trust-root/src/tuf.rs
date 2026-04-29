@@ -50,7 +50,7 @@ pub const DEFAULT_TUF_URL: &str = "https://tuf-repo-cdn.sigstore.dev";
 /// Sigstore staging TUF repository URL
 pub const STAGING_TUF_URL: &str = "https://tuf-repo-cdn.sigstage.dev";
 
-/// Embedded root.json for production TUF instance (version 1, used to bootstrap trust)
+/// Embedded root.json for production TUF instance
 pub const PRODUCTION_TUF_ROOT: &[u8] = include_bytes!("../repository/tuf_root.json");
 
 /// Embedded root.json for staging TUF instance
