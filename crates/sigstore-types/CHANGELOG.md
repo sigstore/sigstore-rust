@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6](https://github.com/sigstore/sigstore-rust/compare/sigstore-types-v0.6.5...sigstore-types-v0.6.6) - 2026-04-29
+
+### Fixed
+
+- *(sigstore-types)* handle missing optional fields in cosign v3 bundles ([#82](https://github.com/sigstore/sigstore-rust/pull/82))
+
 ## [0.6.0](https://github.com/wolfv/sigstore-rust/compare/sigstore-types-v0.5.0...sigstore-types-v0.6.0) - 2025-12-08
 
 ### Other
