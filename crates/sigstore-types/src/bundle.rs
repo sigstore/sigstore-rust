@@ -232,7 +232,8 @@ pub struct X509Certificate {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransparencyLogEntry {
-    /// Log index
+    /// Log index. May be omitted by cosign v3 (defaults to 0 per proto3 semantics).
+    #[serde(default)]
     pub log_index: LogIndex,
     /// Log ID
     pub log_id: LogId,
@@ -282,15 +283,16 @@ pub struct InclusionPromise {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InclusionProof {
-    /// Index of the entry in the log
+    /// Index of the entry in the log. May be omitted by cosign v3.
+    #[serde(default)]
     pub log_index: LogIndex,
     /// Root hash of the tree
     pub root_hash: Sha256Hash,
     /// Tree size at time of proof
     #[serde(with = "string_i64")]
     pub tree_size: i64,
-    /// Hashes in the inclusion proof path
-    #[serde(with = "sha256_hash_vec")]
+    /// Hashes in the inclusion proof path. May be empty for single-entry trees.
+    #[serde(default, with = "sha256_hash_vec")]
     pub hashes: Vec<Sha256Hash>,
     /// Checkpoint (signed tree head) - optional
     #[serde(default, skip_serializing_if = "CheckpointData::is_empty")]
@@ -411,5 +413,63 @@ mod tests {
     #[test]
     fn test_media_type_invalid() {
         assert!(MediaType::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn test_tlog_entry_missing_log_index() {
+        // cosign v3 omits logIndex from tlog entries
+        let json = r#"{
+            "logId": {"keyId": "dGVzdA=="},
+            "kindVersion": {"kind": "dsse", "version": "0.0.1"},
+            "integratedTime": "1700000000",
+            "canonicalizedBody": "e30="
+        }"#;
+        let entry: TransparencyLogEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.log_index.as_u64(), Some(0));
+    }
+
+    #[test]
+    fn test_inclusion_proof_missing_optional_fields() {
+        // cosign v3 omits logIndex and hashes from inclusion proofs
+        let json = r#"{
+            "rootHash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "treeSize": "1",
+            "checkpoint": {"envelope": "test\n1\nAAA=\n\n— test AAAA\n"}
+        }"#;
+        let proof: InclusionProof = serde_json::from_str(json).unwrap();
+        assert_eq!(proof.log_index.as_u64(), Some(0));
+        assert!(proof.hashes.is_empty());
+    }
+
+    #[test]
+    fn test_parse_cosign_v3_bundle_with_missing_fields() {
+        // Full bundle as produced by cosign v3 with private Fulcio/Rekor,
+        // where logIndex, hashes, and subject name are omitted.
+        let json = include_str!("../test_data/cosign_v3_missing_fields.json");
+        let bundle = Bundle::from_json(json)
+            .expect("should parse cosign v3 bundle with missing optional fields");
+
+        // Verify tlog entry parsed with default logIndex
+        let entry = &bundle.verification_material.tlog_entries[0];
+        assert_eq!(entry.log_index.as_u64(), Some(0));
+
+        // Verify inclusion proof parsed without logIndex and hashes
+        let proof = entry.inclusion_proof.as_ref().unwrap();
+        assert_eq!(proof.log_index.as_u64(), Some(0));
+        assert!(proof.hashes.is_empty());
+
+        // Verify DSSE envelope with subject missing name
+        if let super::SignatureContent::DsseEnvelope(env) = &bundle.content {
+            let payload = env.decode_payload();
+            let statement: super::super::intoto::Statement =
+                serde_json::from_slice(&payload).expect("should parse in-toto statement");
+            assert_eq!(statement.subject[0].name, "");
+            assert_eq!(
+                statement.subject[0].digest.sha256,
+                Some("abc123".to_string())
+            );
+        } else {
+            panic!("expected DSSE envelope");
+        }
     }
 }

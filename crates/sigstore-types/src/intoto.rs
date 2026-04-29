@@ -33,7 +33,9 @@ pub struct Statement {
 /// its name and cryptographic digest(s).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Subject {
-    /// Name of the artifact (e.g., file name, package name)
+    /// Name of the artifact (e.g., file name, package name).
+    /// Defaults to empty string when omitted (cosign v3 omits this for container signing).
+    #[serde(default)]
     pub name: String,
     /// Cryptographic digest(s) of the artifact
     pub digest: Digest,
@@ -123,5 +125,22 @@ mod tests {
         assert!(statement.matches_sha256("hash1"));
         assert!(statement.matches_sha256("hash2"));
         assert!(!statement.matches_sha256("hash3"));
+    }
+
+    #[test]
+    fn test_subject_missing_name() {
+        // cosign v3 omits "name" from in-toto statement subjects
+        let json = r#"{
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [{"digest": {"sha256": "abc123"}}],
+            "predicateType": "https://sigstore.dev/cosign/sign/v1",
+            "predicate": {}
+        }"#;
+        let statement: Statement = serde_json::from_str(json).unwrap();
+        assert_eq!(statement.subject[0].name, "");
+        assert_eq!(
+            statement.subject[0].digest.sha256,
+            Some("abc123".to_string())
+        );
     }
 }

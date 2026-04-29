@@ -410,7 +410,7 @@ impl std::fmt::Display for EntryUuid {
 /// Represents a log index in the transparency log. Per the protobuf spec,
 /// this is an int64. For JSON serialization, we serialize as an integer but
 /// accept both integers and strings for backwards compatibility.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct LogIndex(i64);
 
 impl LogIndex {
