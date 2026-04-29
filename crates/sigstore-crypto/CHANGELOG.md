@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.7](https://github.com/sigstore/sigstore-rust/compare/sigstore-crypto-v0.6.6...sigstore-crypto-v0.6.7) - 2026-04-29
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.6.4](https://github.com/sigstore/sigstore-rust/compare/sigstore-crypto-v0.6.3...sigstore-crypto-v0.6.4) - 2026-03-06
 
 ### Fixed
