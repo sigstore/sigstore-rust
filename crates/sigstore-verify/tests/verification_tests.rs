@@ -2,7 +2,7 @@
 //!
 //! These tests validate the complete verification flow using real bundles.
 
-use sigstore_trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
+use sigstore_trust_root::{SigstoreInstance, TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
 use sigstore_types::{LogIndex, Sha256Hash};
 use sigstore_verify::bundle::{validate_bundle, validate_bundle_with_options, ValidationOptions};
 use sigstore_verify::types::Bundle;
@@ -78,6 +78,8 @@ const BUNDLE_V3_NO_SIGNED_TIME: &str =
     include_str!("../test_data/bundles/bundle_v3_no_signed_time.txt.sigstore.json");
 const BUNDLE_V3_GITHUB_WHL: &str =
     include_str!("../test_data/bundles/bundle_v3_github.whl.sigstore");
+const GITHUB_PRIVATE_ATTESTATION_BUNDLE: &str =
+    include_str!("../test_data/bundles/github-private-attestation.sigstore.json");
 
 // ==== Bundle Parsing Tests ====
 
@@ -230,6 +232,25 @@ fn test_skip_tlog_verification() {
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     assert!(result.is_ok());
+}
+
+#[test]
+fn test_verify_github_bundle_with_explicit_embedded_root() {
+    let bundle = Bundle::from_json(GITHUB_PRIVATE_ATTESTATION_BUNDLE).unwrap();
+    let artifact_digest =
+        Sha256Hash::from_hex("76f1fe8593bf227cca2c089e3c16dc95014a8d3e89c5dd220530469ca043c428")
+            .unwrap();
+    let root = TrustedRoot::from_embedded(SigstoreInstance::GitHub).unwrap();
+    let policy = VerificationPolicy::default().skip_tlog().skip_sct();
+
+    let result = verify(artifact_digest, &bundle, &policy, &root);
+
+    assert!(
+        result.is_ok(),
+        "GitHub bundle verification failed: {:?}",
+        result.err()
+    );
+    assert!(result.unwrap().success);
 }
 
 // ==== Policy Tests ====

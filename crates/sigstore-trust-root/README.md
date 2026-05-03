@@ -10,7 +10,7 @@ This crate handles parsing and management of Sigstore trusted root bundles. The 
 
 - **Trusted root parsing**: Load and parse `trusted_root.json` files
 - **TUF support**: Secure fetching via The Update Framework (enabled by default)
-- **Embedded roots**: Built-in production and staging trust anchors for offline use
+- **Embedded roots**: Built-in production, staging, and GitHub trust anchors for offline use
 - **Key extraction**: Extract public keys and certificates for verification
 - **Validity periods**: Time-based key and certificate validity checking
 - **Custom TUF repos**: Support for custom TUF repository URLs
@@ -27,16 +27,32 @@ This crate handles parsing and management of Sigstore trusted root bundles. The 
 ## Usage
 
 ```rust
-use sigstore_trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
+use sigstore_trust_root::{SigstoreInstance, TrustedRoot, TufConfig};
 
-// Fetch via TUF (recommended - ensures up-to-date trust material)
-let root = TrustedRoot::production().await?;
+// Fetch via TUF (recommended - ensures up-to-date trust material).
+let root = TrustedRoot::from_tuf(TufConfig::production()).await?;
 
-// Use embedded data (for offline use)
-let root = TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)?;
+// Use embedded data explicitly when offline or when TUF is unavailable.
+let root = TrustedRoot::from_embedded(SigstoreInstance::PublicGood)?;
 
 // Load from file
 let root = TrustedRoot::from_file("trusted_root.json")?;
+```
+
+### GitHub Artifact Attestations
+
+GitHub artifact attestations use GitHub's own Sigstore instance rather than the
+public-good Sigstore root. Choose the GitHub instance explicitly for these
+bundles:
+
+```rust
+use sigstore_trust_root::{SigstoreInstance, TrustedRoot};
+
+// Preferred API shape once GitHub TUF is compatible with the TUF client.
+// let root = TrustedRoot::from_tuf(sigstore_trust_root::TufConfig::github()).await?;
+
+// Temporary explicit fallback while GitHub TUF metadata is not accepted by `tough`.
+let root = TrustedRoot::from_embedded(SigstoreInstance::GitHub)?;
 ```
 
 ### Custom TUF Repository

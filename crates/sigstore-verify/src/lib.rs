@@ -6,12 +6,11 @@
 //!
 //! ```no_run
 //! use sigstore_verify::{verify, VerificationPolicy};
-//! use sigstore_trust_root::TrustedRoot;
+//! use sigstore_trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
 //! use sigstore_types::Bundle;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Fetch trusted root via TUF (recommended)
-//! let trusted_root = TrustedRoot::production().await?;
+//! let trusted_root = TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)?;
 //! let bundle_json = std::fs::read_to_string("artifact.sigstore.json")?;
 //! let bundle = Bundle::from_json(&bundle_json)?;
 //! let artifact = std::fs::read("artifact.txt")?;
