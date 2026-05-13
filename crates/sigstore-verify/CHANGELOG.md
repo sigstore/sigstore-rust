@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-verify-v0.6.6...sigstore-verify-v0.7.0) - 2026-05-13
+
+### Added
+
+- support for GitHub's artifact attestation Sigstore instance ([#88](https://github.com/sigstore/sigstore-rust/pull/88))
+- `VerificationPolicy::skip_sct()` builder method to skip Signed Certificate Timestamp verification (needed for trust domains whose certificates do not carry public Sigstore CT SCTs)
+
+### Changed
+
+- **BREAKING**: `VerificationPolicy` gained a new public field `verify_sct: bool` (defaults to `true`). Code that constructs `VerificationPolicy` via struct literal must add this field; users of `Default::default()` and the builder methods are unaffected.
+- **BREAKING**: SCT verification is now controlled independently by `verify_sct` rather than implicitly gated on `verify_certificate`. `skip_certificate_chain()` continues to disable both.
+
 ## [0.6.5](https://github.com/sigstore/sigstore-rust/compare/sigstore-verify-v0.6.4...sigstore-verify-v0.6.5) - 2026-04-19
 
 ### Other

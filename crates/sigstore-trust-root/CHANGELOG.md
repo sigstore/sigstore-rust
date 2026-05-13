@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-trust-root-v0.6.6...sigstore-trust-root-v0.7.0) - 2026-05-13
+
+### Added
+
+- trust root update and dependency update ([#85](https://github.com/sigstore/sigstore-rust/pull/85))
+
+### Other
+
+- add github TUF root ([#88](https://github.com/sigstore/sigstore-rust/pull/88))
+
 ## [0.6.5](https://github.com/sigstore/sigstore-rust/compare/sigstore-trust-root-v0.6.4...sigstore-trust-root-v0.6.5) - 2026-04-19
 
 ### Other
