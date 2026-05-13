@@ -27,13 +27,14 @@ This crate provides high-level APIs for verifying Sigstore signatures. It handle
 
 ```rust
 use sigstore_verify::{verify, Verifier, VerificationPolicy};
-use sigstore_trust_root::TrustedRoot;
+use sigstore_trust_root::{TrustedRoot, TufConfig};
 use sigstore_types::{Artifact, Bundle, Sha256Hash};
 
-// Fetch trusted root via TUF (recommended - ensures up-to-date trust material)
-let root = TrustedRoot::production().await?;
 let bundle: Bundle = serde_json::from_str(bundle_json)?;
 let policy = VerificationPolicy::default();
+
+// Actively choose the Sigstore instance and fetch its root through TUF.
+let root = TrustedRoot::from_tuf(TufConfig::production()).await?;
 
 // Verify with raw artifact bytes
 let artifact_bytes = b"hello world";
@@ -46,6 +47,27 @@ let result = verify(digest, &bundle, &policy, &root)?;
 // Using the Verifier struct directly
 let verifier = Verifier::new(&root);
 let result = verifier.verify(artifact_bytes.as_slice(), &bundle, &policy)?;
+```
+
+For GitHub artifact attestations, choose GitHub's Sigstore instance explicitly
+and use the GitHub verification profile:
+
+```rust
+use sigstore_trust_root::{SigstoreInstance, TrustedRoot};
+use sigstore_verify::{verify, VerificationPolicy};
+use sigstore_types::{Bundle, Sha256Hash};
+
+let bundle: Bundle = serde_json::from_str(bundle_json)?;
+let artifact_digest = Sha256Hash::from_hex("...")?;
+
+// Preferred API shape once GitHub TUF is compatible with the TUF client:
+// let root = TrustedRoot::from_tuf(sigstore_trust_root::TufConfig::github()).await?;
+
+// Temporary explicit fallback while GitHub TUF metadata is not accepted by `tough`.
+let root = TrustedRoot::from_embedded(SigstoreInstance::GitHub)?;
+let policy = VerificationPolicy::default().skip_tlog().skip_sct();
+
+let result = verify(artifact_digest, &bundle, &policy, &root)?;
 ```
 
 ## Verification Policies

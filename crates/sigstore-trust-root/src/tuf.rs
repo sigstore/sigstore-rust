@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use tough::{HttpTransport, IntoVec, RepositoryLoader, TargetName};
 use url::Url;
 
-use crate::{Error, Result, SigningConfig, TrustedRoot};
+use crate::{Error, Result, SigningConfig, SigstoreInstance, TrustedRoot};
 
 /// Default Sigstore production TUF repository URL
 pub const DEFAULT_TUF_URL: &str = "https://tuf-repo-cdn.sigstore.dev";
@@ -50,11 +50,20 @@ pub const DEFAULT_TUF_URL: &str = "https://tuf-repo-cdn.sigstore.dev";
 /// Sigstore staging TUF repository URL
 pub const STAGING_TUF_URL: &str = "https://tuf-repo-cdn.sigstage.dev";
 
+/// GitHub artifact attestation TUF repository URL
+///
+/// This is GitHub's separate Sigstore instance, used for GitHub-hosted artifact
+/// attestations whose leaf certificates are issued by `O=GitHub, Inc.`.
+pub const GITHUB_TUF_URL: &str = "https://tuf-repo.github.com";
+
 /// Embedded root.json for production TUF instance
 pub const PRODUCTION_TUF_ROOT: &[u8] = include_bytes!("../repository/tuf_root.json");
 
 /// Embedded root.json for staging TUF instance
 pub const STAGING_TUF_ROOT: &[u8] = include_bytes!("../repository/tuf_staging_root.json");
+
+/// Embedded root.json for GitHub's artifact attestation TUF instance
+pub const GITHUB_TUF_ROOT: &[u8] = include_bytes!("../repository/tuf_github_root.json");
 
 /// TUF target name for trusted root
 pub const TRUSTED_ROOT_TARGET: &str = "trusted_root.json";
@@ -125,6 +134,14 @@ impl TufConfig {
     pub fn staging() -> Self {
         Self {
             url: STAGING_TUF_URL.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Create configuration for GitHub's artifact attestation Sigstore instance
+    pub fn github() -> Self {
+        Self {
+            url: GITHUB_TUF_URL.to_string(),
             ..Default::default()
         }
     }
@@ -219,7 +236,7 @@ impl TufConfig {
     /// Get the TUF root.json bytes for this configuration
     ///
     /// Returns the custom root if set, otherwise returns the embedded root
-    /// for known URLs (production/staging).
+    /// for known URLs (production/staging/GitHub).
     fn get_root_json(&self) -> Result<&[u8]> {
         if let Some(ref root) = self.root_json {
             return Ok(root.as_slice());
@@ -230,6 +247,8 @@ impl TufConfig {
             Ok(PRODUCTION_TUF_ROOT)
         } else if self.url == STAGING_TUF_URL || self.url.starts_with(STAGING_TUF_URL) {
             Ok(STAGING_TUF_ROOT)
+        } else if self.url == GITHUB_TUF_URL || self.url.starts_with(GITHUB_TUF_URL) {
+            Ok(GITHUB_TUF_ROOT)
         } else {
             Err(Error::Tuf(format!(
                 "No root.json provided for custom URL: {}. Use TufConfig::custom() to provide one.",
@@ -253,6 +272,9 @@ const EMBEDDED_STAGING_TRUSTED_ROOT: &[u8] = include_bytes!("trusted_root_stagin
 const EMBEDDED_STAGING_SIGNING_CONFIG: &[u8] =
     include_bytes!("../repository/signing_config_staging.json");
 
+/// Embedded GitHub trusted root (same as SIGSTORE_GITHUB_TRUSTED_ROOT but as bytes)
+const EMBEDDED_GITHUB_TRUSTED_ROOT: &[u8] = include_bytes!("trusted_root_github.json");
+
 /// Internal TUF client for fetching targets
 struct TufClient {
     config: TufConfig,
@@ -264,7 +286,7 @@ impl TufClient {
     /// Create a new TUF client with the given configuration
     ///
     /// Embedded fallback targets are automatically configured for known URLs
-    /// (production and staging).
+    /// (production, staging, and GitHub).
     fn new(config: TufConfig) -> Self {
         // Determine embedded targets based on URL for offline fallback
         let embedded_targets: &'static [(&'static str, &'static [u8])] =
@@ -278,6 +300,8 @@ impl TufClient {
                     (TRUSTED_ROOT_TARGET, EMBEDDED_STAGING_TRUSTED_ROOT),
                     (SIGNING_CONFIG_TARGET, EMBEDDED_STAGING_SIGNING_CONFIG),
                 ]
+            } else if config.url == GITHUB_TUF_URL || config.url.starts_with(GITHUB_TUF_URL) {
+                &[(TRUSTED_ROOT_TARGET, EMBEDDED_GITHUB_TRUSTED_ROOT)]
             } else {
                 // Custom URLs have no embedded fallback
                 &[]
@@ -515,6 +539,17 @@ impl TrustedRoot {
     }
 }
 
+impl SigstoreInstance {
+    /// Return the TUF configuration for this well-known Sigstore instance.
+    pub fn tuf_config(self) -> TufConfig {
+        match self {
+            Self::PublicGood => TufConfig::production(),
+            Self::Staging => TufConfig::staging(),
+            Self::GitHub => TufConfig::github(),
+        }
+    }
+}
+
 impl SigningConfig {
     /// Fetch the signing configuration from Sigstore's production TUF repository
     ///
@@ -670,6 +705,12 @@ mod tests {
     }
 
     #[test]
+    fn test_tuf_config_github() {
+        let config = TufConfig::github();
+        assert_eq!(config.url, GITHUB_TUF_URL);
+    }
+
+    #[test]
     fn test_tuf_config_custom() {
         let root_json = b"test root json";
         let config = TufConfig::custom("https://custom.tuf/", root_json);
@@ -701,6 +742,12 @@ mod tests {
     }
 
     #[test]
+    fn test_tuf_config_get_root_json_github() {
+        let config = TufConfig::github();
+        assert_eq!(config.get_root_json().unwrap(), GITHUB_TUF_ROOT);
+    }
+
+    #[test]
     fn test_tuf_config_get_root_json_custom() {
         let root_json = b"custom root";
         let config = TufConfig::custom("https://custom.tuf/", root_json);
@@ -729,6 +776,8 @@ mod tests {
             serde_json::from_slice(PRODUCTION_TUF_ROOT).expect("Invalid production TUF root");
         let _: serde_json::Value =
             serde_json::from_slice(STAGING_TUF_ROOT).expect("Invalid staging TUF root");
+        let _: serde_json::Value =
+            serde_json::from_slice(GITHUB_TUF_ROOT).expect("Invalid GitHub TUF root");
     }
 
     #[test]
@@ -738,6 +787,9 @@ mod tests {
             .expect("Invalid production trusted root");
         let _root: crate::TrustedRoot = serde_json::from_slice(EMBEDDED_STAGING_TRUSTED_ROOT)
             .expect("Invalid staging trusted root");
+        let _root: crate::TrustedRoot =
+            crate::TrustedRoot::from_embedded(crate::SigstoreInstance::GitHub)
+                .expect("Invalid GitHub trusted root");
 
         // Verify embedded signing configs can be parsed
         let _config: crate::SigningConfig =
@@ -772,6 +824,31 @@ mod tests {
         // Should fail for unknown target
         let result = client.fetch_target("unknown.json").await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_github_trusted_root_uses_explicit_embedded_data() {
+        let root = crate::TrustedRoot::from_embedded(crate::SigstoreInstance::GitHub).unwrap();
+
+        assert!(root
+            .certificate_authorities
+            .iter()
+            .any(|ca| ca.uri == "fulcio.githubapp.com"));
+    }
+
+    #[tokio::test]
+    async fn test_github_offline_mode_uses_embedded_data() {
+        let config = TufConfig::github().offline().without_cache();
+        let client = TufClient::new(config);
+
+        let bytes = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap();
+        assert!(!bytes.is_empty());
+        let root: crate::TrustedRoot = serde_json::from_slice(&bytes).unwrap();
+
+        assert!(root
+            .certificate_authorities
+            .iter()
+            .any(|ca| ca.uri == "fulcio.githubapp.com"));
     }
 
     #[tokio::test]

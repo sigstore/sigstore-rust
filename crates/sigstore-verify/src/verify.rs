@@ -26,6 +26,8 @@ pub struct VerificationPolicy {
     pub verify_timestamp: bool,
     /// Verify certificate chain
     pub verify_certificate: bool,
+    /// Verify the signing certificate's Signed Certificate Timestamp (SCT)
+    pub verify_sct: bool,
     /// Clock skew tolerance in seconds for time validation
     ///
     /// This allows for a tolerance when checking that integrated times
@@ -41,6 +43,7 @@ impl Default for VerificationPolicy {
             verify_tlog: true,
             verify_timestamp: true,
             verify_certificate: true,
+            verify_sct: true,
             clock_skew_seconds: DEFAULT_CLOCK_SKEW_SECONDS,
         }
     }
@@ -93,6 +96,18 @@ impl VerificationPolicy {
     /// with bundles that don't chain to the trusted root.
     pub fn skip_certificate_chain(mut self) -> Self {
         self.verify_certificate = false;
+        self.verify_sct = false;
+        self
+    }
+
+    /// Skip Signed Certificate Timestamp verification
+    ///
+    /// This is needed for trust domains, such as GitHub's artifact attestation
+    /// instance, whose certificates do not carry public Sigstore CT SCTs. The
+    /// certificate chain is still verified unless `skip_certificate_chain()` is
+    /// also used.
+    pub fn skip_sct(mut self) -> Self {
+        self.verify_sct = false;
         self
     }
 
@@ -172,12 +187,11 @@ impl Verifier {
     ///
     /// ```no_run
     /// use sigstore_verify::{Verifier, VerificationPolicy};
-    /// use sigstore_trust_root::TrustedRoot;
+    /// use sigstore_trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
     /// use sigstore_types::{Artifact, Bundle, Sha256Hash};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// // Fetch trusted root via TUF (recommended)
-    /// let trusted_root = TrustedRoot::production().await?;
+    /// let trusted_root = TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)?;
     /// let verifier = Verifier::new(&trusted_root);
     /// let bundle: Bundle = todo!();
     /// let policy = VerificationPolicy::default();
@@ -261,8 +275,10 @@ impl Verifier {
 
             // Also verify the certificate is within its validity period
             crate::verify_impl::helpers::validate_certificate_time(validation_time, &cert_info)?;
+        }
 
-            // (2): Verify the signing certificate's SCT.
+        // (2): Verify the signing certificate's SCT.
+        if policy.verify_sct {
             crate::verify_impl::helpers::verify_sct(
                 &bundle.verification_material.content,
                 &self.trusted_root,
@@ -618,6 +634,7 @@ mod tests {
         assert!(policy.verify_tlog);
         assert!(policy.verify_timestamp);
         assert!(policy.verify_certificate);
+        assert!(policy.verify_sct);
     }
 
     #[test]
@@ -633,5 +650,21 @@ mod tests {
             Some("https://accounts.google.com".to_string())
         );
         assert!(!policy.verify_tlog);
+    }
+
+    #[test]
+    fn test_skip_sct_keeps_certificate_chain_verification() {
+        let policy = VerificationPolicy::default().skip_sct();
+
+        assert!(policy.verify_certificate);
+        assert!(!policy.verify_sct);
+    }
+
+    #[test]
+    fn test_skip_certificate_chain_preserves_legacy_sct_skip() {
+        let policy = VerificationPolicy::default().skip_certificate_chain();
+
+        assert!(!policy.verify_certificate);
+        assert!(!policy.verify_sct);
     }
 }

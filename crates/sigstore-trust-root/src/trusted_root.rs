@@ -432,6 +432,46 @@ pub const SIGSTORE_PRODUCTION_TRUSTED_ROOT: &str = include_str!("trusted_root.js
 /// This is the trusted root for Sigstore's staging/testing instance.
 pub const SIGSTORE_STAGING_TRUSTED_ROOT: &str = include_str!("trusted_root_staging.json");
 
+/// Embedded GitHub trusted root from <https://tuf-repo.github.com/>
+///
+/// This is GitHub's separate Sigstore instance for artifact attestations whose
+/// leaf certificates are issued by `O=GitHub, Inc.`.
+pub const SIGSTORE_GITHUB_TRUSTED_ROOT: &str = include_str!("trusted_root_github.json");
+
+/// Well-known Sigstore trust instances.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigstoreInstance {
+    /// Sigstore's public-good production instance.
+    PublicGood,
+    /// Sigstore's public-good staging instance.
+    Staging,
+    /// GitHub's artifact attestation instance.
+    GitHub,
+}
+
+impl SigstoreInstance {
+    /// Return the embedded `trusted_root.json` snapshot for this instance.
+    pub fn embedded_trusted_root_json(self) -> &'static str {
+        match self {
+            Self::PublicGood => SIGSTORE_PRODUCTION_TRUSTED_ROOT,
+            Self::Staging => SIGSTORE_STAGING_TRUSTED_ROOT,
+            Self::GitHub => SIGSTORE_GITHUB_TRUSTED_ROOT,
+        }
+    }
+
+    /// Load this instance's embedded trusted root snapshot.
+    pub fn embedded_trusted_root(self) -> Result<TrustedRoot> {
+        TrustedRoot::from_json(self.embedded_trusted_root_json())
+    }
+}
+
+impl TrustedRoot {
+    /// Load an embedded trusted root snapshot for a well-known instance.
+    pub fn from_embedded(instance: SigstoreInstance) -> Result<Self> {
+        instance.embedded_trusted_root()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -495,5 +535,14 @@ mod tests {
         assert!(!root.ctlogs.is_empty());
         // Staging should have different URLs from production
         assert!(root.tlogs[0].base_url.contains("sigstage.dev"));
+    }
+
+    #[test]
+    fn test_from_embedded_github() {
+        let root = TrustedRoot::from_embedded(SigstoreInstance::GitHub).unwrap();
+        assert!(root
+            .certificate_authorities
+            .iter()
+            .any(|ca| ca.uri == "fulcio.githubapp.com"));
     }
 }

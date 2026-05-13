@@ -91,12 +91,14 @@ pub use signing_config::{
     SUPPORTED_FULCIO_VERSIONS, SUPPORTED_REKOR_VERSIONS, SUPPORTED_TSA_VERSIONS,
 };
 pub use trusted_root::{
-    CertificateAuthority, CertificateTransparencyLog, TimestampAuthority, TransparencyLog,
-    TrustedRoot, ValidityPeriod, SIGSTORE_PRODUCTION_TRUSTED_ROOT, SIGSTORE_STAGING_TRUSTED_ROOT,
+    CertificateAuthority, CertificateTransparencyLog, SigstoreInstance, TimestampAuthority,
+    TransparencyLog, TrustedRoot, ValidityPeriod, SIGSTORE_GITHUB_TRUSTED_ROOT,
+    SIGSTORE_PRODUCTION_TRUSTED_ROOT, SIGSTORE_STAGING_TRUSTED_ROOT,
 };
 
 #[cfg(feature = "tuf")]
 pub use tuf::{
-    fetch_trust_material, TufConfig, DEFAULT_TUF_URL, PRODUCTION_TUF_ROOT, SIGNING_CONFIG_TARGET,
-    STAGING_TUF_ROOT, STAGING_TUF_URL, TRUSTED_ROOT_TARGET,
+    fetch_trust_material, TufConfig, DEFAULT_TUF_URL, GITHUB_TUF_ROOT, GITHUB_TUF_URL,
+    PRODUCTION_TUF_ROOT, SIGNING_CONFIG_TARGET, STAGING_TUF_ROOT, STAGING_TUF_URL,
+    TRUSTED_ROOT_TARGET,
 };
