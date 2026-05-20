@@ -37,7 +37,7 @@ x509-cert = { workspace = true }
 rustls-pki-types = { workspace = true }
 
 # Time handling
-chrono = { workspace = true }
+jiff = { workspace = true }
 
 # Utilities
 hex = { workspace = true }

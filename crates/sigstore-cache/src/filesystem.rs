@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 
@@ -42,9 +42,9 @@ fn url_to_dirname(url: &str) -> String {
 #[derive(Debug, Serialize, Deserialize)]
 struct CacheMetadata {
     /// When the cache entry was created
-    created_at: DateTime<Utc>,
+    created_at: Timestamp,
     /// When the cache entry expires
-    expires_at: DateTime<Utc>,
+    expires_at: Timestamp,
 }
 
 /// File system based cache
@@ -180,7 +180,7 @@ impl FileSystemCache {
         match fs::read_to_string(&meta_path).await {
             Ok(content) => {
                 let metadata: CacheMetadata = serde_json::from_str(&content)?;
-                if Utc::now() < metadata.expires_at {
+                if Timestamp::now() < metadata.expires_at {
                     Ok(Some(metadata))
                 } else {
                     // Expired - clean up
@@ -217,11 +217,12 @@ impl CacheAdapter for FileSystemCache {
         Box::pin(async move {
             self.ensure_dir().await?;
 
-            let now = Utc::now();
+            let now = Timestamp::now();
+            let ttl = SignedDuration::try_from(ttl)
+                .unwrap_or_else(|_| SignedDuration::from_secs(24 * 60 * 60));
             let metadata = CacheMetadata {
                 created_at: now,
-                expires_at: now
-                    + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(1)),
+                expires_at: now + ttl,
             };
 
             // Write metadata first (atomic-ish - if this fails, cache entry is invalid)

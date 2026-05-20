@@ -106,7 +106,7 @@ pub fn extract_tsa_timestamp(
             )));
         }
 
-        let timestamp = result.time.timestamp();
+        let timestamp = result.time.as_second();
         any_timestamp_verified = true;
 
         if let Some(earliest) = earliest_timestamp {

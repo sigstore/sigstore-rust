@@ -47,7 +47,7 @@ pub fn verify_tlog_entries(
         let time = entry.integrated_time;
         if time > 0 {
             // Check that integrated time is not in the future (with clock skew tolerance)
-            let now = chrono::Utc::now().timestamp();
+            let now = jiff::Timestamp::now().as_second();
             if time > now + clock_skew_seconds {
                 return Err(Error::Verification(format!(
                     "integrated time {} is in the future (current time: {}, tolerance: {}s)",

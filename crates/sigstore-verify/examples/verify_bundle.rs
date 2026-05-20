@@ -235,8 +235,8 @@ fn main() {
                     println!("  Issuer: {}", iss);
                 }
                 if let Some(time) = result.integrated_time {
-                    use chrono::{DateTime, Utc};
-                    if let Some(dt) = DateTime::<Utc>::from_timestamp(time, 0) {
+                    use jiff::Timestamp;
+                    if let Ok(dt) = Timestamp::from_second(time) {
                         println!("  Signed at: {}", dt);
                     }
                 }
