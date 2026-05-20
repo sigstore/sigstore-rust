@@ -33,7 +33,7 @@
 //! let config = SigningConfig::from_json(SIGSTORE_PRODUCTION_SIGNING_CONFIG).unwrap();
 //! ```
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
@@ -63,16 +63,16 @@ pub const SIGNING_CONFIG_MEDIA_TYPE: &str = "application/vnd.dev.sigstore.signin
 #[serde(rename_all = "camelCase")]
 pub struct ServiceValidityPeriod {
     /// Start time of validity
-    pub start: DateTime<Utc>,
+    pub start: Timestamp,
     /// End time of validity (optional, None means still valid)
     #[serde(default)]
-    pub end: Option<DateTime<Utc>>,
+    pub end: Option<Timestamp>,
 }
 
 impl ServiceValidityPeriod {
     /// Check if this period is currently valid
     pub fn is_valid(&self) -> bool {
-        let now = Utc::now();
+        let now = Timestamp::now();
         if now < self.start {
             return false;
         }
@@ -324,22 +324,14 @@ mod tests {
     #[test]
     fn test_service_validity() {
         let valid_period = ServiceValidityPeriod {
-            start: DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
-                .unwrap()
-                .into(),
+            start: "2020-01-01T00:00:00Z".parse().unwrap(),
             end: None,
         };
         assert!(valid_period.is_valid());
 
         let expired_period = ServiceValidityPeriod {
-            start: DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
-                .unwrap()
-                .into(),
-            end: Some(
-                DateTime::parse_from_rfc3339("2021-01-01T00:00:00Z")
-                    .unwrap()
-                    .into(),
-            ),
+            start: "2020-01-01T00:00:00Z".parse().unwrap(),
+            end: Some("2021-01-01T00:00:00Z".parse().unwrap()),
         };
         assert!(!expired_period.is_valid());
     }

@@ -19,7 +19,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_json_canonicalizer = { workspace = true }
 thiserror = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 base64 = { workspace = true }
 x509-cert = { workspace = true }
 hex = { workspace = true }

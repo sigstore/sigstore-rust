@@ -33,7 +33,7 @@ rustls-webpki = { workspace = true, default-features = false, features = [
   "std",
 ] }
 rustls-pki-types = { workspace = true, default-features = false }
-chrono = { workspace = true, features = ["std"] }
+jiff = { workspace = true, features = ["std"] }
 tracing = { workspace = true }
 hex = { workspace = true }
 

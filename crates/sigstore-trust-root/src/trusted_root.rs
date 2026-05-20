@@ -1,7 +1,7 @@
 //! Trusted root types and parsing
 
 use crate::{Error, Result};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use rustls_pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
 use sigstore_types::{DerCertificate, DerPublicKey, HashAlgorithm, KeyHint, LogId, LogKeyId};
@@ -10,8 +10,8 @@ use std::collections::HashMap;
 /// TSA certificate with optional validity period (start, end)
 pub type TsaCertWithValidity = (
     CertificateDer<'static>,
-    Option<DateTime<Utc>>,
-    Option<DateTime<Utc>>,
+    Option<Timestamp>,
+    Option<Timestamp>,
 );
 
 /// A trusted root bundle containing all trust anchors
@@ -279,13 +279,11 @@ impl TrustedRoot {
                     let start = valid_for
                         .start
                         .as_ref()
-                        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                        .map(|dt| dt.with_timezone(&Utc));
+                        .and_then(|s| s.parse::<Timestamp>().ok());
                     let end = valid_for
                         .end
                         .as_ref()
-                        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                        .map(|dt| dt.with_timezone(&Utc));
+                        .and_then(|s| s.parse::<Timestamp>().ok());
                     (start, end)
                 } else {
                     (None, None)
@@ -347,20 +345,18 @@ impl TrustedRoot {
     /// Get the validity period for a TSA at a given time
     pub fn tsa_validity_for_time(
         &self,
-        timestamp: DateTime<Utc>,
-    ) -> Result<Option<(DateTime<Utc>, DateTime<Utc>)>> {
+        timestamp: Timestamp,
+    ) -> Result<Option<(Timestamp, Timestamp)>> {
         for tsa in &self.timestamp_authorities {
             if let Some(valid_for) = &tsa.valid_for {
                 let start = valid_for
                     .start
                     .as_ref()
-                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                    .map(|dt| dt.with_timezone(&Utc));
+                    .and_then(|s| s.parse::<Timestamp>().ok());
                 let end = valid_for
                     .end
                     .as_ref()
-                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                    .map(|dt| dt.with_timezone(&Utc));
+                    .and_then(|s| s.parse::<Timestamp>().ok());
 
                 // Check if timestamp falls within this TSA's validity
                 if let (Some(start_time), Some(end_time)) = (start, end) {
@@ -387,7 +383,7 @@ impl TrustedRoot {
     ///
     /// Returns false only if there are TSAs with validity constraints and the
     /// timestamp doesn't fall within any of them.
-    pub fn is_timestamp_within_tsa_validity(&self, timestamp: DateTime<Utc>) -> bool {
+    pub fn is_timestamp_within_tsa_validity(&self, timestamp: Timestamp) -> bool {
         // If no TSAs are configured, no validity check needed
         if self.timestamp_authorities.is_empty() {
             return true;
@@ -402,13 +398,11 @@ impl TrustedRoot {
             let start = valid_for
                 .start
                 .as_ref()
-                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| dt.with_timezone(&Utc));
+                .and_then(|s| s.parse::<Timestamp>().ok());
             let end = valid_for
                 .end
                 .as_ref()
-                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| dt.with_timezone(&Utc));
+                .and_then(|s| s.parse::<Timestamp>().ok());
 
             // Check if timestamp falls within this TSA's validity period
             let after_start = start.map_or(true, |s| timestamp >= s);
