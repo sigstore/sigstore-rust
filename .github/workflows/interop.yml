@@ -10,6 +10,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions: {}
+
 jobs:
   interop:
     name: Interoperability Tests
@@ -19,14 +21,16 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       id-token: write  # Required for OIDC token
-      contents: read
+      contents: read   # Required for actions/checkout
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v4.0.0
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
         with:
           cosign-release: 'v3.0.2'
 
@@ -172,7 +176,7 @@ jobs:
             --bundle digest-bundle.sigstore.json \
             --certificate-identity-regexp ".*" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            ${{ env.ARTIFACT_DIGEST }}
+            ${ARTIFACT_DIGEST}
           echo "✅ Cosign verified using digest"
 
       - name: "[Digest] Verify with sigstore-rust using digest"
@@ -180,7 +184,7 @@ jobs:
           ./target/release/examples/verify_bundle \
             --certificate-identity-regexp ".*" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            ${{ env.ARTIFACT_DIGEST }} digest-bundle.sigstore.json
+            ${ARTIFACT_DIGEST} digest-bundle.sigstore.json
           echo "✅ sigstore-rust verified using digest"
 
       - name: "[Digest] Sign with cosign"
@@ -195,7 +199,7 @@ jobs:
           ./target/release/examples/verify_bundle \
             --certificate-identity-regexp ".*" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            ${{ env.ARTIFACT_DIGEST }} cosign-digest-bundle.sigstore.json
+            ${ARTIFACT_DIGEST} cosign-digest-bundle.sigstore.json
           echo "✅ sigstore-rust verified cosign bundle using digest"
 
       # =========================================
@@ -272,7 +276,7 @@ jobs:
       - name: "[Python] Verify sigstore-rust V1 bundle"
         run: |
           # GitHub Actions identity is the workflow file URL
-          IDENTITY="https://github.com/${{ github.repository }}/.github/workflows/interop.yml@${{ github.ref }}"
+          IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/interop.yml@${GITHUB_REF}"
           echo "Expected identity: $IDENTITY"
           sigstore verify identity \
             --bundle rust-signed.sigstore.json \
@@ -283,7 +287,7 @@ jobs:
 
       - name: "[Python] Verify sigstore-rust V2 bundle"
         run: |
-          IDENTITY="https://github.com/${{ github.repository }}/.github/workflows/interop.yml@${{ github.ref }}"
+          IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/interop.yml@${GITHUB_REF}"
           sigstore verify identity \
             --bundle rust-signed-v2.sigstore.json \
             --cert-identity "$IDENTITY" \
@@ -293,7 +297,7 @@ jobs:
 
       - name: "[Python] Verify sigstore-rust attestation"
         run: |
-          IDENTITY="https://github.com/${{ github.repository }}/.github/workflows/interop.yml@${{ github.ref }}"
+          IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/interop.yml@${GITHUB_REF}"
           sigstore verify identity \
             --bundle rust-attestation.sigstore.json \
             --cert-identity "$IDENTITY" \
