@@ -5,6 +5,8 @@ on:
     branches:
       - main
 
+permissions: {}
+
 jobs:
   # Release unpublished packages.
   release-plz-release:
@@ -16,29 +18,26 @@ jobs:
       group: release-plz-release
       cancel-in-progress: false
 
-    # Permissions needed for:
-    # - contents: write - create GitHub releases
-    # - pull-requests: write - update PRs
-    # - id-token: write - request OIDC token for Sigstore attestations on crates.io
     permissions:
-      contents: write
-      pull-requests: write
-      id-token: write
+      contents: write      # Required to create GitHub releases
+      pull-requests: write # Required to update PRs
+      id-token: write      # Required to request OIDC token for attestation generation
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - uses: rust-lang/crates-io-auth-action@v1
+      - uses: rust-lang/crates-io-auth-action@b7e9a28eded4986ec6b1fa40eeee8f8f165559ec # v1
         id: auth
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.89.0
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
 
       - name: Run release-plz
-        uses: release-plz/action@v0.5
+        uses: release-plz/action@064f4d1e36c843611ddf013be726beaa4ad804db # v0.5
         with:
           command: release
         env:
@@ -53,19 +52,20 @@ jobs:
       group: release-plz-pr
       cancel-in-progress: false
     permissions:
-      contents: write
-      pull-requests: write
+      contents: write      # Required to create GitHub releases
+      pull-requests: write # Required to update PRs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.89.0
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
 
       - name: Run release-plz
-        uses: release-plz/action@v0.5
+        uses: release-plz/action@064f4d1e36c843611ddf013be726beaa4ad804db # v0.5
         with:
           command: release-pr
         env:
