@@ -1985,7 +1985,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-bundle"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "hex",
@@ -2001,7 +2001,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-cache"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "chrono",
  "directories",
@@ -2013,7 +2013,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-conformance"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "hex",
@@ -2034,7 +2034,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-crypto"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "aws-lc-rs",
  "base64",
@@ -2055,7 +2055,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-fulcio"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "hex",
@@ -2073,7 +2073,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-merkle"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "hex",
@@ -2087,7 +2087,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-oidc"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "ambient-id",
  "base64",
@@ -2105,7 +2105,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-rekor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "hex",
@@ -2123,7 +2123,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-sign"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "chrono",
@@ -2145,7 +2145,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-trust-root"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "chrono",
@@ -2169,7 +2169,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-tsa"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "aws-lc-rs",
  "base64",
@@ -2195,7 +2195,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-types"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "chrono",
@@ -2208,7 +2208,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-verify"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "chrono",

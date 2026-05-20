@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/sigstore/sigstore-rust/compare/sigstore-tsa-v0.7.0...sigstore-tsa-v0.7.1) - 2026-05-20
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.7.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-tsa-v0.6.6...sigstore-tsa-v0.7.0) - 2026-05-13
 
 ### Added
