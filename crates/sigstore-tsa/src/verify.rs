@@ -8,10 +8,10 @@
 
 use crate::asn1::{self, PkiStatus, TimeStampResp, TstInfo};
 use crate::error::{Error, Result};
-use jiff::Timestamp;
 use cms::cert::CertificateChoices;
 use cms::signed_data::{SignedData, SignerIdentifier};
 use const_oid::ObjectIdentifier;
+use jiff::Timestamp;
 use rustls_pki_types::CertificateDer;
 use x509_cert::Certificate;
 
