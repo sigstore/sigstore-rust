@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-cache-v0.7.0...sigstore-cache-v0.8.0) - 2026-05-21
+
+### Other
+
+- Replace direct chrono usage with jiff ([#90](https://github.com/sigstore/sigstore-rust/pull/90))
+
 ## [0.3.0](https://github.com/wolfv/sigstore-rust/compare/sigstore-cache-v0.2.0...sigstore-cache-v0.3.0) - 2025-11-28
 
 ### Fixed

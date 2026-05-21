@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-types-v0.7.0...sigstore-types-v0.8.0) - 2026-05-21
+
+### Other
+
+- Replace direct chrono usage with jiff ([#90](https://github.com/sigstore/sigstore-rust/pull/90))
+
 ## [0.6.6](https://github.com/sigstore/sigstore-rust/compare/sigstore-types-v0.6.5...sigstore-types-v0.6.6) - 2026-04-29
 
 ### Fixed
