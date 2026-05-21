@@ -200,8 +200,8 @@ async fn main() {
         if ts == 0 && entry.kind_version.version == "0.0.2" {
             println!("  Integrated Time: (V2 uses RFC3161 timestamps)");
         } else {
-            use chrono::{DateTime, Utc};
-            if let Some(dt) = DateTime::<Utc>::from_timestamp(ts, 0) {
+            use jiff::Timestamp;
+            if let Ok(dt) = Timestamp::from_second(ts) {
                 println!("  Integrated Time: {}", dt);
             }
         }

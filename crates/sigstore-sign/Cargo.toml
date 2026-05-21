@@ -23,7 +23,7 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 serde = { workspace = true }
 hex = { workspace = true }
 

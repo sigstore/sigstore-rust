@@ -8,10 +8,10 @@
 
 use crate::asn1::{self, PkiStatus, TimeStampResp, TstInfo};
 use crate::error::{Error, Result};
-use chrono::{DateTime, Utc};
 use cms::cert::CertificateChoices;
 use cms::signed_data::{SignedData, SignerIdentifier};
 use const_oid::ObjectIdentifier;
+use jiff::Timestamp;
 use rustls_pki_types::CertificateDer;
 use x509_cert::Certificate;
 
@@ -94,7 +94,7 @@ impl Default for VerifyOpts<'_> {
 #[derive(Debug, Clone)]
 pub struct TimestampResult {
     /// The timestamp from the TSA
-    pub time: DateTime<Utc>,
+    pub time: Timestamp,
 }
 
 /// Verify an RFC 3161 timestamp token (ContentInfo).
@@ -204,9 +204,10 @@ pub fn verify_timestamp_response(
     let unix_duration = system_time
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| Error::ParseError("timestamp before epoch".to_string()))?;
-    let timestamp =
-        DateTime::from_timestamp(unix_duration.as_secs() as i64, unix_duration.subsec_nanos())
-            .ok_or_else(|| Error::ParseError("invalid timestamp in TSTInfo".to_string()))?;
+    let seconds = i64::try_from(unix_duration.as_secs())
+        .map_err(|_| Error::ParseError("invalid timestamp in TSTInfo".to_string()))?;
+    let timestamp = Timestamp::new(seconds, unix_duration.subsec_nanos() as i32)
+        .map_err(|_| Error::ParseError("invalid timestamp in TSTInfo".to_string()))?;
 
     tracing::debug!("Extracted timestamp: {}", timestamp);
 
@@ -543,7 +544,7 @@ fn verify_ecdsa_signature(
 /// Validate the TSA certificate chain
 fn validate_tsa_certificate_chain(
     signer_cert: &Certificate,
-    timestamp: DateTime<Utc>,
+    timestamp: Timestamp,
     opts: &VerifyOpts,
     embedded_certs: &[Certificate],
 ) -> Result<()> {
@@ -614,12 +615,12 @@ fn validate_tsa_certificate_chain(
 
     // Convert timestamp to UnixTime for webpki
     let verification_time =
-        UnixTime::since_unix_epoch(std::time::Duration::from_secs(timestamp.timestamp() as u64));
+        UnixTime::since_unix_epoch(std::time::Duration::from_secs(timestamp.as_second() as u64));
 
     tracing::debug!(
         "Verifying certificate chain at timestamp: {} (unix: {})",
         timestamp,
-        timestamp.timestamp()
+        timestamp.as_second()
     );
 
     // Verify the certificate chain with TimeStamping EKU
@@ -719,7 +720,7 @@ mod tests {
         let timestamp_result = result.unwrap();
         // The timestamp should be a valid datetime
         assert!(
-            timestamp_result.time.timestamp() > 0,
+            timestamp_result.time.as_second() > 0,
             "Timestamp should be positive"
         );
     }
