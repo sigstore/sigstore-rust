@@ -236,7 +236,10 @@ pub fn verify_timestamp_response(
 
 /// Verify the message imprint matches the signature bytes
 fn verify_message_imprint(tst_info: &TstInfo, signature_bytes: &[u8]) -> Result<()> {
+    #[cfg(feature = "rustls")]
     use aws_lc_rs::digest::{digest, SHA256, SHA384, SHA512};
+    #[cfg(feature = "native-tls")]
+    use ring::digest::{digest, SHA256, SHA384, SHA512};
 
     let message_imprint = &tst_info.message_imprint;
     let hash_alg_oid = &message_imprint.hash_algorithm.algorithm;
@@ -419,7 +422,10 @@ fn verify_message_digest_attribute(
     tst_info_der: &[u8],
     digest_alg_oid: &ObjectIdentifier,
 ) -> Result<()> {
+    #[cfg(feature = "rustls")]
     use aws_lc_rs::digest::{digest, SHA256, SHA384, SHA512};
+    #[cfg(feature = "native-tls")]
+    use ring::digest::{digest, SHA256, SHA384, SHA512};
     use x509_cert::der::asn1::OctetStringRef;
     use x509_cert::der::{Decode, Encode};
 
@@ -486,7 +492,7 @@ fn verify_message_digest_attribute(
     Ok(())
 }
 
-/// Verify ECDSA signature using the certificate's public key and aws-lc-rs
+/// Verify ECDSA signature using the certificate's public key.
 /// The digest_alg_oid specifies which hash algorithm was used to sign (from SignerInfo)
 fn verify_ecdsa_signature(
     signature: &[u8],
@@ -494,7 +500,12 @@ fn verify_ecdsa_signature(
     certificate: &Certificate,
     digest_alg_oid: &ObjectIdentifier,
 ) -> Result<()> {
+    #[cfg(feature = "rustls")]
     use aws_lc_rs::signature::{
+        UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P384_SHA256_ASN1, ECDSA_P384_SHA384_ASN1,
+    };
+    #[cfg(feature = "native-tls")]
+    use ring::signature::{
         UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P384_SHA256_ASN1, ECDSA_P384_SHA384_ASN1,
     };
 

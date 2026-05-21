@@ -1,5 +1,5 @@
 #!/bin/bash
-# Check that a specific crate is not pulled in as a dependency
+# Check that specific crates are not pulled in as dependencies
 # Useful for verifying feature flag configurations (e.g., native-tls vs rustls)
 
 set -euo pipefail
@@ -8,8 +8,8 @@ set -euo pipefail
 # Configuration - customize these for your repository
 # =============================================================================
 
-# Crate to check for (script fails if this crate is found in dependency tree)
-FORBIDDEN_CRATE="rustls"
+# Crates to check for (script fails if any of these are found in dependency tree)
+FORBIDDEN_CRATES="rustls aws-lc-rs"
 
 # Features to exclude when testing (space-separated)
 # These features will NOT be enabled during the check
@@ -46,7 +46,7 @@ skipped=0
 for package in $packages; do
     # Skip packages that are known to require the forbidden crate
     if [ -n "$SKIP_PACKAGES" ] && echo "$SKIP_PACKAGES" | grep -qw "$package"; then
-        echo "SKIP: $package (known $FORBIDDEN_CRATE dependency)"
+        echo "SKIP: $package (known dependency on forbidden crates)"
         ((++skipped))
         continue
     fi
@@ -60,22 +60,30 @@ for package in $packages; do
         .key
     ' | tr '\n' ',' | sed 's/,$//')
 
-    # Run cargo tree with all features except excluded features (prod dependencies only)
-    if [ -n "$features" ]; then
-        output=$(cargo tree -i "$FORBIDDEN_CRATE" --no-default-features --features "$features" --package "$package" --locked --edges=normal 2>&1 || true)
-    else
-        output=$(cargo tree -i "$FORBIDDEN_CRATE" --no-default-features --package "$package" --locked --edges=normal 2>&1 || true)
-    fi
+    pkg_failed=0
 
-    if echo "$output" | grep -q "^$FORBIDDEN_CRATE"; then
-        echo "FAIL: $package has $FORBIDDEN_CRATE dependency"
+    for forbidden in $FORBIDDEN_CRATES; do
+        # Run cargo tree with all features except excluded features (prod dependencies only)
         if [ -n "$features" ]; then
-            echo "Reproduce: cargo tree -i $FORBIDDEN_CRATE --no-default-features --features \"$features\" --package \"$package\" --locked --edges=normal"
+            output=$(cargo tree -i "$forbidden" --no-default-features --features "$features" --package "$package" --locked --edges=normal 2>&1 || true)
         else
-            echo "Reproduce: cargo tree -i $FORBIDDEN_CRATE --no-default-features --package \"$package\" --locked --edges=normal"
+            output=$(cargo tree -i "$forbidden" --no-default-features --package "$package" --locked --edges=normal 2>&1 || true)
         fi
-        echo "$output" | head -20
-        echo ""
+
+        if echo "$output" | grep -q "^$forbidden"; then
+            echo "FAIL: $package has $forbidden dependency"
+            if [ -n "$features" ]; then
+                echo "Reproduce: cargo tree -i $forbidden --no-default-features --features \"$features\" --package \"$package\" --locked --edges=normal"
+            else
+                echo "Reproduce: cargo tree -i $forbidden --no-default-features --package \"$package\" --locked --edges=normal"
+            fi
+            echo "$output" | head -20
+            echo ""
+            pkg_failed=1
+        fi
+    done
+
+    if [ $pkg_failed -eq 1 ]; then
         ((++failed))
     else
         echo "OK:   $package"

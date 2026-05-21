@@ -1,8 +1,15 @@
-//! Signature verification using aws-lc-rs
+//! Signature verification
 
 use crate::error::{Error, Result};
 use crate::signing::SigningScheme;
+#[cfg(feature = "rustls")]
 use aws_lc_rs::signature::{
+    UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA384_ASN1, ECDSA_P384_SHA384_ASN1,
+    ED25519, RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
+    RSA_PSS_2048_8192_SHA256, RSA_PSS_2048_8192_SHA384, RSA_PSS_2048_8192_SHA512,
+};
+#[cfg(feature = "native-tls")]
+use ring::signature::{
     UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA384_ASN1, ECDSA_P384_SHA384_ASN1,
     ED25519, RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
     RSA_PSS_2048_8192_SHA256, RSA_PSS_2048_8192_SHA384, RSA_PSS_2048_8192_SHA512,
@@ -120,26 +127,21 @@ impl VerificationKey {
     /// This is used for hashedrekord verification where the signature is over
     /// the SHA-256 hash of the artifact, not the artifact itself.
     pub fn verify_prehashed(&self, digest: &Sha256Hash, signature: &SignatureBytes) -> Result<()> {
-        use aws_lc_rs::digest::{Digest, SHA256};
+        #[cfg(feature = "rustls")]
+        if self.scheme == SigningScheme::EcdsaP256Sha256 {
+            use aws_lc_rs::digest::{Digest, SHA256};
 
-        match self.scheme {
-            SigningScheme::EcdsaP256Sha256 => {
-                let aws_digest = Digest::import_less_safe(digest.as_slice(), &SHA256)
-                    .map_err(|_| Error::Verification("Failed to import digest".to_string()))?;
+            let aws_digest = Digest::import_less_safe(digest.as_slice(), &SHA256)
+                .map_err(|_| Error::Verification("Failed to import digest".to_string()))?;
 
-                let key = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, &self.bytes);
-                key.verify_digest(&aws_digest, signature.as_bytes())
-                    .map_err(|_| Error::Verification("ECDSA P-256 signature invalid".to_string()))
-            }
-            SigningScheme::Ed25519 => {
-                // Ed25519 doesn't support prehashed mode - verify directly over digest bytes
-                self.verify_inner(digest.as_slice(), signature.as_bytes())
-            }
-            _ => {
-                // For other schemes, verify directly over digest bytes
-                self.verify_inner(digest.as_slice(), signature.as_bytes())
-            }
+            let key = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, &self.bytes);
+            return key
+                .verify_digest(&aws_digest, signature.as_bytes())
+                .map_err(|_| Error::Verification("ECDSA P-256 signature invalid".to_string()));
         }
+
+        // For Ed25519 and other schemes (or ring backend), verify directly over digest bytes
+        self.verify_inner(digest.as_slice(), signature.as_bytes())
     }
 }
 

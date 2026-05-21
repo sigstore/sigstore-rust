@@ -34,6 +34,7 @@ thiserror = "2.0"
 
 # Cryptography
 aws-lc-rs = "1.17"
+ring = "0.17"
 sha2 = "0.10"
 digest = "0.10"
 signature = "2.2"
@@ -53,7 +54,7 @@ tls_codec = { version = "0.4", default-features = false, features = ["derive"] }
 cms = { version = "0.2", default-features = false }
 x509-tsp = { version = "0.1", default-features = false }
 cmpv2 = { version = "0.2", default-features = false }
-rustls-webpki = { version = "0.103", default-features = false, features = ["alloc", "std", "aws-lc-rs"] }
+rustls-webpki = { version = "0.103", default-features = false, features = ["alloc", "std"] }
 rustls-pki-types = { version = "1.14", default-features = false, features = ["alloc"] }
 
 # Ambient ID
@@ -96,8 +97,8 @@ open = "5.3"
 
 # Internal crates (path + version for publishing)
 sigstore-types = { path = "crates/sigstore-types", version = "0.8.0" }
-sigstore-crypto = { path = "crates/sigstore-crypto", version = "0.8.0" }
-sigstore-merkle = { path = "crates/sigstore-merkle", version = "0.8.0" }
+sigstore-crypto = { path = "crates/sigstore-crypto", version = "0.8.0", default-features = false }
+sigstore-merkle = { path = "crates/sigstore-merkle", version = "0.8.0", default-features = false }
 sigstore-tsa = { path = "crates/sigstore-tsa", version = "0.8.0", default-features = false }
 sigstore-trust-root = { path = "crates/sigstore-trust-root", version = "0.8.0", default-features = false }
 sigstore-bundle = { path = "crates/sigstore-bundle", version = "0.8.0", default-features = false }

@@ -9,13 +9,24 @@ rust-version.workspace = true
 
 [features]
 default = ["rustls"]
-rustls = ["reqwest/rustls"]
-native-tls = ["reqwest/native-tls"]
+rustls = [
+  "reqwest/rustls",
+  "sigstore-crypto/rustls",
+  "dep:aws-lc-rs",
+  "rustls-webpki/aws-lc-rs",
+]
+native-tls = [
+  "reqwest/native-tls",
+  "sigstore-crypto/native-tls",
+  "dep:ring",
+  "rustls-webpki/ring",
+]
 
 [dependencies]
 sigstore-types = { workspace = true }
 sigstore-crypto = { workspace = true }
-aws-lc-rs = { workspace = true }
+aws-lc-rs = { workspace = true, optional = true }
+ring = { workspace = true, optional = true }
 der = { workspace = true }
 const-oid = { workspace = true, features = ["db"] }
 reqwest = { workspace = true }

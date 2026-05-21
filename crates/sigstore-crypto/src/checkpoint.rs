@@ -68,7 +68,7 @@ pub fn detect_key_type(public_key: &DerPublicKey) -> KeyType {
 /// Extract raw key bytes from SPKI-encoded public key.
 ///
 /// For Ed25519, this extracts the 32-byte raw key from the SPKI wrapper.
-/// For ECDSA, the full SPKI is typically used by aws-lc-rs.
+/// For ECDSA, the full SPKI is typically used by the crypto backend.
 pub fn extract_raw_key(public_key: &DerPublicKey) -> Result<Vec<u8>> {
     use spki::SubjectPublicKeyInfoRef;
 
@@ -92,7 +92,10 @@ pub fn verify_ed25519(
     signature: &SignatureBytes,
     message: &[u8],
 ) -> Result<()> {
+    #[cfg(feature = "rustls")]
     use aws_lc_rs::signature as sig;
+    #[cfg(feature = "native-tls")]
+    use ring::signature as sig;
 
     // Extract raw key bytes from SPKI if needed
     let raw_key = extract_raw_key(public_key)?;
@@ -110,9 +113,11 @@ pub fn verify_ecdsa_p256(
     signature: &SignatureBytes,
     message: &[u8],
 ) -> Result<()> {
+    #[cfg(feature = "rustls")]
     use aws_lc_rs::signature as sig;
+    #[cfg(feature = "native-tls")]
+    use ring::signature as sig;
 
-    // aws-lc-rs expects the full SPKI for ECDSA, or raw uncompressed point
     let pk = sig::UnparsedPublicKey::new(&sig::ECDSA_P256_SHA256_ASN1, public_key.as_bytes());
 
     pk.verify(message, signature.as_bytes())

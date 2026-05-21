@@ -1,7 +1,8 @@
 //! Cryptographic primitives for Sigstore
 //!
-//! This crate provides key generation, signing, and verification functionality
-//! using aws-lc-rs as the cryptographic backend.
+//! This crate provides key generation, signing, and verification functionality.
+//! The crypto backend is selected via feature flags: `rustls` (default) uses
+//! aws-lc-rs, `native-tls` uses ring.
 
 pub mod checkpoint;
 pub mod error;
