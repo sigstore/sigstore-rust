@@ -7,9 +7,7 @@ use sigstore_bundle::{BundleV03, TlogEntryBuilder};
 use sigstore_crypto::{KeyPair, SigningScheme};
 use sigstore_fulcio::FulcioClient;
 use sigstore_oidc::IdentityToken;
-use sigstore_rekor::{
-    DsseEntry, DsseEntryV2, HashedRekord, HashedRekordV2, RekorApiVersion, RekorClient,
-};
+use sigstore_rekor::{DsseEntry, HashedRekord, HashedRekordV2, RekorApiVersion, RekorClient};
 use sigstore_trust_root::{
     SigningConfig as TufSigningConfig, SIGSTORE_PRODUCTION_SIGNING_CONFIG,
     SIGSTORE_STAGING_SIGNING_CONFIG,
@@ -456,25 +454,33 @@ impl Signer {
         let rekor = RekorClient::new(&self.rekor_url);
 
         // Use V1 or V2 API based on configuration
-        let (log_entry, version) = match self.rekor_api_version {
+        let (log_entry, kind, version) = match self.rekor_api_version {
             RekorApiVersion::V1 => {
                 let dsse_entry = DsseEntry::new(envelope, certificate);
                 let entry = rekor.create_dsse_entry(dsse_entry).await.map_err(|e| {
                     Error::Signing(format!("Failed to create DSSE Rekor entry: {}", e))
                 })?;
-                (entry, "0.0.1")
+                (entry, "dsse", "0.0.1")
             }
             RekorApiVersion::V2 => {
-                let dsse_entry = DsseEntryV2::new(envelope, certificate);
-                let entry = rekor.create_dsse_entry_v2(dsse_entry).await.map_err(|e| {
-                    Error::Signing(format!("Failed to create DSSE Rekor entry: {}", e))
+                let hash = sigstore_crypto::sha256(&envelope.pae());
+
+                // Extract the first signature
+                let signature =
+                    envelope.signatures.first().map(|s| &s.sig).ok_or_else(|| {
+                        Error::Signing("DSSE envelope has no signatures".to_string())
+                    })?;
+
+                let hashed_rekord = HashedRekordV2::new(&hash, signature, certificate);
+                let entry = rekor.create_entry_v2(hashed_rekord).await.map_err(|e| {
+                    Error::Signing(format!("Failed to create Rekor entry for DSSE: {}", e))
                 })?;
-                (entry, "0.0.2")
+                (entry, "hashedrekord", "0.0.2")
             }
         };
 
         // Build TlogEntry from the log entry response
-        let tlog_builder = TlogEntryBuilder::from_log_entry(&log_entry, "dsse", version);
+        let tlog_builder = TlogEntryBuilder::from_log_entry(&log_entry, kind, version);
 
         Ok(tlog_builder)
     }

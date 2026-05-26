@@ -1069,7 +1069,7 @@ fn test_verify_fails_with_unknown_log_entry_version() {
 fn test_verify_fails_with_mismatched_log_entry_kind() {
     let mut json_val: serde_json::Value = serde_json::from_str(HAPPY_PATH_V03_BUNDLE_DSSE).unwrap();
     let mut corrupted_entry = json_val["verificationMaterial"]["tlogEntries"][0].clone();
-    corrupted_entry["kindVersion"]["kind"] = serde_json::json!("hashedrekord");
+    corrupted_entry["kindVersion"]["kind"] = serde_json::json!("not-a-known-kind");
     corrupted_entry["kindVersion"]["version"] = serde_json::json!("0.0.1");
     json_val["verificationMaterial"]["tlogEntries"]
         .as_array_mut()
@@ -1087,4 +1087,52 @@ fn test_verify_fails_with_mismatched_log_entry_kind() {
     assert!(result.is_err());
     let err_msg = result.err().unwrap().to_string();
     assert!(err_msg.contains("unsupported log entry kind for DSSE envelope"));
+}
+
+#[test]
+fn test_verify_fails_with_mismatched_hashedrekord_version_for_dsse() {
+    let mut json_val: serde_json::Value = serde_json::from_str(HAPPY_PATH_V03_BUNDLE_DSSE).unwrap();
+    let mut corrupted_entry = json_val["verificationMaterial"]["tlogEntries"][0].clone();
+    corrupted_entry["kindVersion"]["kind"] = serde_json::json!("hashedrekord");
+    corrupted_entry["kindVersion"]["version"] = serde_json::json!("0.0.1");
+    json_val["verificationMaterial"]["tlogEntries"]
+        .as_array_mut()
+        .unwrap()
+        .push(corrupted_entry);
+    let corrupted_bundle_json = serde_json::to_string(&json_val).unwrap();
+
+    let bundle =
+        Bundle::from_json(&corrupted_bundle_json).expect("Failed to parse corrupted bundle");
+    let artifact_digest =
+        extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
+    let policy = VerificationPolicy::default().skip_timestamp();
+
+    let result = verify(artifact_digest, &bundle, &policy, &production_root());
+    assert!(result.is_err());
+    let err_msg = result.err().unwrap().to_string();
+
+    assert!(err_msg.contains("unsupported hashedrekord entry version for DSSE envelope"));
+}
+
+fn staging_root() -> TrustedRoot {
+    TrustedRoot::from_json(sigstore_trust_root::SIGSTORE_STAGING_TRUSTED_ROOT)
+        .expect("Failed to load staging trusted root")
+}
+
+#[test]
+fn test_verify_dsse_with_hashedrekord_v002() {
+    let bundle_json = include_str!("../test_data/bundles/conda-attestation-rekor2.sigstore.json");
+    let bundle = Bundle::from_json(bundle_json).unwrap();
+
+    let artifact = include_bytes!("../test_data/bundles/signed-package-2.1.0-hb0f4dca_0.conda");
+
+    let policy = VerificationPolicy::default();
+
+    let result = verify(artifact.as_slice(), &bundle, &policy, &staging_root());
+    assert!(
+        result.is_ok(),
+        "Verification failed for DSSE with HashedRekordV2: {:?}",
+        result.err()
+    );
+    assert!(result.unwrap().success);
 }

@@ -15,10 +15,23 @@ pub fn verify_tlog_consistency(
 ) -> Result<()> {
     for entry in &bundle.verification_material.tlog_entries {
         match &bundle.content {
+            // DSSE envelope handling depends on Rekor version:
+            // * Rekor 1 gives us a "dsse 0.0.1" entry (or "intoto 0.0.2")
+            // * Rekor 2 gives us a "hashedrekord 0.0.2" entry
             SignatureContent::DsseEnvelope(envelope) => match entry.kind_version.kind.as_str() {
+                "hashedrekord" => match entry.kind_version.version.as_str() {
+                    "0.0.2" => {
+                        super::hashedrekord::verify_hashedrekord_entry(entry, bundle, artifact)?;
+                    }
+                    version => {
+                        return Err(Error::Verification(format!(
+                            "unsupported hashedrekord entry version for DSSE envelope: {}",
+                            version
+                        )))
+                    }
+                },
                 "dsse" => match entry.kind_version.version.as_str() {
                     "0.0.1" => verify_dsse_v001(entry, envelope, bundle)?,
-                    "0.0.2" => verify_dsse_v002(entry, envelope, bundle)?,
                     version => {
                         return Err(Error::Verification(format!(
                             "unsupported dsse entry version: {}",
@@ -141,84 +154,6 @@ fn verify_dsse_v001(
             // Compare both signature bytes AND the verifier (certificate as DER)
             if bundle_sig.sig.as_bytes() == rekor_sig.signature.as_bytes()
                 && cert.as_bytes() == rekor_cert_der.as_bytes()
-            {
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            return Err(Error::Verification(
-                "DSSE signature in bundle does not match any signature in Rekor entry (signature or verifier mismatch)".to_string(),
-            ));
-        }
-    }
-
-    Ok(())
-}
-
-/// Verify DSSE v0.0.2 entry (payload hash and signature validation)
-fn verify_dsse_v002(
-    entry: &TransparencyLogEntry,
-    envelope: &sigstore_types::DsseEnvelope,
-    bundle: &Bundle,
-) -> Result<()> {
-    let body = RekorEntryBody::from_base64_json(
-        &entry.canonicalized_body.to_base64(),
-        &entry.kind_version.kind,
-        &entry.kind_version.version,
-    )
-    .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
-
-    let (expected_hash, rekor_signatures) = match &body {
-        RekorEntryBody::DsseV002(dsse_body) => (
-            &dsse_body.spec.dsse_v002.payload_hash.digest,
-            &dsse_body.spec.dsse_v002.signatures,
-        ),
-        _ => {
-            return Err(Error::Verification(
-                "expected DSSE v0.0.2 body, got different type".to_string(),
-            ))
-        }
-    };
-
-    // Compute actual payload hash
-    let payload_bytes = envelope.payload.as_bytes();
-    let payload_hash = sigstore_crypto::sha256(payload_bytes);
-
-    // Compare hashes (expected_hash is Vec<u8>)
-    if payload_hash.as_slice() != expected_hash.as_slice() {
-        return Err(Error::Verification(format!(
-            "DSSE payload hash mismatch: computed {}, expected {}",
-            hex::encode(payload_hash),
-            hex::encode(expected_hash)
-        )));
-    }
-
-    // Extract the signing certificate from the bundle
-    let cert = super::helpers::extract_certificate(&bundle.verification_material.content)?;
-
-    // Verify that the signatures in the bundle match what's in Rekor
-    // This prevents signature substitution attacks
-    // IMPORTANT: We must verify BOTH the signature bytes AND the verifier (certificate)
-
-    if envelope.signatures.len() != rekor_signatures.len() {
-        return Err(Error::Verification(format!(
-            "DSSE signature count mismatch: bundle has {}, Rekor entry has {}",
-            envelope.signatures.len(),
-            rekor_signatures.len()
-        )));
-    }
-
-    // Check that each signature in the bundle exists in the Rekor entry
-    // We must match both the signature AND the verifier to prevent signature substitution
-    for bundle_sig in &envelope.signatures {
-        let mut found = false;
-        for rekor_sig in rekor_signatures {
-            // Compare both signature bytes AND the verifier (certificate)
-            // The signature field in the bundle is SignatureBytes, compare as bytes
-            // The verifier contains the x509Certificate.rawBytes (DerCertificate)
-            if bundle_sig.sig.as_bytes() == rekor_sig.content.as_bytes()
-                && cert.as_bytes() == rekor_sig.verifier.x509_certificate.raw_bytes.as_bytes()
             {
                 found = true;
                 break;

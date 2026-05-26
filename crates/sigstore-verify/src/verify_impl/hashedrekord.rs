@@ -12,7 +12,7 @@ use sigstore_types::{
 use x509_cert::der::Decode;
 use x509_cert::Certificate;
 
-/// Verify artifact hash matches what's in Rekor (for hashedrekord entries)
+/// Verify artifact/dsse hash matches what's in Rekor (for hashedrekord entries)
 /// Verify a single hashedrekord entry
 pub(crate) fn verify_hashedrekord_entry(
     entry: &TransparencyLogEntry,
@@ -27,8 +27,11 @@ pub(crate) fn verify_hashedrekord_entry(
     )
     .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
 
-    // Compute artifact hash from artifact (bytes or pre-computed digest)
-    let artifact_hash = compute_artifact_digest(artifact);
+    // Compute hash from artifact (bytes or pre-computed digest) or DSSE envelope
+    let hash = match &bundle.content {
+        SignatureContent::MessageSignature(_) => compute_artifact_digest(artifact),
+        SignatureContent::DsseEnvelope(envelope) => sigstore_crypto::sha256(&envelope.pae()),
+    };
 
     // Validate artifact hash matches what's in Rekor
     match &body {
@@ -36,7 +39,7 @@ pub(crate) fn verify_hashedrekord_entry(
             // v0.0.1: spec.data.hash.value (hex-encoded)
             let expected = Sha256Hash::from_hex(rekord.spec.data.hash.value.as_str())
                 .map_err(|e| Error::Verification(format!("invalid hash in Rekor entry: {}", e)))?;
-            validate_artifact_hash(&artifact_hash, &expected)?;
+            validate_artifact_hash(&hash, &expected)?;
         }
         RekorEntryBody::HashedRekordV002(rekord) => {
             // v0.0.2: spec.hashedRekordV002.data.digest (Vec<u8>)
@@ -44,7 +47,7 @@ pub(crate) fn verify_hashedrekord_entry(
                 .map_err(|e| {
                     Error::Verification(format!("invalid digest in Rekor entry: {}", e))
                 })?;
-            validate_artifact_hash(&artifact_hash, &expected)?;
+            validate_artifact_hash(&hash, &expected)?;
         }
         _ => {
             return Err(Error::Verification(format!(
@@ -170,15 +173,32 @@ fn validate_signature_match(
     };
 
     if let Some(rekor_sig) = rekor_sig {
-        // Get the signature from the bundle (only for MessageSignature, not DSSE)
-        if let SignatureContent::MessageSignature(sig) = &bundle.content {
-            let bundle_sig = &sig.signature;
+        // Get the signature from the bundle
+        match &bundle.content {
+            SignatureContent::MessageSignature(sig) => {
+                let bundle_sig = &sig.signature;
 
-            // Compare signatures (both are SignatureBytes)
-            if bundle_sig != rekor_sig {
-                return Err(Error::Verification(
-                    "signature in bundle does not match signature in Rekor entry".to_string(),
-                ));
+                // Compare signatures (both are SignatureBytes)
+                if bundle_sig != rekor_sig {
+                    return Err(Error::Verification(
+                        "signature in bundle does not match signature in Rekor entry".to_string(),
+                    ));
+                }
+            }
+            SignatureContent::DsseEnvelope(envelope) => {
+                // Compare against the first DSSE envelope signature
+                if let Some(first_sig) = envelope.signatures.first() {
+                    if &first_sig.sig != rekor_sig {
+                        return Err(Error::Verification(
+                            "DSSE signature in bundle does not match signature in Rekor entry"
+                                .to_string(),
+                        ));
+                    }
+                } else {
+                    return Err(Error::Verification(
+                        "No signatures found in DSSE envelope".to_string(),
+                    ));
+                }
             }
         }
     }
