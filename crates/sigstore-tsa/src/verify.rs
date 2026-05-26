@@ -200,14 +200,11 @@ pub fn verify_timestamp_response(
     verify_message_imprint(&tst_info, signature_bytes)?;
 
     // Extract the timestamp from TSTInfo
-    let system_time = tst_info.gen_time.to_system_time();
-    let unix_duration = system_time
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| Error::ParseError("timestamp before epoch".to_string()))?;
-    let seconds = i64::try_from(unix_duration.as_secs())
+    let timestamp = Timestamp::try_from(tst_info.gen_time.to_system_time())
         .map_err(|_| Error::ParseError("invalid timestamp in TSTInfo".to_string()))?;
-    let timestamp = Timestamp::new(seconds, unix_duration.subsec_nanos() as i32)
-        .map_err(|_| Error::ParseError("invalid timestamp in TSTInfo".to_string()))?;
+    if timestamp < Timestamp::UNIX_EPOCH {
+        return Err(Error::ParseError("timestamp before epoch".to_string()));
+    }
 
     tracing::debug!("Extracted timestamp: {}", timestamp);
 
