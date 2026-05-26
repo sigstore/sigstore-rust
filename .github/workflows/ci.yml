@@ -126,7 +126,7 @@ jobs:
           cargo build --release --package sigstore-conformance
           cargo build --release --example verify_bundle
 
-      - uses: sigstore/sigstore-conformance@4d66ba3cb0c9c95f705c757c0f5e226d3f4d5151 # v0.0.27
+      - uses: sigstore/sigstore-conformance@21533cde107c734ebc153c3e3a24d75fc9811a36 # TODO: use next release
         with:
           entrypoint: ./target/release/conformance
 
