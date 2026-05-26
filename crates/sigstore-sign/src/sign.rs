@@ -33,6 +33,8 @@ pub struct SigningConfig {
     pub signing_scheme: SigningScheme,
     /// Rekor API version to use (defaults to V2)
     pub rekor_api_version: RekorApiVersion,
+    /// OIDC provider URL (optional)
+    pub oidc_url: Option<String>,
 }
 
 impl Default for SigningConfig {
@@ -44,6 +46,7 @@ impl Default for SigningConfig {
             tsa_url: Some("https://timestamp.sigstore.dev/api/v1/timestamp".to_string()),
             signing_scheme: SigningScheme::EcdsaP256Sha256,
             rekor_api_version,
+            oidc_url: Some("https://oauth2.sigstore.dev/auth".to_string()),
         }
     }
 }
@@ -114,6 +117,7 @@ impl SigningConfig {
             };
 
         let tsa_url = tuf_config.get_tsa_url().map(|e| e.url.clone());
+        let oidc_url = tuf_config.get_oidc_url().map(|e| e.url.clone());
 
         Self {
             fulcio_url,
@@ -121,6 +125,7 @@ impl SigningConfig {
             tsa_url,
             signing_scheme: SigningScheme::EcdsaP256Sha256,
             rekor_api_version,
+            oidc_url,
         }
     }
 

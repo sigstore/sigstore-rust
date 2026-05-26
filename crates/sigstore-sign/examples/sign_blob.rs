@@ -117,22 +117,6 @@ async fn main() {
     println!("Signing artifact: {}", artifact_path);
     println!("  Size: {} bytes", artifact.len());
 
-    // Get identity token
-    let identity_token = match get_token(token).await {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Error obtaining identity token: {}", e);
-            process::exit(1);
-        }
-    };
-
-    // Print token info
-    println!("  Identity: {}", identity_token.subject());
-    if let Some(email) = identity_token.email() {
-        println!("  Email: {}", email);
-    }
-    println!("  Issuer: {}", identity_token.issuer());
-
     // Create signing context with appropriate API version
     let base_config = if staging {
         println!("  Using: staging infrastructure");
@@ -155,6 +139,22 @@ async fn main() {
     } else {
         println!("  TSA URL: (none)");
     }
+
+    // Get identity token
+    let identity_token = match get_token(token, config.oidc_url.as_deref()).await {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Error obtaining identity token: {}", e);
+            process::exit(1);
+        }
+    };
+
+    // Print token info
+    println!("  Identity: {}", identity_token.subject());
+    if let Some(email) = identity_token.email() {
+        println!("  Email: {}", email);
+    }
+    println!("  Issuer: {}", identity_token.issuer());
 
     let context = SigningContext::with_config(config);
 
@@ -232,7 +232,7 @@ async fn main() {
     );
 }
 
-async fn get_token(explicit_token: Option<String>) -> Result<IdentityToken, String> {
+async fn get_token(explicit_token: Option<String>, oidc_url: Option<&str>) -> Result<IdentityToken, String> {
     // 1. Use explicit token if provided
     if let Some(token_str) = explicit_token {
         return IdentityToken::from_jwt(&token_str).map_err(|e| format!("Invalid token: {}", e));
@@ -252,9 +252,23 @@ async fn get_token(explicit_token: Option<String>) -> Result<IdentityToken, Stri
     println!("  Starting interactive authentication...");
     println!();
 
-    get_identity_token()
-        .await
-        .map_err(|e| format!("OAuth failed: {}", e))
+    if let Some(url) = oidc_url {
+        let config = sigstore_oidc::OAuthConfig {
+            auth_url: format!("{}/auth", url),
+            token_url: format!("{}/token", url),
+            client_id: "sigstore".to_string(),
+            scopes: vec!["openid".to_string(), "email".to_string()],
+        };
+        let client = sigstore_oidc::OAuthClient::new(config);
+        client
+            .auth(sigstore_oidc::DefaultAuthCallback)
+            .await
+            .map_err(|e| format!("OAuth failed: {}", e))
+    } else {
+        get_identity_token()
+            .await
+            .map_err(|e| format!("OAuth failed: {}", e))
+    }
 }
 
 fn print_usage(program: &str) {
