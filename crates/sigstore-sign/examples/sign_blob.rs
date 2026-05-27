@@ -232,7 +232,10 @@ async fn main() {
     );
 }
 
-async fn get_token(explicit_token: Option<String>, oidc_url: Option<&str>) -> Result<IdentityToken, String> {
+async fn get_token(
+    explicit_token: Option<String>,
+    oidc_url: Option<&str>,
+) -> Result<IdentityToken, String> {
     // 1. Use explicit token if provided
     if let Some(token_str) = explicit_token {
         return IdentityToken::from_jwt(&token_str).map_err(|e| format!("Invalid token: {}", e));
@@ -252,23 +255,9 @@ async fn get_token(explicit_token: Option<String>, oidc_url: Option<&str>) -> Re
     println!("  Starting interactive authentication...");
     println!();
 
-    if let Some(url) = oidc_url {
-        let config = sigstore_oidc::OAuthConfig {
-            auth_url: format!("{}/auth", url),
-            token_url: format!("{}/token", url),
-            client_id: "sigstore".to_string(),
-            scopes: vec!["openid".to_string(), "email".to_string()],
-        };
-        let client = sigstore_oidc::OAuthClient::new(config);
-        client
-            .auth(sigstore_oidc::DefaultAuthCallback)
-            .await
-            .map_err(|e| format!("OAuth failed: {}", e))
-    } else {
-        get_identity_token()
-            .await
-            .map_err(|e| format!("OAuth failed: {}", e))
-    }
+    get_identity_token(oidc_url)
+        .await
+        .map_err(|e| format!("OAuth failed: {}", e))
 }
 
 fn print_usage(program: &str) {

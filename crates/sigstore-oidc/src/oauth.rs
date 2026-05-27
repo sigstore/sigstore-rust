@@ -26,6 +26,9 @@ const OOB_REDIRECT_URI: &str = "urn:ietf:wg:oauth:2.0:oob";
 /// Timeout for waiting for the browser callback (5 minutes)
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Default OIDC provider URL for Sigstore public-good instance
+const DEFAULT_SIGSTORE_OIDC_URL: &str = "https://oauth2.sigstore.dev/auth";
+
 /// OAuth configuration for a provider
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
@@ -42,9 +45,17 @@ pub struct OAuthConfig {
 impl OAuthConfig {
     /// Create configuration for Sigstore's public OAuth provider
     pub fn sigstore() -> Self {
+        Self::from_oidc_url(DEFAULT_SIGSTORE_OIDC_URL)
+    }
+
+    /// Create configuration for a provider given its base OIDC issuer URL.
+    ///
+    /// This appends `/auth` and `/token` to the base URL.
+    pub fn from_oidc_url(url: &str) -> Self {
+        let base = url.trim_end_matches('/');
         Self {
-            auth_url: "https://oauth2.sigstore.dev/auth/auth".to_string(),
-            token_url: "https://oauth2.sigstore.dev/auth/token".to_string(),
+            auth_url: format!("{}/auth", base),
+            token_url: format!("{}/token", base),
             client_id: "sigstore".to_string(),
             scopes: vec!["openid".to_string(), "email".to_string()],
         }
@@ -169,7 +180,7 @@ impl OAuthClient {
 
     /// Create a client for Sigstore's OAuth provider
     pub fn sigstore() -> Self {
-        Self::new(OAuthConfig::sigstore())
+        Self::new(OAuthConfig::from_oidc_url(DEFAULT_SIGSTORE_OIDC_URL))
     }
 
     /// Generate a PKCE verifier and challenge
@@ -499,29 +510,37 @@ impl OAuthClient {
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let token = get_identity_token().await?;
+///     let token = get_identity_token(None).await?;
 ///     println!("Got token for: {}", token.subject());
 ///     Ok(())
 /// }
 /// ```
-pub async fn get_identity_token() -> Result<IdentityToken> {
-    OAuthClient::sigstore().auth(DefaultAuthCallback).await
+pub async fn get_identity_token(oidc_url: Option<&str>) -> Result<IdentityToken> {
+    let url = oidc_url.unwrap_or(DEFAULT_SIGSTORE_OIDC_URL);
+    let client = OAuthClient::new(OAuthConfig::from_oidc_url(url));
+    client.auth(DefaultAuthCallback).await
 }
 
 /// Get an identity token with a custom callback for UX customization.
 pub async fn get_identity_token_with_callback(
+    oidc_url: Option<&str>,
     callback: impl AuthCallback,
 ) -> Result<IdentityToken> {
-    OAuthClient::sigstore().auth(callback).await
+    let url = oidc_url.unwrap_or(DEFAULT_SIGSTORE_OIDC_URL);
+    let client = OAuthClient::new(OAuthConfig::from_oidc_url(url));
+    client.auth(callback).await
 }
 
 /// Get an identity token with options.
 ///
 /// Use this to force OOB mode or customize other behavior.
-pub async fn get_identity_token_with_options(options: AuthOptions) -> Result<IdentityToken> {
-    OAuthClient::sigstore()
-        .auth_with_options(DefaultAuthCallback, options)
-        .await
+pub async fn get_identity_token_with_options(
+    oidc_url: Option<&str>,
+    options: AuthOptions,
+) -> Result<IdentityToken> {
+    let url = oidc_url.unwrap_or(DEFAULT_SIGSTORE_OIDC_URL);
+    let client = OAuthClient::new(OAuthConfig::from_oidc_url(url));
+    client.auth_with_options(DefaultAuthCallback, options).await
 }
 
 #[cfg(test)]
@@ -534,6 +553,18 @@ mod tests {
         assert_eq!(config.client_id, "sigstore");
         assert!(config.scopes.contains(&"openid".to_string()));
         assert!(config.scopes.contains(&"email".to_string()));
+    }
+
+    #[test]
+    fn test_oauth_config_from_oidc_url() {
+        let config1 = OAuthConfig::from_oidc_url("https://oauth2.sigstore.dev/auth");
+        assert_eq!(config1.auth_url, "https://oauth2.sigstore.dev/auth/auth");
+        assert_eq!(config1.token_url, "https://oauth2.sigstore.dev/auth/token");
+
+        // Test trailing slash removal
+        let config2 = OAuthConfig::from_oidc_url("https://oauth2.sigstore.dev/auth/");
+        assert_eq!(config2.auth_url, "https://oauth2.sigstore.dev/auth/auth");
+        assert_eq!(config2.token_url, "https://oauth2.sigstore.dev/auth/token");
     }
 
     #[test]
