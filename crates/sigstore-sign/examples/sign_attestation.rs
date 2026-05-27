@@ -138,13 +138,18 @@ async fn main() {
     println!("  SHA256: {}", hex::encode(package_hash.as_bytes()));
 
     // Get signing config
-    let config = if staging {
+    let tuf_config = if staging {
         println!("  Using: staging infrastructure");
-        SigningConfig::staging()
+        sigstore_trust_root::SigningConfig::staging()
+            .await
+            .expect("Failed to fetch staging config via TUF")
     } else {
         println!("  Using: production infrastructure");
-        SigningConfig::production()
+        sigstore_trust_root::SigningConfig::production()
+            .await
+            .expect("Failed to fetch production config via TUF")
     };
+    let config = SigningConfig::from_tuf_config(&tuf_config);
 
     println!("  Fulcio URL: {}", config.fulcio_url);
     println!("  Rekor URL: {}", config.rekor_url);

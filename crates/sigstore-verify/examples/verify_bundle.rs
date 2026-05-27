@@ -45,7 +45,7 @@
 //! ```
 
 use regex::Regex;
-use sigstore_trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT, SIGSTORE_STAGING_TRUSTED_ROOT};
+use sigstore_trust_root::TrustedRoot;
 use sigstore_types::{Artifact, Bundle, Sha256Hash};
 use sigstore_verify::{verify, VerificationPolicy};
 
@@ -53,7 +53,8 @@ use std::env;
 use std::fs;
 use std::process;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args: Vec<String> = env::args().collect();
 
     // Parse arguments
@@ -140,19 +141,23 @@ fn main() {
     };
 
     // Load trusted root (staging or production Sigstore infrastructure)
-    let root_json = if staging {
-        println!("  Using: staging infrastructure");
-        SIGSTORE_STAGING_TRUSTED_ROOT
+    let trusted_root = if staging {
+        println!("  Using: staging infrastructure (fetching via TUF)");
+        match TrustedRoot::staging().await {
+            Ok(root) => root,
+            Err(e) => {
+                eprintln!("Error fetching staging trusted root via TUF: {}", e);
+                process::exit(1);
+            }
+        }
     } else {
-        println!("  Using: production infrastructure");
-        SIGSTORE_PRODUCTION_TRUSTED_ROOT
-    };
-
-    let trusted_root = match TrustedRoot::from_json(root_json) {
-        Ok(root) => root,
-        Err(e) => {
-            eprintln!("Error loading trusted root: {}", e);
-            process::exit(1);
+        println!("  Using: production infrastructure (fetching via TUF)");
+        match TrustedRoot::production().await {
+            Ok(root) => root,
+            Err(e) => {
+                eprintln!("Error fetching production trusted root via TUF: {}", e);
+                process::exit(1);
+            }
         }
     };
 

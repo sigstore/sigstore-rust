@@ -118,13 +118,18 @@ async fn main() {
     println!("  Size: {} bytes", artifact.len());
 
     // Create signing context with appropriate API version
-    let base_config = if staging {
+    let tuf_config = if staging {
         println!("  Using: staging infrastructure");
-        SigningConfig::staging()
+        sigstore_trust_root::SigningConfig::staging()
+            .await
+            .expect("Failed to fetch staging config via TUF")
     } else {
         println!("  Using: production infrastructure");
-        SigningConfig::production()
+        sigstore_trust_root::SigningConfig::production()
+            .await
+            .expect("Failed to fetch production config via TUF")
     };
+    let base_config = SigningConfig::from_tuf_config(&tuf_config);
 
     let config = if use_v2 {
         base_config.with_rekor_version(RekorApiVersion::V2)
