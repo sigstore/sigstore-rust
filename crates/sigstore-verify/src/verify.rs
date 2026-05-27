@@ -415,9 +415,9 @@ impl Verifier {
 
         // (8): Verify the transparency log entry's consistency against the other
         //      materials, to prevent variants of CVE-2022-36056.
-        crate::verify_impl::verify_dsse_entries(bundle)?;
-        crate::verify_impl::verify_intoto_entries(bundle)?;
-        crate::verify_impl::verify_hashedrekord_entries(bundle, &artifact)?;
+        if policy.verify_tlog {
+            crate::verify_impl::verify_tlog_consistency(bundle, &artifact)?;
+        }
 
         Ok(result)
     }
