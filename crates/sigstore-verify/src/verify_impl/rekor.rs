@@ -8,20 +8,59 @@ use base64::Engine;
 use sigstore_rekor::body::RekorEntryBody;
 use sigstore_types::{Bundle, SignatureContent, TransparencyLogEntry};
 
-/// Verify DSSE envelope matches Rekor entry (for DSSE bundles)
-pub fn verify_dsse_entries(bundle: &Bundle) -> Result<()> {
-    let envelope = match &bundle.content {
-        SignatureContent::DsseEnvelope(env) => env,
-        _ => return Ok(()), // Not a DSSE bundle
-    };
-
+/// Verify that all log entries are consistent with the bundle's content and artifact
+pub fn verify_tlog_consistency(
+    bundle: &Bundle,
+    artifact: &sigstore_types::Artifact<'_>,
+) -> Result<()> {
     for entry in &bundle.verification_material.tlog_entries {
-        if entry.kind_version.kind == "dsse" {
-            match entry.kind_version.version.as_str() {
-                "0.0.1" => verify_dsse_v001(entry, envelope, bundle)?,
-                "0.0.2" => verify_dsse_v002(entry, envelope, bundle)?,
-                _ => {} // Unknown version, skip
-            }
+        match &bundle.content {
+            SignatureContent::DsseEnvelope(envelope) => match entry.kind_version.kind.as_str() {
+                "dsse" => match entry.kind_version.version.as_str() {
+                    "0.0.1" => verify_dsse_v001(entry, envelope, bundle)?,
+                    "0.0.2" => verify_dsse_v002(entry, envelope, bundle)?,
+                    version => {
+                        return Err(Error::Verification(format!(
+                            "unsupported dsse entry version: {}",
+                            version
+                        )))
+                    }
+                },
+                "intoto" => match entry.kind_version.version.as_str() {
+                    "0.0.2" => verify_intoto_v002(entry, envelope)?,
+                    version => {
+                        return Err(Error::Verification(format!(
+                            "unsupported intoto entry version: {}",
+                            version
+                        )))
+                    }
+                },
+                kind => {
+                    return Err(Error::Verification(format!(
+                        "unsupported log entry kind for DSSE envelope: {}",
+                        kind
+                    )))
+                }
+            },
+            SignatureContent::MessageSignature(_) => match entry.kind_version.kind.as_str() {
+                "hashedrekord" => match entry.kind_version.version.as_str() {
+                    "0.0.1" | "0.0.2" => {
+                        super::hashedrekord::verify_hashedrekord_entry(entry, bundle, artifact)?;
+                    }
+                    version => {
+                        return Err(Error::Verification(format!(
+                            "unsupported hashedrekord entry version: {}",
+                            version
+                        )))
+                    }
+                },
+                kind => {
+                    return Err(Error::Verification(format!(
+                        "unsupported log entry kind for MessageSignature: {}",
+                        kind
+                    )))
+                }
+            },
         }
     }
 
@@ -189,22 +228,6 @@ fn verify_dsse_v002(
             return Err(Error::Verification(
                 "DSSE signature in bundle does not match any signature in Rekor entry (signature or verifier mismatch)".to_string(),
             ));
-        }
-    }
-
-    Ok(())
-}
-
-/// Verify DSSE payload matches what's in Rekor (for intoto entries)
-pub fn verify_intoto_entries(bundle: &Bundle) -> Result<()> {
-    let envelope = match &bundle.content {
-        SignatureContent::DsseEnvelope(env) => env,
-        _ => return Ok(()), // Not a DSSE bundle
-    };
-
-    for entry in &bundle.verification_material.tlog_entries {
-        if entry.kind_version.kind == "intoto" {
-            verify_intoto_v002(entry, envelope)?;
         }
     }
 

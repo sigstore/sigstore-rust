@@ -13,17 +13,8 @@ use x509_cert::der::Decode;
 use x509_cert::Certificate;
 
 /// Verify artifact hash matches what's in Rekor (for hashedrekord entries)
-pub fn verify_hashedrekord_entries(bundle: &Bundle, artifact: &Artifact<'_>) -> Result<()> {
-    for entry in &bundle.verification_material.tlog_entries {
-        if entry.kind_version.kind == "hashedrekord" {
-            verify_hashedrekord_entry(entry, bundle, artifact)?;
-        }
-    }
-    Ok(())
-}
-
 /// Verify a single hashedrekord entry
-fn verify_hashedrekord_entry(
+pub(crate) fn verify_hashedrekord_entry(
     entry: &TransparencyLogEntry,
     bundle: &Bundle,
     artifact: &Artifact<'_>,

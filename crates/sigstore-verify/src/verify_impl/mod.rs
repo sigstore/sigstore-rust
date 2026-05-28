@@ -10,5 +10,4 @@ pub(crate) mod sct;
 pub(crate) mod tlog;
 
 // Re-export for use within parent verify.rs
-pub use hashedrekord::verify_hashedrekord_entries;
-pub use rekor::{verify_dsse_entries, verify_intoto_entries};
+pub use rekor::verify_tlog_consistency;
