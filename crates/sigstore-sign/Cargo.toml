@@ -26,6 +26,7 @@ tokio = { workspace = true }
 jiff = { workspace = true }
 serde = { workspace = true }
 hex = { workspace = true }
+sigstore-trust-root = { workspace = true, features = ["tuf"] }
 
 [features]
 default = ["rustls", "browser"]

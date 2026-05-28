@@ -117,30 +117,19 @@ async fn main() {
     println!("Signing artifact: {}", artifact_path);
     println!("  Size: {} bytes", artifact.len());
 
-    // Get identity token
-    let identity_token = match get_token(token).await {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Error obtaining identity token: {}", e);
-            process::exit(1);
-        }
-    };
-
-    // Print token info
-    println!("  Identity: {}", identity_token.subject());
-    if let Some(email) = identity_token.email() {
-        println!("  Email: {}", email);
-    }
-    println!("  Issuer: {}", identity_token.issuer());
-
     // Create signing context with appropriate API version
-    let base_config = if staging {
+    let tuf_config = if staging {
         println!("  Using: staging infrastructure");
-        SigningConfig::staging()
+        sigstore_trust_root::SigningConfig::staging()
+            .await
+            .expect("Failed to fetch staging config via TUF")
     } else {
         println!("  Using: production infrastructure");
-        SigningConfig::production()
+        sigstore_trust_root::SigningConfig::production()
+            .await
+            .expect("Failed to fetch production config via TUF")
     };
+    let base_config = SigningConfig::from_tuf_config(&tuf_config);
 
     let config = if use_v2 {
         base_config.with_rekor_version(RekorApiVersion::V2)
@@ -155,6 +144,22 @@ async fn main() {
     } else {
         println!("  TSA URL: (none)");
     }
+
+    // Get identity token
+    let identity_token = match get_token(token, config.oidc_url.as_deref()).await {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Error obtaining identity token: {}", e);
+            process::exit(1);
+        }
+    };
+
+    // Print token info
+    println!("  Identity: {}", identity_token.subject());
+    if let Some(email) = identity_token.email() {
+        println!("  Email: {}", email);
+    }
+    println!("  Issuer: {}", identity_token.issuer());
 
     let context = SigningContext::with_config(config);
 
@@ -232,7 +237,10 @@ async fn main() {
     );
 }
 
-async fn get_token(explicit_token: Option<String>) -> Result<IdentityToken, String> {
+async fn get_token(
+    explicit_token: Option<String>,
+    oidc_url: Option<&str>,
+) -> Result<IdentityToken, String> {
     // 1. Use explicit token if provided
     if let Some(token_str) = explicit_token {
         return IdentityToken::from_jwt(&token_str).map_err(|e| format!("Invalid token: {}", e));
@@ -252,7 +260,7 @@ async fn get_token(explicit_token: Option<String>) -> Result<IdentityToken, Stri
     println!("  Starting interactive authentication...");
     println!();
 
-    get_identity_token()
+    get_identity_token(oidc_url)
         .await
         .map_err(|e| format!("OAuth failed: {}", e))
 }

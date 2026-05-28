@@ -42,6 +42,7 @@ const-oid = { workspace = true }
 x509-cert = { workspace = true }
 sigstore-types = { workspace = true }
 regex = { workspace = true }
+sigstore-trust-root = { workspace = true, features = ["tuf"] }
 
 [features]
 default = ["rustls"]

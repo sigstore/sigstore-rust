@@ -45,7 +45,7 @@
 //! ```
 
 use regex::Regex;
-use sigstore_trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
+use sigstore_trust_root::TrustedRoot;
 use sigstore_types::{Artifact, Bundle, Sha256Hash};
 use sigstore_verify::{verify, VerificationPolicy};
 
@@ -53,13 +53,15 @@ use std::env;
 use std::fs;
 use std::process;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args: Vec<String> = env::args().collect();
 
     // Parse arguments
     let mut identity: Option<String> = None;
     let mut identity_regexp: Option<String> = None;
     let mut issuer: Option<String> = None;
+    let mut staging = false;
     let mut positional: Vec<String> = Vec::new();
 
     let mut i = 1;
@@ -88,6 +90,9 @@ fn main() {
                     process::exit(1);
                 }
                 issuer = Some(args[i].clone());
+            }
+            "--staging" => {
+                staging = true;
             }
             "--help" | "-h" => {
                 print_usage(&args[0]);
@@ -135,14 +140,24 @@ fn main() {
         }
     };
 
-    // Load trusted root (production Sigstore infrastructure)
-    // Using embedded data for this example - in production, prefer TrustedRoot::production().await
-    // to fetch the latest trust material via TUF protocol
-    let trusted_root = match TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT) {
-        Ok(root) => root,
-        Err(e) => {
-            eprintln!("Error loading trusted root: {}", e);
-            process::exit(1);
+    // Load trusted root (staging or production Sigstore infrastructure)
+    let trusted_root = if staging {
+        println!("  Using: staging infrastructure (fetching via TUF)");
+        match TrustedRoot::staging().await {
+            Ok(root) => root,
+            Err(e) => {
+                eprintln!("Error fetching staging trusted root via TUF: {}", e);
+                process::exit(1);
+            }
+        }
+    } else {
+        println!("  Using: production infrastructure (fetching via TUF)");
+        match TrustedRoot::production().await {
+            Ok(root) => root,
+            Err(e) => {
+                eprintln!("Error fetching production trusted root via TUF: {}", e);
+                process::exit(1);
+            }
         }
     };
 
@@ -267,6 +282,7 @@ fn print_usage(program: &str) {
     eprintln!("  --certificate-identity <ID>        Required certificate identity (exact match)");
     eprintln!("  --certificate-identity-regexp <RE> Required certificate identity (regex)");
     eprintln!("  --certificate-oidc-issuer <ISSUER> Required OIDC issuer");
+    eprintln!("  --staging                          Use Sigstore staging infrastructure");
     eprintln!("  -h, --help                         Print this help message");
     eprintln!();
     eprintln!("Aliases (for backwards compatibility):");

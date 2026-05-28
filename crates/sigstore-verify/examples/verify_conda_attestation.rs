@@ -24,7 +24,7 @@
 //!     crates/sigstore-verify/test_data/bundles/conda-attestation.sigstore.json
 //! ```
 
-use sigstore_trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
+use sigstore_trust_root::TrustedRoot;
 use sigstore_types::{bundle::SignatureContent, Bundle};
 use sigstore_verify::{verify, VerificationPolicy};
 
@@ -32,7 +32,8 @@ use std::env;
 use std::fs;
 use std::process;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 3 {
@@ -78,12 +79,12 @@ fn main() {
     };
 
     // Load trusted root (production Sigstore infrastructure)
-    // Using embedded data for this example - in production, prefer TrustedRoot::production().await
-    // to fetch the latest trust material via TUF protocol
-    let trusted_root = match TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT) {
+    // Fetching the latest trust material via TUF protocol
+    println!("  Using: production infrastructure (fetching via TUF)");
+    let trusted_root = match TrustedRoot::production().await {
         Ok(root) => root,
         Err(e) => {
-            eprintln!("Error loading trusted root: {}", e);
+            eprintln!("Error fetching production trusted root via TUF: {}", e);
             process::exit(1);
         }
     };

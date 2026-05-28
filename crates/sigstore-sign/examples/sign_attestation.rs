@@ -137,8 +137,28 @@ async fn main() {
     let package_hash = sigstore_crypto::sha256(&package_bytes);
     println!("  SHA256: {}", hex::encode(package_hash.as_bytes()));
 
+    // Get signing config
+    let tuf_config = if staging {
+        println!("  Using: staging infrastructure");
+        sigstore_trust_root::SigningConfig::staging()
+            .await
+            .expect("Failed to fetch staging config via TUF")
+    } else {
+        println!("  Using: production infrastructure");
+        sigstore_trust_root::SigningConfig::production()
+            .await
+            .expect("Failed to fetch production config via TUF")
+    };
+    let config = SigningConfig::from_tuf_config(&tuf_config);
+
+    println!("  Fulcio URL: {}", config.fulcio_url);
+    println!("  Rekor URL: {}", config.rekor_url);
+    if let Some(ref tsa_url) = config.tsa_url {
+        println!("  TSA URL: {}", tsa_url);
+    }
+
     // Get identity token
-    let identity_token = match get_token(token).await {
+    let identity_token = match get_token(token, config.oidc_url.as_deref()).await {
         Ok(t) => t,
         Err(e) => {
             eprintln!("Error obtaining identity token: {}", e);
@@ -148,21 +168,6 @@ async fn main() {
 
     println!("  Identity: {}", identity_token.subject());
     println!("  Issuer: {}", identity_token.issuer());
-
-    // Get signing config
-    let config = if staging {
-        println!("  Using: staging infrastructure");
-        SigningConfig::staging()
-    } else {
-        println!("  Using: production infrastructure");
-        SigningConfig::production()
-    };
-
-    println!("  Fulcio URL: {}", config.fulcio_url);
-    println!("  Rekor URL: {}", config.rekor_url);
-    if let Some(ref tsa_url) = config.tsa_url {
-        println!("  TSA URL: {}", tsa_url);
-    }
 
     // Create attestation using the high-level API
     let predicate = serde_json::json!({
@@ -240,7 +245,10 @@ async fn main() {
     );
 }
 
-async fn get_token(explicit_token: Option<String>) -> Result<IdentityToken, String> {
+async fn get_token(
+    explicit_token: Option<String>,
+    oidc_url: Option<&str>,
+) -> Result<IdentityToken, String> {
     if let Some(token_str) = explicit_token {
         return IdentityToken::from_jwt(&token_str).map_err(|e| format!("Invalid token: {}", e));
     }
@@ -259,7 +267,7 @@ async fn get_token(explicit_token: Option<String>) -> Result<IdentityToken, Stri
     println!("  Starting interactive authentication...");
     println!();
 
-    get_identity_token()
+    get_identity_token(oidc_url)
         .await
         .map_err(|e| format!("OAuth failed: {}", e))
 }
