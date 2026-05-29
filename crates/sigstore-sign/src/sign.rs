@@ -450,6 +450,13 @@ impl Signer {
         envelope: &DsseEnvelope,
         certificate: &DerCertificate,
     ) -> Result<TlogEntryBuilder> {
+        if envelope.signatures.len() != 1 {
+            return Err(Error::Signing(format!(
+                "DSSE envelope must contain exactly one signature, found {}",
+                envelope.signatures.len()
+            )));
+        }
+
         // Create Rekor client
         let rekor = RekorClient::new(&self.rekor_url);
 
@@ -465,11 +472,7 @@ impl Signer {
             RekorApiVersion::V2 => {
                 let hash = sigstore_crypto::sha256(&envelope.pae());
 
-                // Extract the first signature
-                let signature =
-                    envelope.signatures.first().map(|s| &s.sig).ok_or_else(|| {
-                        Error::Signing("DSSE envelope has no signatures".to_string())
-                    })?;
+                let signature = &envelope.signatures[0].sig;
 
                 let hashed_rekord = HashedRekordV2::new(&hash, signature, certificate);
                 let entry = rekor.create_entry_v2(hashed_rekord).await.map_err(|e| {
@@ -603,5 +606,57 @@ mod tests {
         let _context = SigningContext::new();
         let _prod = SigningContext::production();
         let _staging = SigningContext::staging();
+    }
+
+    #[tokio::test]
+    async fn test_create_dsse_rekor_entry_invalid_signature_count() {
+        let context = SigningContext::new();
+        let token = IdentityToken::new("dummy-token".to_string());
+        let signer = context.signer(token);
+
+        let certificate = DerCertificate::new(vec![0x30, 0x00]);
+
+        // 1. Zero signatures
+        let envelope_zero = DsseEnvelope::new(
+            "application/vnd.in-toto+json".to_string(),
+            PayloadBytes::from_bytes(b"payload"),
+            vec![],
+        );
+
+        let res = signer
+            .create_dsse_rekor_entry(&envelope_zero, &certificate)
+            .await;
+        assert!(res.is_err());
+        let err_msg = match res {
+            Err(e) => e.to_string(),
+            _ => unreachable!(),
+        };
+        assert!(err_msg.contains("DSSE envelope must contain exactly one signature, found 0"));
+
+        // 2. Two signatures
+        let envelope_two = DsseEnvelope::new(
+            "application/vnd.in-toto+json".to_string(),
+            PayloadBytes::from_bytes(b"payload"),
+            vec![
+                DsseSignature {
+                    sig: SignatureBytes::from_bytes(b"sig1"),
+                    keyid: KeyId::default(),
+                },
+                DsseSignature {
+                    sig: SignatureBytes::from_bytes(b"sig2"),
+                    keyid: KeyId::default(),
+                },
+            ],
+        );
+
+        let res = signer
+            .create_dsse_rekor_entry(&envelope_two, &certificate)
+            .await;
+        assert!(res.is_err());
+        let err_msg = match res {
+            Err(e) => e.to_string(),
+            _ => unreachable!(),
+        };
+        assert!(err_msg.contains("DSSE envelope must contain exactly one signature, found 2"));
     }
 }
