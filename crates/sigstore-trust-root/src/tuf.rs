@@ -883,4 +883,29 @@ mod tests {
         let bytes = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap();
         assert_eq!(bytes, cached_content);
     }
+
+    /// Network regression: the public Sigstore root must still bootstrap over TUF
+    /// (guards against the `tough` key-ID fix breaking older roots).
+    #[tokio::test]
+    #[ignore = "requires network"]
+    async fn production_trusted_root_loads_via_tuf() {
+        let root = crate::TrustedRoot::from_tuf(TufConfig::production())
+            .await
+            .expect("Sigstore production trusted root must load via TUF");
+        assert!(!root.certificate_authorities.is_empty());
+    }
+
+    /// Network regression for the `tuf-on-ci` key-ID fix: GitHub's TUF root has keys
+    /// with `x-tuf-on-ci-*` fields that `tough` previously rejected. Must bootstrap
+    /// and yield CAs + TSAs and no CT logs (GitHub runs no CT log).
+    #[tokio::test]
+    #[ignore = "requires network"]
+    async fn github_trusted_root_loads_via_tuf() {
+        let root = crate::TrustedRoot::from_tuf(TufConfig::github())
+            .await
+            .expect("GitHub trusted root must load via TUF");
+        assert!(!root.certificate_authorities.is_empty());
+        assert!(!root.timestamp_authorities.is_empty());
+        assert!(root.ctlogs.is_empty());
+    }
 }

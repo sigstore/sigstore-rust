@@ -107,3 +107,8 @@ sigstore-oidc = { path = "crates/sigstore-oidc", version = "0.8.0", default-feat
 sigstore-cache = { path = "crates/sigstore-cache", version = "0.8.0" }
 sigstore-verify = { path = "crates/sigstore-verify", version = "0.8.0", default-features = false }
 sigstore-sign = { path = "crates/sigstore-sign", version = "0.8.0", default-features = false }
+
+# Temporary: use tough fork with the tuf-on-ci key-ID fix until merged upstream.
+# https://github.com/wolfv/tough/tree/fix/keyid-recompute-tuf-on-ci
+[patch.crates-io]
+tough = { git = "https://github.com/wolfv/tough", branch = "fix/keyid-recompute-tuf-on-ci" }
