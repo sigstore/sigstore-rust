@@ -887,7 +887,6 @@ mod tests {
     /// Network regression: the public Sigstore root must still bootstrap over TUF
     /// (guards against the `tough` key-ID fix breaking older roots).
     #[tokio::test]
-    #[ignore = "requires network"]
     async fn production_trusted_root_loads_via_tuf() {
         let root = crate::TrustedRoot::from_tuf(TufConfig::production())
             .await
@@ -899,7 +898,6 @@ mod tests {
     /// with `x-tuf-on-ci-*` fields that `tough` previously rejected. Must bootstrap
     /// and yield CAs + TSAs and no CT logs (GitHub runs no CT log).
     #[tokio::test]
-    #[ignore = "requires network"]
     async fn github_trusted_root_loads_via_tuf() {
         let root = crate::TrustedRoot::from_tuf(TufConfig::github())
             .await
