@@ -46,12 +46,15 @@ public-good Sigstore root. Choose the GitHub instance explicitly for these
 bundles:
 
 ```rust
-use sigstore_trust_root::{SigstoreInstance, TrustedRoot};
+use sigstore_trust_root::{SigstoreInstance, TrustedRoot, TufConfig};
 
-// Preferred API shape once GitHub TUF is compatible with the TUF client.
-// let root = TrustedRoot::from_tuf(sigstore_trust_root::TufConfig::github()).await?;
+// Fetch GitHub's trusted root dynamically over TUF. This works because the
+// `sigstore-tuf` client treats declared key IDs as authoritative (like
+// python-tuf / go-tuf), so it accepts GitHub's `tuf-on-ci` root that `tough`
+// rejects.
+let root = TrustedRoot::from_tuf(TufConfig::github()).await?;
 
-// Temporary explicit fallback while GitHub TUF metadata is not accepted by `tough`.
+// Or use the compile-time embedded copy (no network):
 let root = TrustedRoot::from_embedded(SigstoreInstance::GitHub)?;
 ```
 
