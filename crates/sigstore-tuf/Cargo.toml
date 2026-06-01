@@ -1,0 +1,54 @@
+[package]
+name = "sigstore-tuf"
+description = "A pure-Rust implementation of The Update Framework (TUF), aligned with Sigstore and interoperable with tuf-on-ci / securesystemslib repositories (e.g. GitHub's)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["fetch", "rustls"]
+# Network transport (async HTTP) for fetching remote TUF metadata and targets.
+fetch = ["tokio", "reqwest", "url"]
+# TLS backend selection (matches the rest of the workspace's crates).
+rustls = ["fetch", "reqwest/rustls"]
+native-tls = ["fetch", "reqwest/native-tls"]
+
+[dependencies]
+# Internal dependencies
+sigstore-types = { workspace = true }
+sigstore-crypto = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Hashing (target/metadata integrity checks)
+sha2 = { workspace = true }
+
+# Encoding
+hex = { workspace = true }
+
+# Time / expiration handling
+jiff = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Network transport (optional). The TLS backend is selected via this crate's
+# `rustls` / `native-tls` features, matching the rest of the workspace.
+tokio = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+sigstore-crypto = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+jiff = { workspace = true }

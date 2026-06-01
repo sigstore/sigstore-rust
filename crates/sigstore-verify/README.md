@@ -60,10 +60,9 @@ use sigstore_types::{Bundle, Sha256Hash};
 let bundle: Bundle = serde_json::from_str(bundle_json)?;
 let artifact_digest = Sha256Hash::from_hex("...")?;
 
-// Preferred API shape once GitHub TUF is compatible with the TUF client:
+// Fetch GitHub's trusted root over TUF (now supported via the `sigstore-tuf`
+// client), or use the embedded copy below for an offline path.
 // let root = TrustedRoot::from_tuf(sigstore_trust_root::TufConfig::github()).await?;
-
-// Temporary explicit fallback while GitHub TUF metadata is not accepted by `tough`.
 let root = TrustedRoot::from_embedded(SigstoreInstance::GitHub)?;
 let policy = VerificationPolicy::default().skip_tlog().skip_sct();
 
