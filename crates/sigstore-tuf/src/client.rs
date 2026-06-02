@@ -300,10 +300,12 @@ impl Updater {
             }
             steps += 1;
 
-            // Ensure the role is loaded & verified (top-level already is). A
-            // delegated role that the snapshot does not pin is not trusted: skip
-            // it without fetching, rather than failing the whole search.
-            if role != "targets" {
+            // Load & verify the role if we don't already trust it (the top-level
+            // targets is always loaded by refresh). Already-trusted roles are
+            // not re-fetched, so repeated resolutions don't re-download metadata.
+            // A delegated role the snapshot does not pin is not trusted: skip it
+            // without fetching, rather than failing the whole search.
+            if role != "targets" && self.trusted.targets_role(&role).is_none() {
                 let pinned = self
                     .trusted
                     .snapshot()
