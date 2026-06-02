@@ -43,6 +43,16 @@ pub enum Error {
     #[error("unknown role: {0}")]
     UnknownRole(String),
 
+    /// A role's signatures referenced the same key ID more than once. Per the
+    /// TUF spec this is invalid regardless of threshold (matching python-tuf).
+    #[error("duplicate signature key id {key_id} for role {role}")]
+    DuplicateSignature {
+        /// The role being verified.
+        role: String,
+        /// The key ID that appeared more than once.
+        key_id: String,
+    },
+
     /// Fewer valid signatures than the role's threshold were found.
     #[error("signature threshold not met for role {role}: {found}/{threshold} valid signatures")]
     ThresholdNotMet {

@@ -1,15 +1,29 @@
-# Expected failures for the tuf-conformance suite, one test name per line.
-#
-# The suite marks these as xfail(strict=True): a listed test that *passes*
-# will FAIL the run, so keep this list tight and accurate. Lines that don't
+# Expected failures for the tuf-conformance suite, one test name per line
+# (the bare `test_...` name xfails every parametrization). Lines that don't
 # match a test name (like these comments) are ignored.
 #
-# This list is curated from the conformance job's uploaded JSON report
-# (`tuf-conformance-results`). Until it reflects a real run, the conformance
-# job in `.github/workflows/tuf-conformance.yml` is non-blocking
-# (`continue-on-error: true`); flip that to enforcing once this list is
-# accurate.
+# The suite marks these xfail(strict=True): a listed test that *passes* fails
+# the run. While the conformance job is non-blocking (continue-on-error in
+# .github/workflows/tuf-conformance.yml) this list is advisory; once it matches
+# a real run with the current code, drop continue-on-error to make it enforcing.
 #
-# Known gaps in sigstore-tuf that likely need entries here until implemented:
-#   * succinct (hash-bin) delegations
-#   * multi-root-keys / unusual key-type handling beyond ecdsa/ed25519/rsa
+# As of the first run (94 passed / 14 failed) we fixed: consistent-snapshot
+# target paths for targets in sub-directories, sha512 target hashes, and
+# duplicate-signature-keyid rejection. The entries below are the remaining
+# known gaps:
+
+# Per-target download caching (find-cached-target) is not implemented; we
+# re-download every time.
+test_artifact_cache
+
+# Delegated role names with characters that require URL-quoting in the metadata
+# file name (e.g. "?", "#", "/", "..") are not yet percent-encoded on fetch.
+test_unusual_role_name
+
+# Snapshot role-set consistency edge cases (a delegated role removed from / not
+# present in snapshot) are not yet enforced.
+test_targets_role_removal
+test_delegation_not_in_snapshot
+
+# Re-fetch behavior when timestamp content changes but the version does not.
+test_timestamp_content_changes

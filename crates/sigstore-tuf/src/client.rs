@@ -328,15 +328,18 @@ impl Updater {
         }
 
         let consistent = self.trusted.root().consistent_snapshot;
-        // With consistent snapshots, target files are stored as
-        // `<sha256-hex>.<targetname>`.
+        // With consistent snapshots the hash prefixes the *file name* only, not
+        // the whole path: `dir/sub/<hash>.name`, never `<hash>.dir/sub/name`.
         let relative = if consistent {
-            let sha256 = target.hashes.get("sha256").ok_or_else(|| {
+            let (_, hash) = preferred_hash(&target.hashes).ok_or_else(|| {
                 Error::IntegrityMismatch(format!(
-                    "{target_path}: no sha256 hash to locate consistent target"
+                    "{target_path}: no hash to locate consistent target"
                 ))
             })?;
-            format!("{sha256}.{target_path}")
+            match target_path.rsplit_once('/') {
+                Some((dir, name)) => format!("{dir}/{hash}.{name}"),
+                None => format!("{hash}.{target_path}"),
+            }
         } else {
             target_path.to_string()
         };
@@ -355,9 +358,24 @@ impl Updater {
     }
 }
 
+/// Pick the hash to use for a target, preferring `sha256`, then `sha512`, then
+/// whatever is listed. Returns `(algorithm, hex-digest)`.
+fn preferred_hash(hashes: &std::collections::BTreeMap<String, String>) -> Option<(&str, &str)> {
+    for algo in ["sha256", "sha512"] {
+        if let Some(hex) = hashes.get(algo) {
+            return Some((algo, hex.as_str()));
+        }
+    }
+    hashes.iter().next().map(|(a, h)| (a.as_str(), h.as_str()))
+}
+
 /// Verify downloaded target bytes against the pinned length and hashes.
+///
+/// The length must match, and every hash whose algorithm we support (`sha256`,
+/// `sha512`) must match; at least one supported hash must be present so a target
+/// is never accepted without an integrity check.
 fn verify_target_bytes(bytes: &[u8], target: &TargetFile, path: &str) -> Result<()> {
-    use sha2::{Digest, Sha256};
+    use sha2::{Digest, Sha256, Sha512};
     if bytes.len() as u64 != target.length {
         return Err(Error::IntegrityMismatch(format!(
             "{path}: length {} != pinned {}",
@@ -365,13 +383,25 @@ fn verify_target_bytes(bytes: &[u8], target: &TargetFile, path: &str) -> Result<
             target.length
         )));
     }
-    let expected = target
-        .hashes
-        .get("sha256")
-        .ok_or_else(|| Error::IntegrityMismatch(format!("{path}: no sha256 hash pinned")))?;
-    let actual = hex::encode(Sha256::digest(bytes));
-    if !actual.eq_ignore_ascii_case(expected) {
-        return Err(Error::IntegrityMismatch(format!("{path}: sha256 mismatch")));
+
+    let mut verified_any = false;
+    for (algo, expected) in &target.hashes {
+        let actual = match algo.as_str() {
+            "sha256" => hex::encode(Sha256::digest(bytes)),
+            "sha512" => hex::encode(Sha512::digest(bytes)),
+            _ => continue,
+        };
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(Error::IntegrityMismatch(format!("{path}: {algo} mismatch")));
+        }
+        verified_any = true;
+    }
+
+    if !verified_any {
+        return Err(Error::IntegrityMismatch(format!(
+            "{path}: no supported hash to verify ({:?})",
+            target.hashes.keys().collect::<Vec<_>>()
+        )));
     }
     Ok(())
 }

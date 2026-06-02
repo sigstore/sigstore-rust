@@ -143,19 +143,25 @@ impl<T: Role> Metadata<T> {
     ) -> Result<()> {
         let authorized: BTreeSet<&String> = role_keys.keyids.iter().collect();
         let mut good: BTreeSet<&str> = BTreeSet::new();
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
 
         for sig in &self.signatures {
             // The signature must be attributed to a key authorized for the role.
             if !authorized.contains(&sig.keyid) {
                 continue;
             }
-            // A placeholder (empty) signature is not a real signature.
+            // A placeholder (empty) signature is not a real signature; tuf-on-ci
+            // roots carry these for authorized-but-not-yet-signed keys.
             if sig.sig.is_empty() {
                 continue;
             }
-            // Count each key at most once toward the threshold.
-            if good.contains(sig.keyid.as_str()) {
-                continue;
+            // The same key must not sign a role twice (spec-invalid; python-tuf
+            // rejects it outright rather than silently de-duplicating).
+            if !seen.insert(sig.keyid.as_str()) {
+                return Err(Error::DuplicateSignature {
+                    role: role_name.to_string(),
+                    key_id: sig.keyid.clone(),
+                });
             }
             let Some(key) = keys.get(&sig.keyid) else {
                 continue;
