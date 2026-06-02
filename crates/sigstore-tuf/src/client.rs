@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 
 use crate::cache::MetadataStore;
 use crate::error::{Error, Result};
-use crate::metadata::TargetFile;
+use crate::metadata::{Role, TargetFile};
 use crate::transport::{Repository, UpdaterConfig};
 use crate::trusted::TrustedMetadataSet;
 
@@ -168,8 +168,15 @@ impl Updater {
             .fetch_metadata("timestamp.json", self.config.timestamp_max_length)
             .await?
             .ok_or_else(|| Error::Transport("timestamp.json not found".to_string()))?;
-        self.trusted.update_timestamp(&bytes, now)?;
-        self.cache_put("timestamp.json", &bytes);
+        match self.trusted.update_timestamp(&bytes, now) {
+            Ok(()) => self.cache_put("timestamp.json", &bytes),
+            // Same version as what we already trust: keep it, don't re-fetch the
+            // rest. This is the normal "nothing changed" case, not an error.
+            Err(Error::EqualVersion { .. }) => {
+                tracing::debug!("timestamp unchanged; keeping trusted copy")
+            }
+            Err(e) => return Err(e),
+        }
         Ok(())
     }
 
@@ -181,6 +188,17 @@ impl Updater {
             .and_then(|t| t.snapshot_meta())
             .map(|m| m.version)
             .ok_or_else(|| Error::Malformed("timestamp does not pin snapshot".to_string()))?;
+
+        // If we already trust the snapshot the timestamp pins (e.g. seeded from
+        // cache and the timestamp didn't change), reuse it instead of
+        // downloading — matching python-tuf's "use valid local metadata" rule.
+        if let Some(snap) = self.trusted.snapshot() {
+            if snap.version == version && !snap.is_expired(now)? {
+                tracing::debug!(version, "snapshot unchanged; using trusted copy");
+                return Ok(());
+            }
+        }
+
         let name = if consistent {
             format!("{version}.snapshot.json")
         } else {
@@ -198,6 +216,20 @@ impl Updater {
     }
 
     async fn refresh_targets(&mut self, now: jiff::Timestamp) -> Result<()> {
+        // Reuse a valid local top-level targets if the snapshot still pins its
+        // version (same rationale as snapshot reuse above).
+        let pinned = self
+            .trusted
+            .snapshot()
+            .and_then(|s| s.meta.get("targets.json"))
+            .map(|m| m.version);
+        if let (Some(tgt), Some(pv)) = (self.trusted.targets_role("targets"), pinned) {
+            if tgt.version == pv && !tgt.is_expired(now)? {
+                tracing::debug!(version = pv, "targets unchanged; using trusted copy");
+                return Ok(());
+            }
+        }
+
         let bytes = self.fetch_targets_metadata("targets").await?;
         self.trusted.update_targets(&bytes, now)?;
         self.cache_put("targets.json", &bytes);
@@ -206,19 +238,24 @@ impl Updater {
 
     /// Fetch the (version-prefixed, when consistent) metadata file for a targets
     /// role, using its snapshot pin to choose the file name.
+    ///
+    /// The snapshot pin is keyed by the raw role name (`<role>.json`), but the
+    /// fetched file name percent-encodes the role so unusual names (`?`, `/`, …)
+    /// are safe in URLs and paths — matching `python-tuf`'s `quote(role, "")`.
     async fn fetch_targets_metadata(&self, role_name: &str) -> Result<Vec<u8>> {
         let consistent = self.trusted.root().consistent_snapshot;
-        let meta_name = format!("{role_name}.json");
+        let pin_key = format!("{role_name}.json");
         let version = self
             .trusted
             .snapshot()
-            .and_then(|s| s.meta.get(&meta_name))
+            .and_then(|s| s.meta.get(&pin_key))
             .map(|m| m.version)
-            .ok_or_else(|| Error::Malformed(format!("snapshot does not pin {meta_name}")))?;
+            .ok_or_else(|| Error::Malformed(format!("snapshot does not pin {pin_key}")))?;
+        let encoded = encode_role(role_name);
         let name = if consistent {
-            format!("{version}.{role_name}.json")
+            format!("{version}.{encoded}.json")
         } else {
-            meta_name
+            format!("{encoded}.json")
         };
         self.repo
             .fetch_metadata(&name, self.config.targets_max_length)
@@ -263,12 +300,23 @@ impl Updater {
             }
             steps += 1;
 
-            // Ensure the role is loaded & verified (top-level already is).
+            // Ensure the role is loaded & verified (top-level already is). A
+            // delegated role that the snapshot does not pin is not trusted: skip
+            // it without fetching, rather than failing the whole search.
             if role != "targets" {
+                let pinned = self
+                    .trusted
+                    .snapshot()
+                    .map(|s| s.meta.contains_key(&format!("{role}.json")))
+                    .unwrap_or(false);
+                if !pinned {
+                    tracing::debug!(%role, "delegated role not in snapshot; skipping");
+                    continue;
+                }
                 let bytes = self.fetch_targets_metadata(&role).await?;
                 self.trusted
                     .update_delegated_targets(&bytes, &role, &delegator, now)?;
-                self.cache_put(&format!("{role}.json"), &bytes);
+                self.cache_put(&format!("{}.json", encode_role(&role)), &bytes);
             }
             visited.insert(role.clone());
 
@@ -356,6 +404,24 @@ impl Updater {
         }
         Ok(bytes)
     }
+}
+
+/// Percent-encode a delegated role name for use in a metadata file name / URL
+/// path, matching `python-tuf`'s `urllib.parse.quote(role, safe="")`: every byte
+/// outside the RFC 3986 unreserved set (`A-Z a-z 0-9 - _ . ~`) is `%`-escaped,
+/// including `/`. Ordinary role names (`targets`, `role1`) pass through
+/// unchanged.
+fn encode_role(role: &str) -> String {
+    let mut out = String::with_capacity(role.len());
+    for &b in role.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 /// Pick the hash to use for a target, preferring `sha256`, then `sha512`, then
