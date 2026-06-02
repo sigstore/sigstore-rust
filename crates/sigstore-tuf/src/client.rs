@@ -202,7 +202,11 @@ impl Updater {
     /// Implements TUF's pre-order, depth-first delegation search with
     /// `terminating` handling and a configurable depth bound
     /// ([`UpdaterConfig::max_delegations`]).
-    pub async fn get_targetinfo(&mut self, target_path: &str, now: jiff::Timestamp) -> Result<Option<TargetFile>> {
+    pub async fn get_targetinfo(
+        &mut self,
+        target_path: &str,
+        now: jiff::Timestamp,
+    ) -> Result<Option<TargetFile>> {
         if self.trusted.targets_role("targets").is_none() {
             return Err(Error::Malformed(
                 "refresh() must be called before resolving targets".to_string(),
@@ -237,10 +241,7 @@ impl Updater {
             }
             visited.insert(role.clone());
 
-            let targets = self
-                .trusted
-                .targets_role(&role)
-                .expect("role just loaded");
+            let targets = self.trusted.targets_role(&role).expect("role just loaded");
 
             if let Some(found) = targets.target(target_path) {
                 return Ok(Some(found.clone()));

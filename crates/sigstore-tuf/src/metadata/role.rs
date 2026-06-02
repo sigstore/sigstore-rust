@@ -189,7 +189,9 @@ mod tests {
             "path_hash_prefixes": [prefix],
         }));
         assert!(r.matches_path(target).unwrap());
-        assert!(!r.matches_path("a/totally/different/path/that/wont/collide").unwrap());
+        assert!(!r
+            .matches_path("a/totally/different/path/that/wont/collide")
+            .unwrap());
     }
 
     #[test]

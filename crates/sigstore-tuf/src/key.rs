@@ -73,7 +73,10 @@ impl Key {
         // the field set is exactly what securesystemslib hashes.
         let keyval = {
             let mut m = serde_json::Map::new();
-            m.insert("public".to_string(), Value::String(self.keyval.public.clone()));
+            m.insert(
+                "public".to_string(),
+                Value::String(self.keyval.public.clone()),
+            );
             Value::Object(m)
         };
         let mut obj = serde_json::Map::new();

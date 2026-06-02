@@ -360,11 +360,9 @@ impl TufClient {
     /// written through to the per-URL cache directory so a later `offline()`
     /// run can serve them.
     async fn build_updater(&self) -> Result<Updater> {
-        let repo =
-            HttpRepository::new(&self.config.url).map_err(|e| Error::Tuf(e.to_string()))?;
+        let repo = HttpRepository::new(&self.config.url).map_err(|e| Error::Tuf(e.to_string()))?;
         let root_bytes = self.config.get_root_json()?;
-        let mut updater =
-            Updater::new(repo, root_bytes).map_err(|e| Error::Tuf(e.to_string()))?;
+        let mut updater = Updater::new(repo, root_bytes).map_err(|e| Error::Tuf(e.to_string()))?;
 
         if !self.config.disable_cache {
             let cache_dir = self.get_cache_dir()?;

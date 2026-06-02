@@ -10,8 +10,7 @@ use sigstore_tuf::{Metadata, Root, TrustedMetadataSet};
 
 const GITHUB_ROOT: &[u8] =
     include_bytes!("../../sigstore-trust-root/repository/tuf_github_root.json");
-const PRODUCTION_ROOT: &[u8] =
-    include_bytes!("../../sigstore-trust-root/repository/tuf_root.json");
+const PRODUCTION_ROOT: &[u8] = include_bytes!("../../sigstore-trust-root/repository/tuf_root.json");
 const STAGING_ROOT: &[u8] =
     include_bytes!("../../sigstore-trust-root/repository/tuf_staging_root.json");
 
