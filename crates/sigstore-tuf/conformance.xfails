@@ -1,29 +1,3 @@
-# Expected failures for the tuf-conformance suite, one test name per line
-# (the bare `test_...` name xfails every parametrization). Lines that don't
-# match a test name (like these comments) are ignored.
-#
-# The suite marks these xfail(strict=True): a listed test that *passes* fails
-# the run. While the conformance job is non-blocking (continue-on-error in
-# .github/workflows/tuf-conformance.yml) this list is advisory; once it matches
-# a real run with the current code, drop continue-on-error to make it enforcing.
-#
-# As of the first run (94 passed / 14 failed) we fixed: consistent-snapshot
-# target paths for targets in sub-directories, sha512 target hashes, and
-# duplicate-signature-keyid rejection. The entries below are the remaining
-# known gaps:
-
-# Per-target download caching (find-cached-target) is not implemented; we
-# re-download every time.
-test_artifact_cache
-
-# Delegated role names with characters that require URL-quoting in the metadata
-# file name (e.g. "?", "#", "/", "..") are not yet percent-encoded on fetch.
-test_unusual_role_name
-
-# Snapshot role-set consistency edge cases (a delegated role removed from / not
-# present in snapshot) are not yet enforced.
-test_targets_role_removal
-test_delegation_not_in_snapshot
-
-# Re-fetch behavior when timestamp content changes but the version does not.
-test_timestamp_content_changes
+# tuf-conformance expected failures: one test name per line (a bare `test_...`
+# name covers every parametrization). Comment lines are ignored. xfail is
+# strict, so a listed test that passes fails the run. Currently none.

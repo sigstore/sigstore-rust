@@ -75,6 +75,17 @@ pub enum Error {
         new: u64,
     },
 
+    /// A candidate's version equals the trusted version, so it carries no
+    /// update. Not a fault — callers discard the candidate and keep what they
+    /// have (used for the timestamp role per the TUF workflow).
+    #[error("{role} version {version} equals the trusted version; no update")]
+    EqualVersion {
+        /// The role being updated.
+        role: String,
+        /// The (equal) version.
+        version: u64,
+    },
+
     /// A new root's version was not exactly one greater than the trusted root.
     #[error("root version must increment by one: trusted {trusted}, got {new}")]
     BadRootVersion {

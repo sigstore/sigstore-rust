@@ -115,6 +115,11 @@ impl TrustedMetadataSet {
     /// Verifies the `timestamp`-role signature threshold, rejects rollback of
     /// both the timestamp version and the snapshot version it pins, and checks
     /// expiry.
+    ///
+    /// Returns [`Error::EqualVersion`] (a non-fault signal) when the candidate's
+    /// version equals the trusted one: per the TUF workflow the client keeps the
+    /// timestamp it already has and the candidate is discarded. The trusted state
+    /// is left unchanged in that case.
     pub fn update_timestamp(&mut self, bytes: &[u8], now: jiff::Timestamp) -> Result<()> {
         let new = Metadata::<Timestamp>::from_slice(bytes)?;
         verify_with_root(&new, &self.root.signed, "timestamp")?;
@@ -125,6 +130,12 @@ impl TrustedMetadataSet {
                     role: "timestamp".to_string(),
                     trusted: current.signed.version,
                     new: new.signed.version,
+                });
+            }
+            if new.signed.version == current.signed.version {
+                return Err(Error::EqualVersion {
+                    role: "timestamp".to_string(),
+                    version: new.signed.version,
                 });
             }
             // The pinned snapshot version must not move backwards either.
@@ -174,17 +185,26 @@ impl TrustedMetadataSet {
             )));
         }
 
-        // No targets metadata may be rolled back relative to the trusted snapshot.
+        // Relative to the trusted snapshot, no targets metadata may be removed
+        // or rolled back (TUF spec 5.5.4). Removal is only legitimate as part of
+        // a targets-recovery key rotation, which rotates the snapshot key and so
+        // arrives via a new root that clears the trusted snapshot first.
         if let Some(current) = &self.snapshot {
             for (name, cur_meta) in &current.signed.meta {
-                if let Some(new_meta) = new.signed.meta.get(name) {
-                    if new_meta.version < cur_meta.version {
+                match new.signed.meta.get(name) {
+                    None => {
+                        return Err(Error::IntegrityMismatch(format!(
+                            "snapshot removes {name}, which the trusted snapshot pins"
+                        )));
+                    }
+                    Some(new_meta) if new_meta.version < cur_meta.version => {
                         return Err(Error::Rollback {
                             role: format!("{name} (via snapshot)"),
                             trusted: cur_meta.version,
                             new: new_meta.version,
                         });
                     }
+                    Some(_) => {}
                 }
             }
         }
