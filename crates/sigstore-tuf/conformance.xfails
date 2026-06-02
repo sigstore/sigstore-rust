@@ -1,0 +1,15 @@
+# Expected failures for the tuf-conformance suite, one test name per line.
+#
+# The suite marks these as xfail(strict=True): a listed test that *passes*
+# will FAIL the run, so keep this list tight and accurate. Lines that don't
+# match a test name (like these comments) are ignored.
+#
+# This list is curated from the conformance job's uploaded JSON report
+# (`tuf-conformance-results`). Until it reflects a real run, the conformance
+# job in `.github/workflows/tuf-conformance.yml` is non-blocking
+# (`continue-on-error: true`); flip that to enforcing once this list is
+# accurate.
+#
+# Known gaps in sigstore-tuf that likely need entries here until implemented:
+#   * succinct (hash-bin) delegations
+#   * multi-root-keys / unusual key-type handling beyond ecdsa/ed25519/rsa

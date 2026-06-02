@@ -92,10 +92,41 @@ impl Updater {
     pub async fn refresh(&mut self, now: jiff::Timestamp) -> Result<()> {
         self.refresh_root().await?;
         self.trusted.check_root_expired(now)?;
+        self.seed_lower_from_store(now);
         self.refresh_timestamp(now).await?;
         self.refresh_snapshot(now).await?;
         self.refresh_targets(now).await?;
         Ok(())
+    }
+
+    /// Seed the trusted timestamp/snapshot/targets from previously persisted
+    /// metadata in the store, so anti-rollback protection spans process runs:
+    /// a fresh `Updater` started against a populated cache treats the cached
+    /// versions as the floor that the network must meet or exceed.
+    ///
+    /// Best-effort — a cached file that is missing, stale, expired, or no longer
+    /// consistent with the trusted root is simply skipped; the subsequent
+    /// network refresh will replace it. (This mirrors how `python-tuf`'s
+    /// `ngclient` loads its local trusted metadata at startup.)
+    fn seed_lower_from_store(&mut self, now: jiff::Timestamp) {
+        let Some((ts, snap, tgt)) = self.store.as_ref().map(|s| {
+            (
+                s.load("timestamp.json"),
+                s.load("snapshot.json"),
+                s.load("targets.json"),
+            )
+        }) else {
+            return;
+        };
+        if let Some(bytes) = ts {
+            let _ = self.trusted.update_timestamp(&bytes, now);
+        }
+        if let Some(bytes) = snap {
+            let _ = self.trusted.update_snapshot(&bytes, now);
+        }
+        if let Some(bytes) = tgt {
+            let _ = self.trusted.update_targets(&bytes, now);
+        }
     }
 
     fn cache_put(&self, name: &str, bytes: &[u8]) {

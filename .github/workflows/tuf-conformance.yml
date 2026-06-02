@@ -1,0 +1,46 @@
+name: TUF Conformance
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions: {}
+
+jobs:
+  conformance:
+    name: TUF client conformance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: 1.89.0
+
+      - name: Build the conformance client adapter
+        run: cargo build --release -p sigstore-tuf --example conformance_client
+
+      # The suite reads expected failures from "<entrypoint>.xfails"; place the
+      # curated list next to the built binary.
+      - name: Stage xfails next to the entrypoint
+        run: cp crates/sigstore-tuf/conformance.xfails target/release/examples/conformance_client.xfails
+
+      # Runs the official theupdateframework/tuf-conformance suite (python-tuf /
+      # go-tuf use the same harness) against our client. Non-blocking for now:
+      # the uploaded "tuf-conformance-results" report is used to curate
+      # conformance.xfails; once that list is accurate, drop continue-on-error.
+      - name: Run TUF conformance suite
+        continue-on-error: true
+        uses: theupdateframework/tuf-conformance@500c525c9ce287a472fd334fe8d885cace667d32 # v2.4.0
+        with:
+          entrypoint: target/release/examples/conformance_client
