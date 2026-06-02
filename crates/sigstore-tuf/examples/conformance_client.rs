@@ -146,15 +146,46 @@ async fn cmd_download(args: &Args) -> Result<()> {
     let mut updater = build_updater(args)?;
     let now = jiff::Timestamp::now();
     updater.refresh(now).await?;
-    let bytes = updater.download_target(target_name, now).await?;
 
+    // Resolve the target (walking delegations) so we can check the cache before
+    // fetching the artifact itself.
+    let info = updater
+        .get_targetinfo(target_name, now)
+        .await?
+        .ok_or_else(|| Error::Malformed(format!("unknown target {target_name:?}")))?;
     let out = target_dir.join(safe_target_filename(target_name));
+
+    // Artifact cache: if we already have a byte-identical copy, don't download
+    // it again (tuf-conformance's test_artifact_cache checks this).
+    if let Ok(existing) = std::fs::read(&out) {
+        if target_bytes_match(&existing, &info) {
+            return Ok(());
+        }
+    }
+
+    let bytes = updater.download_target(target_name, now).await?;
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| Error::Transport(format!("creating target dir: {e}")))?;
     }
     std::fs::write(&out, &bytes).map_err(|e| Error::Transport(format!("writing target: {e}")))?;
     Ok(())
+}
+
+/// Whether `bytes` already satisfies a target's pinned length and hash.
+fn target_bytes_match(bytes: &[u8], info: &sigstore_tuf::TargetFile) -> bool {
+    use sha2::{Digest, Sha256, Sha512};
+    if bytes.len() as u64 != info.length {
+        return false;
+    }
+    info.hashes.iter().any(|(algo, expected)| {
+        let actual = match algo.as_str() {
+            "sha256" => hex::encode(Sha256::digest(bytes)),
+            "sha512" => hex::encode(Sha512::digest(bytes)),
+            _ => return false,
+        };
+        actual.eq_ignore_ascii_case(expected)
+    })
 }
 
 /// Map a TUF target path to a safe relative path under the target dir.
