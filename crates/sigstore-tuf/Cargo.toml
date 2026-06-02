@@ -30,6 +30,9 @@ serde_json = { workspace = true }
 # Hashing (target/metadata integrity checks)
 sha2 = { workspace = true }
 
+# Glob matching for delegation path patterns
+globset = { workspace = true }
+
 # Encoding
 hex = { workspace = true }
 

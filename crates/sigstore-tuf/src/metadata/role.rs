@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::glob::glob_match;
+use crate::error::{Error, Result};
 use crate::key::Key;
 use crate::metadata::Role;
 
@@ -107,15 +107,102 @@ impl DelegatedRole {
     /// A role authorizes a path if it matches one of its `path_hash_prefixes`
     /// (the SHA-256 hex of the target path begins with the prefix) or one of its
     /// shell-style `paths` globs. A role with neither field authorizes nothing.
-    pub fn matches_path(&self, target_path: &str) -> bool {
+    ///
+    /// Glob matching uses [`globset`] with its default options, which match
+    /// `python-tuf`'s `fnmatch` semantics (a `*` *does* span `/`) — the same
+    /// crate and configuration `tough` uses. A `paths` entry that is not a valid
+    /// glob is a hard error rather than a silent non-match, so a repository we
+    /// cannot correctly evaluate is rejected instead of having a delegation
+    /// quietly ignored.
+    ///
+    /// [`globset`]: https://docs.rs/globset
+    pub fn matches_path(&self, target_path: &str) -> Result<bool> {
         if let Some(prefixes) = &self.path_hash_prefixes {
             let hash = hex::encode(sigstore_crypto::sha256(target_path.as_bytes()).as_bytes());
-            return prefixes.iter().any(|p| hash.starts_with(p.as_str()));
+            return Ok(prefixes.iter().any(|p| hash.starts_with(p.as_str())));
         }
         if let Some(paths) = &self.paths {
-            return paths.iter().any(|pat| glob_match(pat, target_path));
+            for pattern in paths {
+                let glob = globset::Glob::new(pattern).map_err(|e| {
+                    Error::Malformed(format!(
+                        "role {:?} has invalid delegation path pattern {pattern:?}: {e}",
+                        self.name
+                    ))
+                })?;
+                if glob.compile_matcher().is_match(target_path) {
+                    return Ok(true);
+                }
+            }
         }
-        false
+        Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn role(value: serde_json::Value) -> DelegatedRole {
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn with_paths(paths: serde_json::Value) -> DelegatedRole {
+        role(serde_json::json!({
+            "name": "d", "keyids": [], "threshold": 1, "paths": paths
+        }))
+    }
+
+    #[test]
+    fn glob_matches_like_python_tuf_fnmatch() {
+        // `*` spans `/` (python-tuf fnmatch / default globset semantics).
+        assert!(with_paths(serde_json::json!(["*.json"]))
+            .matches_path("trusted_root.json")
+            .unwrap());
+        assert!(with_paths(serde_json::json!(["*.json"]))
+            .matches_path("nested/dir/trusted_root.json")
+            .unwrap());
+        assert!(with_paths(serde_json::json!(["registry/*"]))
+            .matches_path("registry/a/b/index.json")
+            .unwrap());
+        assert!(!with_paths(serde_json::json!(["*.json"]))
+            .matches_path("trusted_root.txt")
+            .unwrap());
+    }
+
+    #[test]
+    fn supports_character_classes_and_single_char() {
+        let r = with_paths(serde_json::json!(["foo-[0-9].tgz"]));
+        assert!(r.matches_path("foo-2.tgz").unwrap());
+        assert!(!r.matches_path("foo-a.tgz").unwrap());
+        let q = with_paths(serde_json::json!(["foo-?.tgz"]));
+        assert!(q.matches_path("foo-x.tgz").unwrap());
+        assert!(!q.matches_path("foo-xy.tgz").unwrap());
+    }
+
+    #[test]
+    fn path_hash_prefixes_match_on_sha256_of_path() {
+        let target = "some/target/path";
+        let hash = hex::encode(sigstore_crypto::sha256(target.as_bytes()).as_bytes());
+        let prefix = &hash[..4];
+        let r = role(serde_json::json!({
+            "name": "bin", "keyids": [], "threshold": 1,
+            "path_hash_prefixes": [prefix],
+        }));
+        assert!(r.matches_path(target).unwrap());
+        assert!(!r.matches_path("a/totally/different/path/that/wont/collide").unwrap());
+    }
+
+    #[test]
+    fn invalid_pattern_is_a_hard_error() {
+        // An unparseable glob must fail closed, not silently fail to match.
+        let r = with_paths(serde_json::json!(["a[b"]));
+        assert!(r.matches_path("anything").is_err());
+    }
+
+    #[test]
+    fn no_paths_and_no_prefixes_authorizes_nothing() {
+        let r = role(serde_json::json!({ "name": "d", "keyids": [], "threshold": 1 }));
+        assert!(!r.matches_path("anything").unwrap());
     }
 }
 
