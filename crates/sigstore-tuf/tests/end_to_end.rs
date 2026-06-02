@@ -199,7 +199,10 @@ async fn full_refresh_resolves_delegated_target_and_caches() {
     let mut updater = Updater::new(repo, &root_bytes)
         .unwrap()
         .with_store(Arc::clone(&store));
-    updater.refresh(now()).await.expect("refresh should succeed");
+    updater
+        .refresh(now())
+        .await
+        .expect("refresh should succeed");
 
     // The target lives only in the delegated role, so the top-level lookup
     // misses but the delegation walk finds it.
