@@ -17,9 +17,7 @@ use sha2::{Digest, Sha256, Sha512};
 
 use crate::error::{Error, Result};
 use crate::key::Key;
-use crate::metadata::{
-    MetaFile, Metadata, Role, RoleKeys, Root, Snapshot, Targets, Timestamp,
-};
+use crate::metadata::{MetaFile, Metadata, Role, RoleKeys, Root, Snapshot, Targets, Timestamp};
 
 /// The set of currently-trusted TUF metadata.
 #[derive(Debug, Clone)]
@@ -276,9 +274,10 @@ impl TrustedMetadataSet {
             .targets
             .get(delegator_name)
             .ok_or_else(|| Error::UnknownRole(delegator_name.to_string()))?;
-        let delegations = delegator.signed.delegations.as_ref().ok_or_else(|| {
-            Error::Malformed(format!("role {delegator_name} delegates nothing"))
-        })?;
+        let delegations =
+            delegator.signed.delegations.as_ref().ok_or_else(|| {
+                Error::Malformed(format!("role {delegator_name} delegates nothing"))
+            })?;
         let role = delegations
             .roles
             .iter()
@@ -297,11 +296,7 @@ impl TrustedMetadataSet {
 }
 
 /// Verify `metadata` against a named role defined in `root`.
-fn verify_with_root<T: Role>(
-    metadata: &Metadata<T>,
-    root: &Root,
-    role_name: &str,
-) -> Result<()> {
+fn verify_with_root<T: Role>(metadata: &Metadata<T>, root: &Root, role_name: &str) -> Result<()> {
     let role_keys = root
         .role(role_name)
         .ok_or_else(|| Error::UnknownRole(role_name.to_string()))?;
@@ -357,9 +352,7 @@ fn check_integrity(bytes: &[u8], meta: &MetaFile, what: &str) -> Result<()> {
             _ => continue, // unsupported algorithm; skip
         };
         if !actual.eq_ignore_ascii_case(expected_hex) {
-            return Err(Error::IntegrityMismatch(format!(
-                "{what}: {algo} mismatch"
-            )));
+            return Err(Error::IntegrityMismatch(format!("{what}: {algo} mismatch")));
         }
         verified_any = true;
     }
