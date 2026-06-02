@@ -81,8 +81,6 @@ pub mod metadata;
 pub mod transport;
 pub mod trusted;
 
-mod glob;
-
 pub use error::{Error, Result};
 pub use key::{Key, KeyVal};
 pub use metadata::{

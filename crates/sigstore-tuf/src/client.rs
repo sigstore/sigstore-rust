@@ -251,7 +251,7 @@ impl Updater {
             let mut children: Vec<(String, String)> = Vec::new();
             if let Some(delegations) = &targets.delegations {
                 for child in &delegations.roles {
-                    if child.matches_path(target_path) {
+                    if child.matches_path(target_path)? {
                         children.push((child.name.clone(), role.clone()));
                         if child.terminating {
                             // Stop considering any further delegations entirely.
