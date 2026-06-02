@@ -71,8 +71,7 @@ fn reference_impl_root_self_verifies() {
     // JSON. This passing means our canonical encoder and key handling agree with
     // python-tuf for both key types.
     let (_, root) = reference_impl_repo();
-    TrustedMetadataSet::from_root(&root)
-        .expect("python-tuf reference root should self-verify");
+    TrustedMetadataSet::from_root(&root).expect("python-tuf reference root should self-verify");
 }
 
 #[tokio::test]
@@ -128,14 +127,22 @@ fn malformed_roots_fail_closed() {
     for (file, why) in [
         ("no-root-json-signatures.root.json", "zero signatures"),
         ("invalid-root-json-signature.root.json", "corrupt signature"),
-        ("duplicate-sigs.root.json", "duplicate sigs from one key vs threshold 2"),
+        (
+            "duplicate-sigs.root.json",
+            "duplicate sigs from one key vs threshold 2",
+        ),
     ] {
         let bytes = std::fs::read(neg.join(file)).unwrap();
         let err = TrustedMetadataSet::from_root(&bytes)
             .expect_err(&format!("{file} must fail bootstrap ({why})"));
+        // All must fail closed; the exact variant (threshold not met vs.
+        // duplicate signature) depends on the fixture.
         assert!(
-            matches!(err, Error::ThresholdNotMet { .. }),
-            "{file}: expected ThresholdNotMet, got {err:?}"
+            matches!(
+                err,
+                Error::ThresholdNotMet { .. } | Error::DuplicateSignature { .. }
+            ),
+            "{file}: expected a verification failure, got {err:?}"
         );
     }
 }

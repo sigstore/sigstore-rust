@@ -6,7 +6,7 @@
 //! root from the freshest local copy (standard TUF behavior) and an offline run
 //! can re-verify entirely from cache via [`StoreRepository`].
 //!
-//! Stored bytes are still untrusted on read: the [`Updater`] re-runs every
+//! Stored bytes are still untrusted on read: the [`Updater`](crate::client::Updater) re-runs every
 //! signature/version/expiry check against them, so a tampered cache cannot
 //! bypass verification — at worst it fails the refresh.
 
