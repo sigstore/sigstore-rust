@@ -4,7 +4,7 @@
 //! from X.509 certificates used in Sigstore bundles.
 
 use crate::error::{Error, Result};
-use crate::SigningScheme;
+use crate::KeyAlgorithm;
 use sigstore_types::DerPublicKey;
 use x509_cert::der::{Decode, Encode};
 use x509_cert::Certificate;
@@ -31,8 +31,8 @@ pub struct CertificateInfo {
     pub not_after: i64,
     /// Public key in DER-encoded SPKI format
     pub public_key: DerPublicKey,
-    /// Signing scheme derived from the public key algorithm
-    pub signing_scheme: SigningScheme,
+    /// Key algorithm derived from the public key algorithm
+    pub key_algorithm: KeyAlgorithm,
 }
 
 /// Parse certificate information from DER-encoded certificate
@@ -63,8 +63,8 @@ pub fn parse_certificate_info(cert_der: &[u8]) -> Result<CertificateInfo> {
         .map_err(|e| Error::InvalidCertificate(format!("failed to encode SPKI: {}", e)))?;
     let public_key = DerPublicKey::new(public_key_der);
 
-    // Determine signing scheme from algorithm OID and parameters
-    let signing_scheme = determine_signing_scheme(public_key_info)?;
+    // Determine key algorithm from algorithm OID and parameters
+    let key_algorithm = determine_key_algorithm(public_key_info)?;
 
     // Extract identity from SAN extension
     let identity = extract_san_identity(&cert)?;
@@ -78,14 +78,14 @@ pub fn parse_certificate_info(cert_der: &[u8]) -> Result<CertificateInfo> {
         not_before,
         not_after,
         public_key,
-        signing_scheme,
+        key_algorithm,
     })
 }
 
-/// Determine the signing scheme from SubjectPublicKeyInfo
-fn determine_signing_scheme(
+/// Determine the key algorithm from SubjectPublicKeyInfo
+fn determine_key_algorithm(
     spki: &x509_cert::spki::SubjectPublicKeyInfoOwned,
-) -> Result<SigningScheme> {
+) -> Result<KeyAlgorithm> {
     let alg_oid = spki.algorithm.oid;
 
     if alg_oid == ID_EC_PUBLIC_KEY {
@@ -98,9 +98,9 @@ fn determine_signing_scheme(
             })?;
 
             if curve_oid == SECP_256_R_1 {
-                return Ok(SigningScheme::EcdsaP256Sha256);
+                return Ok(KeyAlgorithm::EcdsaP256);
             } else if curve_oid == SECP_384_R_1 {
-                return Ok(SigningScheme::EcdsaP384Sha384);
+                return Ok(KeyAlgorithm::EcdsaP384);
             } else {
                 return Err(Error::InvalidCertificate(format!(
                     "unsupported EC curve OID: {}",
@@ -113,11 +113,9 @@ fn determine_signing_scheme(
             ));
         }
     } else if alg_oid == RSA_ENCRYPTION {
-        // RSA key - default to RSA PKCS#1 SHA-256
-        // We can't determine padding from the certificate alone
-        return Ok(SigningScheme::RsaPkcs1Sha256);
+        return Ok(KeyAlgorithm::Rsa);
     } else if alg_oid == ID_ED_25519 {
-        return Ok(SigningScheme::Ed25519);
+        return Ok(KeyAlgorithm::Ed25519);
     }
 
     Err(Error::InvalidCertificate(format!(

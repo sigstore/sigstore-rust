@@ -17,6 +17,8 @@ pub enum SigningScheme {
     EcdsaP256Sha256,
     /// ECDSA P-256 with SHA-384 (non-standard but valid)
     EcdsaP256Sha384,
+    /// ECDSA P-384 with SHA-256
+    EcdsaP384Sha256,
     /// ECDSA P-384 with SHA-384
     EcdsaP384Sha384,
     /// Ed25519
@@ -41,6 +43,7 @@ impl SigningScheme {
         match self {
             SigningScheme::EcdsaP256Sha256 => "ECDSA_P256_SHA256",
             SigningScheme::EcdsaP256Sha384 => "ECDSA_P256_SHA384",
+            SigningScheme::EcdsaP384Sha256 => "ECDSA_P384_SHA256",
             SigningScheme::EcdsaP384Sha384 => "ECDSA_P384_SHA384",
             SigningScheme::Ed25519 => "ED25519",
             SigningScheme::RsaPssSha256 => "RSA_PSS_SHA256",
@@ -52,30 +55,68 @@ impl SigningScheme {
         }
     }
 
-    /// Check if this scheme uses SHA-256 for its signature hash.
-    ///
-    /// This is relevant for hashedrekord verification: Rekor always stores SHA-256
-    /// hashes, so only schemes that use SHA-256 can be verified with prehashed
-    /// verification when only the digest is available (not the original artifact).
-    ///
-    /// - Schemes using SHA-256: Can use `verify_signature_prehashed` with Rekor's hash
-    /// - Schemes using SHA-384/512: Cannot use prehashed verification (hash mismatch)
-    /// - Ed25519: Doesn't support prehashed mode
-    pub fn uses_sha256(&self) -> bool {
-        matches!(
-            self,
-            SigningScheme::EcdsaP256Sha256
-                | SigningScheme::RsaPssSha256
-                | SigningScheme::RsaPkcs1Sha256
-        )
-    }
-
     /// Check if this scheme supports prehashed verification.
     ///
     /// Ed25519 doesn't support prehashed verification (it signs the full message).
     /// ECDSA and RSA schemes support prehashed verification.
     pub fn supports_prehashed(&self) -> bool {
         !matches!(self, SigningScheme::Ed25519)
+    }
+}
+
+/// Key algorithm derived from the certificate/public key
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyAlgorithm {
+    /// ECDSA P-256
+    EcdsaP256,
+    /// ECDSA P-384
+    EcdsaP384,
+    /// Ed25519
+    Ed25519,
+    /// RSA
+    Rsa,
+}
+
+impl KeyAlgorithm {
+    /// Get the default signing scheme for this key algorithm
+    pub fn default_signing_scheme(&self) -> SigningScheme {
+        match self {
+            KeyAlgorithm::EcdsaP256 => SigningScheme::EcdsaP256Sha256,
+            KeyAlgorithm::EcdsaP384 => SigningScheme::EcdsaP384Sha384,
+            KeyAlgorithm::Ed25519 => SigningScheme::Ed25519,
+            KeyAlgorithm::Rsa => SigningScheme::RsaPkcs1Sha256,
+        }
+    }
+
+    /// Resolve the signing scheme using the key algorithm and a specific hash algorithm
+    pub fn resolve_signing_scheme(
+        &self,
+        hash_algo: sigstore_types::HashAlgorithm,
+    ) -> Result<SigningScheme> {
+        match self {
+            KeyAlgorithm::EcdsaP256 => match hash_algo {
+                sigstore_types::HashAlgorithm::Sha2256 => Ok(SigningScheme::EcdsaP256Sha256),
+                sigstore_types::HashAlgorithm::Sha2384 => Ok(SigningScheme::EcdsaP256Sha384),
+                _ => Err(Error::UnsupportedAlgorithm(format!(
+                    "ECDSA P-256 does not support hash algorithm {:?}",
+                    hash_algo
+                ))),
+            },
+            KeyAlgorithm::EcdsaP384 => match hash_algo {
+                sigstore_types::HashAlgorithm::Sha2256 => Ok(SigningScheme::EcdsaP384Sha256),
+                sigstore_types::HashAlgorithm::Sha2384 => Ok(SigningScheme::EcdsaP384Sha384),
+                _ => Err(Error::UnsupportedAlgorithm(format!(
+                    "ECDSA P-384 does not support hash algorithm {:?}",
+                    hash_algo
+                ))),
+            },
+            KeyAlgorithm::Ed25519 => Ok(SigningScheme::Ed25519),
+            KeyAlgorithm::Rsa => match hash_algo {
+                sigstore_types::HashAlgorithm::Sha2256 => Ok(SigningScheme::RsaPkcs1Sha256),
+                sigstore_types::HashAlgorithm::Sha2384 => Ok(SigningScheme::RsaPkcs1Sha384),
+                sigstore_types::HashAlgorithm::Sha2512 => Ok(SigningScheme::RsaPkcs1Sha512),
+            },
+        }
     }
 }
 

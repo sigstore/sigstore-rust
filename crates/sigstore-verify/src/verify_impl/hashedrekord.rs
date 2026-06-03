@@ -258,6 +258,20 @@ fn verify_signature_cryptographically(
             // Parse certificate to extract public key and algorithm
             let cert_info = sigstore_crypto::x509::parse_certificate_info(cert_der)?;
 
+            // use digest algorithm from message digest, or the default for key algorithm
+            let scheme = match &bundle.content {
+                SignatureContent::MessageSignature(msg_sig) => {
+                    if let Some(ref digest) = msg_sig.message_digest {
+                        cert_info
+                            .key_algorithm
+                            .resolve_signing_scheme(digest.algorithm)?
+                    } else {
+                        cert_info.key_algorithm.default_signing_scheme()
+                    }
+                }
+                _ => cert_info.key_algorithm.default_signing_scheme(),
+            };
+
             match artifact {
                 Artifact::Bytes(bytes) => {
                     // We have the artifact bytes - verify signature over them
@@ -265,7 +279,7 @@ fn verify_signature_cryptographically(
                         &cert_info.public_key,
                         bytes,
                         &signature_bytes,
-                        cert_info.signing_scheme,
+                        scheme,
                     )
                     .map_err(|e| {
                         Error::Verification(format!(
@@ -276,17 +290,17 @@ fn verify_signature_cryptographically(
                 }
                 Artifact::Digest(hash) => {
                     // We only have the digest - use prehashed verification if supported
-                    if cert_info.signing_scheme.supports_prehashed() {
+                    if scheme.supports_prehashed() {
                         tracing::debug!(
                             "Using prehashed verification for {} with pre-computed digest",
-                            cert_info.signing_scheme.name()
+                            scheme.name()
                         );
 
                         sigstore_crypto::verification::verify_signature_prehashed(
                             &cert_info.public_key,
                             hash,
                             &signature_bytes,
-                            cert_info.signing_scheme,
+                            scheme,
                         )
                         .map_err(|e| {
                             Error::Verification(format!(
@@ -298,7 +312,7 @@ fn verify_signature_cryptographically(
                         // Scheme doesn't support prehashed verification: fail closed
                         return Err(Error::Verification(format!(
                             "cannot verify signature with digest-only - scheme {} does not support prehashed mode",
-                            cert_info.signing_scheme.name()
+                            scheme.name()
                         )));
                     }
                 }

@@ -358,7 +358,7 @@ impl Verifier {
                     &cert_info.public_key,
                     &pae,
                     &sig.sig,
-                    cert_info.signing_scheme,
+                    cert_info.key_algorithm.default_signing_scheme(),
                 )
                 .is_ok()
                 {
@@ -459,6 +459,7 @@ fn compute_artifact_digest_for_scheme(
 ) -> Result<Vec<u8>> {
     let algo = match scheme {
         SigningScheme::EcdsaP256Sha256
+        | SigningScheme::EcdsaP384Sha256
         | SigningScheme::RsaPssSha256
         | SigningScheme::RsaPkcs1Sha256 => HashAlgorithm::Sha2256,
         SigningScheme::EcdsaP256Sha384

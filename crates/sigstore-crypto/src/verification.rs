@@ -3,9 +3,10 @@
 use crate::error::{Error, Result};
 use crate::signing::SigningScheme;
 use aws_lc_rs::signature::{
-    UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA384_ASN1, ECDSA_P384_SHA384_ASN1,
-    ED25519, RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
-    RSA_PSS_2048_8192_SHA256, RSA_PSS_2048_8192_SHA384, RSA_PSS_2048_8192_SHA512,
+    UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA384_ASN1, ECDSA_P384_SHA256_ASN1,
+    ECDSA_P384_SHA384_ASN1, ED25519, RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384,
+    RSA_PKCS1_2048_8192_SHA512, RSA_PSS_2048_8192_SHA256, RSA_PSS_2048_8192_SHA384,
+    RSA_PSS_2048_8192_SHA512,
 };
 use sigstore_types::{DerPublicKey, SignatureBytes};
 use spki::SubjectPublicKeyInfoRef;
@@ -63,6 +64,12 @@ impl VerificationKey {
                 let key = UnparsedPublicKey::new(&ECDSA_P256_SHA384_ASN1, &self.bytes);
                 key.verify(data, signature).map_err(|_| {
                     Error::Verification("ECDSA P-256 SHA-384 signature invalid".to_string())
+                })
+            }
+            SigningScheme::EcdsaP384Sha256 => {
+                let key = UnparsedPublicKey::new(&ECDSA_P384_SHA256_ASN1, &self.bytes);
+                key.verify(data, signature).map_err(|_| {
+                    Error::Verification("ECDSA P-384 SHA-256 signature invalid".to_string())
                 })
             }
             SigningScheme::EcdsaP384Sha384 => {
@@ -130,6 +137,7 @@ impl VerificationKey {
         ) = match self.scheme {
             SigningScheme::EcdsaP256Sha256 => (&SHA256, &ECDSA_P256_SHA256_ASN1),
             SigningScheme::EcdsaP256Sha384 => (&SHA384, &ECDSA_P256_SHA384_ASN1),
+            SigningScheme::EcdsaP384Sha256 => (&SHA256, &ECDSA_P384_SHA256_ASN1),
             SigningScheme::EcdsaP384Sha384 => (&SHA384, &ECDSA_P384_SHA384_ASN1),
             SigningScheme::RsaPssSha256 => (&SHA256, &RSA_PSS_2048_8192_SHA256),
             SigningScheme::RsaPssSha384 => (&SHA384, &RSA_PSS_2048_8192_SHA384),
@@ -145,8 +153,13 @@ impl VerificationKey {
             }
         };
 
-        let aws_digest = Digest::import_less_safe(digest, aws_algo)
-            .map_err(|_| Error::Verification("Failed to import digest".to_string()))?;
+        let aws_digest = Digest::import_less_safe(digest, aws_algo).map_err(|_| {
+            Error::Verification(format!(
+                "Failed to import digest: len={}, algo_expected_len={}",
+                digest.len(),
+                aws_algo.output_len
+            ))
+        })?;
 
         let key = UnparsedPublicKey::new(asn1_algo, &self.bytes);
         key.verify_digest(&aws_digest, signature.as_bytes())
