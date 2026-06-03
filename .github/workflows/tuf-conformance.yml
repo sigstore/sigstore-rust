@@ -36,13 +36,10 @@ jobs:
         run: cp crates/sigstore-tuf/conformance.xfails target/release/examples/conformance_client.xfails
 
       # Runs the official theupdateframework/tuf-conformance suite (python-tuf /
-      # go-tuf use the same harness) against our client. Temporarily
-      # non-blocking for one round while the just-landed fixes (role-name
-      # quoting, consistent-snapshot sub-dir paths, sha512 targets, snapshot
-      # role-removal, local-metadata reuse, artifact cache) are confirmed green
-      # against the uploaded report; then drop continue-on-error to enforce.
+      # go-tuf use the same harness) against our client. Enforcing: a conformance
+      # regression fails CI. Currently 108/108 pass; known gaps, if any, are
+      # tracked in conformance.xfails (currently none).
       - name: Run TUF conformance suite
-        continue-on-error: true
         uses: theupdateframework/tuf-conformance@500c525c9ce287a472fd334fe8d885cace667d32 # v2.4.0
         with:
           entrypoint: target/release/examples/conformance_client
