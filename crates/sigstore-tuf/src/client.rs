@@ -70,7 +70,7 @@ impl Updater {
         let store: Box<dyn MetadataStore> = Box::new(store);
         loop {
             let next = self.trusted.root().version + 1;
-            match store.load(&format!("{next}.root.json")) {
+            match store.load(&format!("root_history/{next}.root.json")) {
                 Some(bytes) if self.trusted.update_root(&bytes).is_ok() => {
                     tracing::debug!(version = next, "adopted cached root");
                 }
@@ -148,7 +148,9 @@ impl Updater {
             {
                 Some(bytes) => {
                     self.trusted.update_root(&bytes)?;
-                    self.cache_put(&name, &bytes);
+                    // Versioned roots live in their own namespace so a delegated
+                    // role named e.g. "2.root" can't collide with them.
+                    self.cache_put(&format!("root_history/{next}.root.json"), &bytes);
                     self.cache_put("root.json", &bytes);
                     tracing::debug!(version = next, "updated root");
                 }
@@ -333,6 +335,12 @@ impl Updater {
             let mut children: Vec<(String, String)> = Vec::new();
             if let Some(delegations) = &targets.delegations {
                 for child in &delegations.roles {
+                    // A delegation that reuses a top-level role name is rejected
+                    // (cache-namespace safety); never fetch or trust it.
+                    if crate::trusted::is_top_level_role(&child.name) {
+                        tracing::warn!(role = %child.name, "ignoring delegation that reuses a top-level role name");
+                        continue;
+                    }
                     if child.matches_path(target_path)? {
                         children.push((child.name.clone(), role.clone()));
                         if child.terminating {
