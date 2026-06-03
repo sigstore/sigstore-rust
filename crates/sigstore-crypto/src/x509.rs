@@ -184,6 +184,10 @@ pub fn extract_fulcio_issuer(cert: &Certificate) -> Result<Option<String>> {
             if let Ok(s) = std::str::from_utf8(value_bytes) {
                 return Ok(Some(s.to_string()));
             }
+
+            return Err(Error::InvalidCertificate(
+                "malformed Fulcio issuer extension".to_string(),
+            ));
         }
     }
 
