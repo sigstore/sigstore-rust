@@ -108,12 +108,14 @@ impl DelegatedRole {
     /// (the SHA-256 hex of the target path begins with the prefix) or one of its
     /// shell-style `paths` globs. A role with neither field authorizes nothing.
     ///
-    /// Glob matching uses [`globset`] with its default options, which match
-    /// `python-tuf`'s `fnmatch` semantics (a `*` *does* span `/`) — the same
-    /// crate and configuration `tough` uses. A `paths` entry that is not a valid
-    /// glob is a hard error rather than a silent non-match, so a repository we
-    /// cannot correctly evaluate is rejected instead of having a delegation
-    /// quietly ignored.
+    /// Glob matching uses [`globset`] with `literal_separator` enabled, i.e.
+    /// proper shell-glob semantics where a `*` (or `?`) does **not** cross a path
+    /// separator (`/`). This follows the TUF spec, whose own example notes that
+    /// `*.tgz` matches `foo.tgz` but not `targets/foo.tgz`; matching across `/`
+    /// (as plain `fnmatch` / globset's default does) would over-authorize a
+    /// delegation. A `paths` entry that is not a valid glob is a hard error
+    /// rather than a silent non-match, so a repository we cannot correctly
+    /// evaluate is rejected instead of having a delegation quietly ignored.
     ///
     /// [`globset`]: https://docs.rs/globset
     pub fn matches_path(&self, target_path: &str) -> Result<bool> {
@@ -123,12 +125,15 @@ impl DelegatedRole {
         }
         if let Some(paths) = &self.paths {
             for pattern in paths {
-                let glob = globset::Glob::new(pattern).map_err(|e| {
-                    Error::Malformed(format!(
-                        "role {:?} has invalid delegation path pattern {pattern:?}: {e}",
-                        self.name
-                    ))
-                })?;
+                let glob = globset::GlobBuilder::new(pattern)
+                    .literal_separator(true)
+                    .build()
+                    .map_err(|e| {
+                        Error::Malformed(format!(
+                            "role {:?} has invalid delegation path pattern {pattern:?}: {e}",
+                            self.name
+                        ))
+                    })?;
                 if glob.compile_matcher().is_match(target_path) {
                     return Ok(true);
                 }
@@ -153,20 +158,24 @@ mod tests {
     }
 
     #[test]
-    fn glob_matches_like_python_tuf_fnmatch() {
-        // `*` spans `/` (python-tuf fnmatch / default globset semantics).
-        assert!(with_paths(serde_json::json!(["*.json"]))
-            .matches_path("trusted_root.json")
-            .unwrap());
-        assert!(with_paths(serde_json::json!(["*.json"]))
-            .matches_path("nested/dir/trusted_root.json")
-            .unwrap());
-        assert!(with_paths(serde_json::json!(["registry/*"]))
-            .matches_path("registry/a/b/index.json")
-            .unwrap());
-        assert!(!with_paths(serde_json::json!(["*.json"]))
-            .matches_path("trusted_root.txt")
-            .unwrap());
+    fn star_does_not_cross_path_separator() {
+        // Shell-glob semantics per the TUF spec: `*` matches within a path
+        // segment but not across `/`.
+        let p = with_paths(serde_json::json!(["*.json"]));
+        assert!(p.matches_path("trusted_root.json").unwrap());
+        assert!(!p.matches_path("nested/dir/trusted_root.json").unwrap());
+        assert!(!p.matches_path("trusted_root.txt").unwrap());
+
+        // `registry/*` matches one segment under registry/, not deeper.
+        let r = with_paths(serde_json::json!(["registry/*"]));
+        assert!(r.matches_path("registry/index.json").unwrap());
+        assert!(!r.matches_path("registry/a/b/index.json").unwrap());
+
+        // The spec example: a star per segment matches the corresponding depth.
+        let nested = with_paths(serde_json::json!(["releases/*/*"]));
+        assert!(nested.matches_path("releases/x/x_v1").unwrap());
+        assert!(!nested.matches_path("releases/x").unwrap());
+        assert!(!nested.matches_path("releases/x/y/z").unwrap());
     }
 
     #[test]
