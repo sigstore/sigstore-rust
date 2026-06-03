@@ -248,6 +248,15 @@ impl TrustedMetadataSet {
         delegator_name: &str,
         now: jiff::Timestamp,
     ) -> Result<&Targets> {
+        // A delegated role must not reuse a top-level role name: it shares the
+        // metadata-cache namespace with `root`/`timestamp`/`snapshot`/`targets`,
+        // so allowing it would let a compromised mirror overwrite a cached
+        // top-level role (a potential offline denial of service on the next run).
+        if is_top_level_role(role_name) {
+            return Err(Error::Malformed(format!(
+                "delegated role must not reuse top-level role name {role_name:?}"
+            )));
+        }
         let (keys, role_keys) = self.delegation_authority(delegator_name, role_name)?;
         let new = self.verify_targets_pin(bytes, role_name)?;
         new.verify_threshold(&keys, &role_keys, role_name)?;
@@ -313,6 +322,12 @@ impl TrustedMetadataSet {
         }
         Ok((keys, role.role_keys()))
     }
+}
+
+/// Whether `name` is one of the four reserved top-level role names. Delegated
+/// targets roles must not reuse these (they share the cache namespace).
+pub(crate) fn is_top_level_role(name: &str) -> bool {
+    matches!(name, "root" | "timestamp" | "snapshot" | "targets")
 }
 
 /// Verify `metadata` against a named role defined in `root`.
