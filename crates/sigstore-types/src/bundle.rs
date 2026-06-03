@@ -7,8 +7,8 @@
 use crate::checkpoint::Checkpoint;
 use crate::dsse::DsseEnvelope;
 use crate::encoding::{
-    string_i64, CanonicalizedBody, DerCertificate, LogIndex, LogKeyId, Sha256Hash, SignatureBytes,
-    SignedTimestamp, TimestampToken,
+    string_i64, CanonicalizedBody, DerCertificate, DigestBytes, LogIndex, LogKeyId, Sha256Hash,
+    SignatureBytes, SignedTimestamp, TimestampToken,
 };
 use crate::error::{Error, Result};
 use crate::hash::HashAlgorithm;
@@ -171,7 +171,7 @@ pub struct MessageDigest {
     /// Hash algorithm
     pub algorithm: HashAlgorithm,
     /// Digest bytes
-    pub digest: Sha256Hash,
+    pub digest: DigestBytes,
 }
 
 /// Verification material containing certificate/key and log entries

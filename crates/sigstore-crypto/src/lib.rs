@@ -16,7 +16,7 @@ pub use checkpoint::{
     verify_signature_auto, Checkpoint, CheckpointSignature, CheckpointVerifyExt, KeyType,
 };
 pub use error::{Error, Result};
-pub use hash::{sha256, sha256_reader, Sha256Hasher};
+pub use hash::{sha256, sha256_reader, sha384, sha512, Sha256Hasher};
 pub use keyring::Keyring;
 pub use signing::{KeyPair, SigningScheme};
 pub use verification::{verify_signature, verify_signature_prehashed, VerificationKey};

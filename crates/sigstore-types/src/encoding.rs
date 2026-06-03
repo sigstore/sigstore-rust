@@ -782,6 +782,76 @@ impl<'de> serde::Deserialize<'de> for Sha256Hash {
 }
 
 // ============================================================================
+// Arbitrary Digest Type (Flexible Size)
+// ============================================================================
+
+/// Arbitrary length hash digest
+///
+/// Flexible-size hash. Serializes as base64, deserializes from either hex or base64.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DigestBytes(Vec<u8>);
+
+impl DigestBytes {
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        DigestBytes(bytes)
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for DigestBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<Sha256Hash> for DigestBytes {
+    fn from(hash: Sha256Hash) -> Self {
+        DigestBytes(hash.as_bytes().to_vec())
+    }
+}
+
+impl From<&Sha256Hash> for DigestBytes {
+    fn from(hash: &Sha256Hash) -> Self {
+        DigestBytes(hash.as_bytes().to_vec())
+    }
+}
+
+impl From<&[u8]> for DigestBytes {
+    fn from(bytes: &[u8]) -> Self {
+        DigestBytes(bytes.to_vec())
+    }
+}
+
+impl serde::Serialize for DigestBytes {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(&self.0))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for DigestBytes {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        if s.len() % 2 == 0 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+            let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
+            return Ok(DigestBytes(bytes));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&s)
+            .map_err(serde::de::Error::custom)?;
+        Ok(DigestBytes(bytes))
+    }
+}
+
+// ============================================================================
 // Hex-Encoded Log ID (for Rekor V1 API compatibility)
 // ============================================================================
 

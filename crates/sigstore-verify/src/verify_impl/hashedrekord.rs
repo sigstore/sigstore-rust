@@ -29,7 +29,7 @@ pub(crate) fn verify_hashedrekord_entry(
 
     // Compute hash from artifact (bytes or pre-computed digest) or DSSE envelope
     let hash = match &bundle.content {
-        SignatureContent::MessageSignature(_) => compute_artifact_digest(artifact),
+        SignatureContent::MessageSignature(_) => compute_artifact_digest(artifact)?,
         SignatureContent::DsseEnvelope(envelope) => sigstore_crypto::sha256(&envelope.pae()),
     };
 
@@ -67,20 +67,20 @@ pub(crate) fn verify_hashedrekord_entry(
     validate_integrated_time(entry, bundle)?;
 
     // Perform cryptographic signature verification
-    // This verifies that the signature in the Rekor entry was created by the
-    // certificate's private key over the artifact hash.
-    // Uses verify_signature_prehashed with Digest::import_less_safe for proper
-    // prehashed verification (avoiding double-hashing).
     verify_signature_cryptographically(entry, &body, bundle, artifact)?;
 
     Ok(())
 }
 
-/// Compute the SHA-256 digest from an artifact
-fn compute_artifact_digest(artifact: &Artifact<'_>) -> Sha256Hash {
+/// Compute the SHA-256 digest from an artifact for Rekor inclusion proof
+fn compute_artifact_digest(artifact: &Artifact<'_>) -> Result<Sha256Hash> {
     match artifact {
-        Artifact::Bytes(bytes) => sigstore_crypto::sha256(bytes),
-        Artifact::Digest(hash) => *hash,
+        Artifact::Bytes(bytes) => Ok(sigstore_crypto::sha256(bytes)),
+        Artifact::Digest(hash) => Sha256Hash::try_from_slice(hash).map_err(|_| {
+            Error::Verification(
+                "Rekor entry verification requires a 32-byte SHA-256 digest".to_string(),
+            )
+        }),
     }
 }
 
@@ -214,11 +214,9 @@ fn validate_signature_match(
 /// Verification strategy:
 /// - If we have the artifact bytes: verify signature over the artifact using `verify_signature`
 /// - If we only have the digest:
-///   - For SHA-256 schemes (P-256/SHA-256, RSA-PSS-SHA-256, etc.): Use prehashed verification
-///     since Rekor stores SHA-256 hashes which match the signature's hash algorithm
-///   - For SHA-384/512 schemes (P-384/SHA-384, etc.): Skip verification because Rekor's
-///     SHA-256 hash doesn't match the signature's hash algorithm
-///   - For Ed25519: Skip verification (doesn't support prehashed mode)
+///   - Verify using `verify_signature_prehashed` which will dynamically map to the correct digest
+///     algorithm based on the signing scheme.
+///   - If the scheme does not support prehashed mode (like Ed25519), we fail closed and return an error.
 fn verify_signature_cryptographically(
     _entry: &TransparencyLogEntry,
     body: &RekorEntryBody,
@@ -278,9 +276,7 @@ fn verify_signature_cryptographically(
                 }
                 Artifact::Digest(hash) => {
                     // We only have the digest - use prehashed verification if supported
-                    if cert_info.signing_scheme.uses_sha256()
-                        && cert_info.signing_scheme.supports_prehashed()
-                    {
+                    if cert_info.signing_scheme.supports_prehashed() {
                         tracing::debug!(
                             "Using prehashed verification for {} with pre-computed digest",
                             cert_info.signing_scheme.name()
@@ -299,13 +295,11 @@ fn verify_signature_cryptographically(
                             ))
                         })?;
                     } else {
-                        // Scheme doesn't use SHA-256 or doesn't support prehashed verification.
-                        // We can't verify without the original artifact.
-                        tracing::debug!(
-                            "Skipping cryptographic signature verification for {} with digest-only - \
-                             scheme uses different hash algorithm or doesn't support prehashed",
+                        // Scheme doesn't support prehashed verification: fail closed
+                        return Err(Error::Verification(format!(
+                            "cannot verify signature with digest-only - scheme {} does not support prehashed mode",
                             cert_info.signing_scheme.name()
-                        );
+                        )));
                     }
                 }
             }

@@ -7,7 +7,7 @@ use aws_lc_rs::signature::{
     ED25519, RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
     RSA_PSS_2048_8192_SHA256, RSA_PSS_2048_8192_SHA384, RSA_PSS_2048_8192_SHA512,
 };
-use sigstore_types::{DerPublicKey, Sha256Hash, SignatureBytes};
+use sigstore_types::{DerPublicKey, SignatureBytes};
 use spki::SubjectPublicKeyInfoRef;
 
 /// A public key for verification
@@ -115,31 +115,42 @@ impl VerificationKey {
         }
     }
 
-    /// Verify a signature over prehashed data (SHA-256)
+    /// Verify a signature over prehashed data
     ///
     /// This is used for hashedrekord verification where the signature is over
-    /// the SHA-256 hash of the artifact, not the artifact itself.
-    pub fn verify_prehashed(&self, digest: &Sha256Hash, signature: &SignatureBytes) -> Result<()> {
-        use aws_lc_rs::digest::{Digest, SHA256};
+    /// a pre-computed hash of the artifact, not the artifact itself.
+    pub fn verify_prehashed(&self, digest: &[u8], signature: &SignatureBytes) -> Result<()> {
+        use aws_lc_rs::digest::{Digest, SHA256, SHA384, SHA512};
+        use aws_lc_rs::signature::VerificationAlgorithm;
 
-        match self.scheme {
-            SigningScheme::EcdsaP256Sha256 => {
-                let aws_digest = Digest::import_less_safe(digest.as_slice(), &SHA256)
-                    .map_err(|_| Error::Verification("Failed to import digest".to_string()))?;
-
-                let key = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, &self.bytes);
-                key.verify_digest(&aws_digest, signature.as_bytes())
-                    .map_err(|_| Error::Verification("ECDSA P-256 signature invalid".to_string()))
-            }
-            SigningScheme::Ed25519 => {
-                // Ed25519 doesn't support prehashed mode - verify directly over digest bytes
-                self.verify_inner(digest.as_slice(), signature.as_bytes())
-            }
+        // Determine the expected hash algorithm and ASN.1 algorithm from the SigningScheme
+        let (aws_algo, asn1_algo): (
+            &aws_lc_rs::digest::Algorithm,
+            &'static dyn VerificationAlgorithm,
+        ) = match self.scheme {
+            SigningScheme::EcdsaP256Sha256 => (&SHA256, &ECDSA_P256_SHA256_ASN1),
+            SigningScheme::EcdsaP256Sha384 => (&SHA384, &ECDSA_P256_SHA384_ASN1),
+            SigningScheme::EcdsaP384Sha384 => (&SHA384, &ECDSA_P384_SHA384_ASN1),
+            SigningScheme::RsaPssSha256 => (&SHA256, &RSA_PSS_2048_8192_SHA256),
+            SigningScheme::RsaPssSha384 => (&SHA384, &RSA_PSS_2048_8192_SHA384),
+            SigningScheme::RsaPssSha512 => (&SHA512, &RSA_PSS_2048_8192_SHA512),
+            SigningScheme::RsaPkcs1Sha256 => (&SHA256, &RSA_PKCS1_2048_8192_SHA256),
+            SigningScheme::RsaPkcs1Sha384 => (&SHA384, &RSA_PKCS1_2048_8192_SHA384),
+            SigningScheme::RsaPkcs1Sha512 => (&SHA512, &RSA_PKCS1_2048_8192_SHA512),
             _ => {
-                // For other schemes, verify directly over digest bytes
-                self.verify_inner(digest.as_slice(), signature.as_bytes())
+                return Err(Error::UnsupportedAlgorithm(format!(
+                    "Scheme {:?} does not support prehashed mode",
+                    self.scheme
+                )));
             }
-        }
+        };
+
+        let aws_digest = Digest::import_less_safe(digest, aws_algo)
+            .map_err(|_| Error::Verification("Failed to import digest".to_string()))?;
+
+        let key = UnparsedPublicKey::new(asn1_algo, &self.bytes);
+        key.verify_digest(&aws_digest, signature.as_bytes())
+            .map_err(|e| Error::Verification(format!("Signature invalid: {}", e)))
     }
 }
 
@@ -165,16 +176,16 @@ pub fn verify_signature(
 /// Verify a signature over prehashed data using the specified scheme
 ///
 /// This is used for hashedrekord verification where the signature is over
-/// the SHA-256 hash of the artifact, not the artifact itself.
+/// a pre-computed hash of the artifact, not the artifact itself.
 ///
 /// # Arguments
 /// * `public_key` - DER-encoded SPKI public key
-/// * `digest` - SHA-256 hash of the artifact
+/// * `digest` - Pre-computed hash of the artifact
 /// * `signature` - The signature to verify
 /// * `scheme` - The signing scheme used
 pub fn verify_signature_prehashed(
     public_key: &DerPublicKey,
-    digest: &Sha256Hash,
+    digest: &[u8],
     signature: &SignatureBytes,
     scheme: SigningScheme,
 ) -> Result<()> {
@@ -217,5 +228,35 @@ mod tests {
         let pubkey = kp.public_key_der().unwrap();
         let vk = VerificationKey::from_spki(&pubkey, kp.default_scheme()).unwrap();
         assert!(vk.verify(b"wrong data", &sig).is_err());
+    }
+
+    #[test]
+    fn test_verify_prehashed_ecdsa_p256() {
+        let kp = KeyPair::generate_ecdsa_p256().unwrap();
+        let data = b"test data to prehash";
+        let sig = kp.sign(data).unwrap();
+        let digest = crate::hash::sha256(data);
+
+        let pubkey = kp.public_key_der().unwrap();
+        let vk = VerificationKey::from_spki(&pubkey, kp.default_scheme()).unwrap();
+        assert!(vk.verify_prehashed(digest.as_bytes(), &sig).is_ok());
+    }
+
+    #[test]
+    fn test_verify_prehashed_unsupported() {
+        // Construct a VerificationKey directly with Ed25519 which doesn't support prehashed
+        let vk = VerificationKey {
+            bytes: vec![0u8; 32],
+            scheme: SigningScheme::Ed25519,
+        };
+        let dummy_digest = vec![0u8; 32];
+        let dummy_sig = SignatureBytes::new(vec![0u8; 64]);
+
+        let result = vk.verify_prehashed(&dummy_digest, &dummy_sig);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::UnsupportedAlgorithm(_)
+        ));
     }
 }

@@ -8,7 +8,7 @@ use sigstore_bundle::ValidationOptions;
 use sigstore_crypto::parse_certificate_info;
 use sigstore_trust_root::TrustedRoot;
 
-use sigstore_types::{Artifact, Bundle, Sha256Hash, SignatureContent, Statement};
+use sigstore_types::{Artifact, Bundle, SignatureContent, Statement};
 
 /// Default clock skew tolerance in seconds (60 seconds = 1 minute)
 pub const DEFAULT_CLOCK_SKEW_SECONDS: i64 = 60;
@@ -377,8 +377,14 @@ impl Verifier {
             if envelope.payload_type == "application/vnd.in-toto+json" {
                 let payload_bytes = envelope.payload.as_bytes();
 
-                let artifact_hash = compute_artifact_digest(&artifact);
-                let artifact_hash_hex = artifact_hash.to_hex();
+                // Note: only SHA-256 used for attestation subjects here
+                let artifact_hash = compute_artifact_digest_algo(
+                    &artifact,
+                    sigstore_types::HashAlgorithm::Sha2256,
+                )?;
+                let artifact_hash_hex = sigstore_types::Sha256Hash::try_from_slice(&artifact_hash)
+                    .map_err(|_| Error::Verification("invalid SHA-256 hash length".to_string()))?
+                    .to_hex();
 
                 let payload_str = std::str::from_utf8(payload_bytes).map_err(|e| {
                     Error::Verification(format!("payload is not valid UTF-8: {}", e))
@@ -399,10 +405,10 @@ impl Verifier {
         // For MessageSignature bundles, verify the messageDigest matches the artifact
         if let SignatureContent::MessageSignature(msg_sig) = &bundle.content {
             if let Some(ref digest) = msg_sig.message_digest {
-                let artifact_hash = compute_artifact_digest(&artifact);
+                let artifact_hash = compute_artifact_digest_algo(&artifact, digest.algorithm)?;
 
                 // Compare the digest in the bundle with the computed artifact hash
-                if digest.digest.as_bytes() != artifact_hash.as_bytes() {
+                if digest.digest.as_bytes() != artifact_hash.as_slice() {
                     return Err(Error::Verification(
                         "message digest in bundle does not match artifact hash".to_string(),
                     ));
@@ -423,12 +429,51 @@ impl Verifier {
     }
 }
 
-/// Compute the SHA-256 digest from an artifact
-fn compute_artifact_digest(artifact: &Artifact<'_>) -> Sha256Hash {
+use sigstore_types::HashAlgorithm;
+fn compute_artifact_digest_algo(artifact: &Artifact<'_>, algo: HashAlgorithm) -> Result<Vec<u8>> {
     match artifact {
-        Artifact::Bytes(bytes) => sigstore_crypto::sha256(bytes),
-        Artifact::Digest(hash) => *hash,
+        Artifact::Bytes(bytes) => match algo {
+            HashAlgorithm::Sha2256 => Ok(sigstore_crypto::sha256(bytes).as_bytes().to_vec()),
+            HashAlgorithm::Sha2384 => Ok(sigstore_crypto::sha384(bytes)),
+            HashAlgorithm::Sha2512 => Ok(sigstore_crypto::sha512(bytes)),
+        },
+        Artifact::Digest(hash) => {
+            let expected_len = algo.digest_size();
+            if hash.len() != expected_len {
+                return Err(Error::Verification(format!(
+                    "expected digest length {} for {:?}, got {}",
+                    expected_len,
+                    algo,
+                    hash.len()
+                )));
+            }
+            Ok(hash.to_vec())
+        }
     }
+}
+
+use sigstore_crypto::SigningScheme;
+fn compute_artifact_digest_for_scheme(
+    artifact: &Artifact<'_>,
+    scheme: SigningScheme,
+) -> Result<Vec<u8>> {
+    let algo = match scheme {
+        SigningScheme::EcdsaP256Sha256
+        | SigningScheme::RsaPssSha256
+        | SigningScheme::RsaPkcs1Sha256 => HashAlgorithm::Sha2256,
+        SigningScheme::EcdsaP256Sha384
+        | SigningScheme::EcdsaP384Sha384
+        | SigningScheme::RsaPssSha384
+        | SigningScheme::RsaPkcs1Sha384 => HashAlgorithm::Sha2384,
+        SigningScheme::RsaPssSha512 | SigningScheme::RsaPkcs1Sha512 => HashAlgorithm::Sha2512,
+        _ => {
+            return Err(Error::Verification(format!(
+                "Unsupported scheme for prehashed verification: {:?}",
+                scheme
+            )))
+        }
+    };
+    compute_artifact_digest_algo(artifact, algo)
 }
 
 /// Convenience function to verify an artifact against a bundle
@@ -438,7 +483,26 @@ fn compute_artifact_digest(artifact: &Artifact<'_>) -> Sha256Hash {
 ///
 /// The artifact can be provided as raw bytes or as a pre-computed SHA-256 digest:
 /// - `verify(artifact_bytes, ...)` - pass raw bytes
-/// - `verify(Sha256Hash::from_hex("...")?, ...)` - pass pre-computed digest
+/// - `verify(digest, ...)` - pass pre-computed digest
+///
+/// # Example
+///
+/// ```no_run
+/// use sigstore_verify::verify;
+/// use sigstore_trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
+/// use sigstore_types::{Bundle, Sha256Hash};
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let trusted_root = TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)?;
+/// let bundle_json = std::fs::read_to_string("artifact.sigstore.json")?;
+/// let bundle = Bundle::from_json(&bundle_json)?;
+/// let artifact = std::fs::read("artifact.txt")?;
+///
+/// let result = verify(&artifact, &bundle, &sigstore_verify::VerificationPolicy::default(), &trusted_root)?;
+/// assert!(result.success);
+/// # Ok(())
+/// # }
+/// ```
 pub fn verify<'a>(
     artifact: impl Into<Artifact<'a>>,
     bundle: &Bundle,
@@ -533,8 +597,8 @@ pub fn verify_with_key<'a>(
         SignatureContent::MessageSignature(msg_sig) => {
             // Verify message digest matches artifact
             if let Some(ref digest) = msg_sig.message_digest {
-                let artifact_hash = compute_artifact_digest(&artifact);
-                if digest.digest.as_bytes() != artifact_hash.as_bytes() {
+                let artifact_hash = compute_artifact_digest_algo(&artifact, digest.algorithm)?;
+                if digest.digest.as_bytes() != artifact_hash.as_slice() {
                     return Err(Error::Verification(
                         "message digest in bundle does not match artifact hash".to_string(),
                     ));
@@ -542,10 +606,9 @@ pub fn verify_with_key<'a>(
             }
 
             // Verify signature over the artifact
-            let artifact_hash = compute_artifact_digest(&artifact);
-
             // Use prehashed verification if supported
-            if signing_scheme.uses_sha256() && signing_scheme.supports_prehashed() {
+            if signing_scheme.supports_prehashed() {
+                let artifact_hash = compute_artifact_digest_for_scheme(&artifact, signing_scheme)?;
                 sigstore_crypto::verify_signature_prehashed(
                     public_key,
                     &artifact_hash,
@@ -601,8 +664,15 @@ pub fn verify_with_key<'a>(
 
             // Verify artifact hash matches for in-toto statements
             if envelope.payload_type == "application/vnd.in-toto+json" {
-                let artifact_hash = compute_artifact_digest(&artifact);
-                let artifact_hash_hex = artifact_hash.to_hex();
+                // Note: In-toto specification supports multiple hash algorithms (e.g., sha512),
+                // but Sigstore currently mandates/defaults to SHA-256 for attestation subjects.
+                let artifact_hash = compute_artifact_digest_algo(
+                    &artifact,
+                    sigstore_types::HashAlgorithm::Sha2256,
+                )?;
+                let artifact_hash_hex = sigstore_types::Sha256Hash::try_from_slice(&artifact_hash)
+                    .map_err(|_| Error::Verification("invalid SHA-256 hash length".to_string()))?
+                    .to_hex();
 
                 let payload_str = std::str::from_utf8(&payload_bytes).map_err(|e| {
                     Error::Verification(format!("payload is not valid UTF-8: {}", e))

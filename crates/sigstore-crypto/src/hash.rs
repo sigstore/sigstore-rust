@@ -1,6 +1,6 @@
 //! Hashing utilities using aws-lc-rs
 
-use aws_lc_rs::digest::{self, Context, SHA256};
+use aws_lc_rs::digest::{self, Context, SHA256, SHA384, SHA512};
 use sigstore_types::Sha256Hash;
 use std::io::{self, Read};
 
@@ -10,6 +10,18 @@ pub fn sha256(data: &[u8]) -> Sha256Hash {
     let mut result = [0u8; 32];
     result.copy_from_slice(digest.as_ref());
     Sha256Hash::from_bytes(result)
+}
+
+/// Hash data using SHA-384, returning raw bytes
+pub fn sha384(data: &[u8]) -> Vec<u8> {
+    let digest = digest::digest(&SHA384, data);
+    digest.as_ref().to_vec()
+}
+
+/// Hash data using SHA-512, returning raw bytes
+pub fn sha512(data: &[u8]) -> Vec<u8> {
+    let digest = digest::digest(&SHA512, data);
+    digest.as_ref().to_vec()
 }
 
 /// Incremental SHA-256 hasher

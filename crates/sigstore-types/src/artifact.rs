@@ -10,7 +10,7 @@ use crate::Sha256Hash;
 ///
 /// This enum allows flexible input for signing and verification operations:
 /// - `Bytes`: Raw artifact bytes (hash will be computed internally)
-/// - `Digest`: Pre-computed SHA-256 digest (no raw bytes needed)
+/// - `Digest`: Pre-computed digest (no raw bytes needed)
 ///
 /// # Example
 ///
@@ -30,8 +30,8 @@ use crate::Sha256Hash;
 pub enum Artifact<'a> {
     /// Raw artifact bytes (hash will be computed)
     Bytes(&'a [u8]),
-    /// Pre-computed SHA-256 digest
-    Digest(Sha256Hash),
+    /// Pre-computed digest bytes
+    Digest(&'a [u8]),
 }
 
 impl<'a> Artifact<'a> {
@@ -41,7 +41,7 @@ impl<'a> Artifact<'a> {
     }
 
     /// Create an artifact from a pre-computed digest
-    pub fn from_digest(digest: Sha256Hash) -> Self {
+    pub fn from_digest(digest: &'a [u8]) -> Self {
         Artifact::Digest(digest)
     }
 
@@ -58,8 +58,8 @@ impl<'a> Artifact<'a> {
         }
     }
 
-    /// Get the pre-computed digest if available
-    pub fn pre_computed_digest(&self) -> Option<Sha256Hash> {
+    /// Get the pre-computed digest bytes if available
+    pub fn pre_computed_digest(&self) -> Option<&[u8]> {
         match self {
             Artifact::Bytes(_) => None,
             Artifact::Digest(hash) => Some(*hash),
@@ -85,9 +85,18 @@ impl<'a, const N: usize> From<&'a [u8; N]> for Artifact<'a> {
     }
 }
 
+impl<'a> From<&'a Sha256Hash> for Artifact<'a> {
+    fn from(hash: &'a Sha256Hash) -> Self {
+        Artifact::Digest(hash.as_bytes())
+    }
+}
+
 impl From<Sha256Hash> for Artifact<'static> {
     fn from(hash: Sha256Hash) -> Self {
-        Artifact::Digest(hash)
+        // Warning: This creates a memory leak to provide a 'static reference
+        // This is kept for backwards compatibility with the previous API
+        let bytes: &'static [u8] = Box::leak(Box::new(*hash.as_bytes()));
+        Artifact::Digest(bytes)
     }
 }
 
@@ -112,5 +121,9 @@ mod tests {
         let artifact = Artifact::from(digest);
         assert!(!artifact.has_bytes());
         assert_eq!(artifact.bytes(), None);
+        assert_eq!(
+            artifact.pre_computed_digest(),
+            Some(digest.as_bytes().as_slice())
+        );
     }
 }
