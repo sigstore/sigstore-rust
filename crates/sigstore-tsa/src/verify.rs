@@ -548,10 +548,11 @@ fn validate_tsa_certificate_chain(
     use rustls_pki_types::{CertificateDer, UnixTime};
     use x509_cert::der::Encode;
 
-    // If no roots are provided, skip certificate chain validation
+    // If no roots are provided, fail certificate chain validation
     if opts.roots.is_empty() {
-        tracing::debug!("No trusted roots provided, skipping certificate chain validation");
-        return Ok(());
+        return Err(Error::CertificateValidationError(
+            "No trusted roots provided for TSA certificate validation".to_string(),
+        ));
     }
 
     // Convert the signer certificate to DER format for webpki
@@ -723,20 +724,28 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_timestamp_without_roots_succeeds() {
-        // When no roots are provided, certificate chain validation is skipped
+    fn test_verify_timestamp_without_roots_fails() {
+        // When no roots are provided, verification should fail
         let timestamp_token = extract_timestamp_token(VALID_BUNDLE);
         let signature = extract_signature(VALID_BUNDLE);
 
         let opts = VerifyOpts::new();
 
-        // Should still succeed - just skips chain validation
+        // Should fail with CertificateValidationError
         let result = verify_timestamp_response(&timestamp_token, &signature, opts);
         assert!(
-            result.is_ok(),
-            "Timestamp verification without roots should succeed: {:?}",
-            result
+            result.is_err(),
+            "Timestamp verification without roots should fail"
         );
+        match result.unwrap_err() {
+            Error::CertificateValidationError(msg) => {
+                assert!(msg.contains("No trusted roots provided"));
+            }
+            other => panic!(
+                "Expected CertificateValidationError error, got: {:?}",
+                other
+            ),
+        }
     }
 
     #[test]
@@ -860,7 +869,15 @@ mod tests {
         // GitHub's TSA chain is not embedded in the CMS `SignedData.certificates`,
         // so `find_signer_certificate` needs the chain provided out-of-band.
         let tsa_certs = extract_tsa_certs(GITHUB_TRUSTED_ROOT);
-        let opts = VerifyOpts::new().with_tsa_certificates(tsa_certs);
+
+        // The last cert is the root, others are intermediates/leaf
+        let root = tsa_certs.last().unwrap().clone();
+        let intermediates = tsa_certs[..tsa_certs.len() - 1].to_vec();
+
+        let opts = VerifyOpts::new()
+            .with_root(root)
+            .with_intermediates(intermediates)
+            .with_tsa_certificates(tsa_certs);
 
         let result = verify_timestamp_response(&timestamp_token, &signature, opts);
         assert!(
