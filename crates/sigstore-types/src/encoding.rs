@@ -903,7 +903,7 @@ impl<'a> PartialEq<&'a [u8]> for Sha256Hash {
     }
 }
 
-impl<'a> PartialEq<Sha256Hash> for &'a [u8] {
+impl PartialEq<Sha256Hash> for &[u8] {
     fn eq(&self, other: &Sha256Hash) -> bool {
         *self == other.as_slice()
     }
@@ -927,7 +927,7 @@ impl<'a> PartialEq<&'a [u8]> for DigestBytes {
     }
 }
 
-impl<'a> PartialEq<DigestBytes> for &'a [u8] {
+impl PartialEq<DigestBytes> for &[u8] {
     fn eq(&self, other: &DigestBytes) -> bool {
         *self == other.as_bytes()
     }

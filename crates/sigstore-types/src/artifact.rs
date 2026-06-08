@@ -140,9 +140,6 @@ mod tests {
         let artifact = Artifact::from(&digest);
         assert!(!artifact.has_bytes());
         assert_eq!(artifact.bytes(), None);
-        assert_eq!(
-            artifact.pre_computed_digest(),
-            Some(raw_bytes.as_slice())
-        );
+        assert_eq!(artifact.pre_computed_digest(), Some(raw_bytes.as_slice()));
     }
 }
