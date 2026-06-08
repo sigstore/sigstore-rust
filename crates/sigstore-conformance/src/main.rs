@@ -10,7 +10,7 @@ use sigstore_sign::{SigningConfig as SignerSigningConfig, SigningContext};
 use sigstore_trust_root::{
     SigningConfig as TufSigningConfig, TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT,
 };
-use sigstore_types::{Bundle, Sha256Hash, SignatureContent};
+use sigstore_types::{Bundle, Sha256Hash};
 use sigstore_verify::{verify, VerificationPolicy};
 
 use std::env;
@@ -305,58 +305,6 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             return Err(format!(
                 "Invalid SHA256 digest length: expected 32 bytes, got {}",
                 digest_bytes.len()
-            )
-            .into());
-        }
-
-        // Extract expected hash from bundle
-        let expected_hash = match &bundle.content {
-            SignatureContent::MessageSignature(msg_sig) => {
-                if let Some(digest) = &msg_sig.message_digest {
-                    digest.digest.as_bytes().to_vec()
-                } else {
-                    return Err("Bundle does not contain message digest for verification".into());
-                }
-            }
-            SignatureContent::DsseEnvelope(envelope) => {
-                if envelope.payload_type == "application/vnd.in-toto+json" {
-                    let payload_bytes = envelope.payload.as_bytes();
-                    let payload_str = String::from_utf8(payload_bytes.to_vec())
-                        .map_err(|e| format!("Invalid UTF-8 in payload: {}", e))?;
-                    let statement: serde_json::Value = serde_json::from_str(&payload_str)
-                        .map_err(|e| format!("Failed to parse statement: {}", e))?;
-
-                    if let Some(subjects) = statement.get("subject").and_then(|s| s.as_array()) {
-                        if let Some(subject) = subjects.first() {
-                            if let Some(sha256) = subject
-                                .get("digest")
-                                .and_then(|d| d.get("sha256"))
-                                .and_then(|h| h.as_str())
-                            {
-                                hex::decode(sha256).map_err(|e| {
-                                    format!("Failed to decode subject digest: {}", e)
-                                })?
-                            } else {
-                                return Err("No sha256 digest in subject".into());
-                            }
-                        } else {
-                            return Err("No subjects in statement".into());
-                        }
-                    } else {
-                        return Err("No subject array in statement".into());
-                    }
-                } else {
-                    return Err("DSSE envelope does not contain in-toto statement".into());
-                }
-            }
-        };
-
-        // Verify that the provided digest matches the one in the bundle
-        if expected_hash != digest_bytes {
-            return Err(format!(
-                "Digest mismatch: provided {} but bundle contains {}",
-                hex::encode(&digest_bytes),
-                hex::encode(&expected_hash)
             )
             .into());
         }
