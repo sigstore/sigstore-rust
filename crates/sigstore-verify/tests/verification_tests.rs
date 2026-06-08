@@ -1136,3 +1136,37 @@ fn test_verify_dsse_with_hashedrekord_v002() {
     );
     assert!(result.unwrap().success);
 }
+
+#[test]
+fn test_verify_dsse_with_key_fails_with_tampered_artifact() {
+    use sigstore_verify::verify_with_key;
+
+    let bundle =
+        Bundle::from_json(CONDA_ATTESTATION_BUNDLE).expect("Failed to parse conda attestation");
+
+    // Extract the public key from the signing certificate inside the bundle
+    let cert = bundle
+        .signing_certificate()
+        .expect("Should have a signing certificate");
+    let cert_info = sigstore_crypto::parse_certificate_info(cert.as_bytes())
+        .expect("Failed to parse certificate info");
+    let public_key = cert_info.public_key;
+
+    // Use a completely different/tampered package content
+    let tampered_package = b"this is not the original package content";
+
+    // Verify using key-based verification. This should fail because the tampered package
+    // does not match the subject in the in-toto statement payload of the DSSE envelope.
+    let result = verify_with_key(
+        tampered_package.as_slice(),
+        &bundle,
+        &public_key,
+        &production_root(),
+    );
+
+    assert!(
+        result.is_err(),
+        "Key-based verification of DSSE envelope must fail when artifact does not match the payload subjects. Result was: {:?}",
+        result
+    );
+}
