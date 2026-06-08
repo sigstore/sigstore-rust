@@ -97,36 +97,15 @@ pub struct TimestampResult {
     pub time: Timestamp,
 }
 
-/// Verify an RFC 3161 timestamp token (ContentInfo).
+/// Parse a timestamp token and return the extracted TstInfo and SignedData.
 ///
-/// This function:
-/// 1. Parses the timestamp token (DER encoded ContentInfo)
-/// 2. Extracts the TSTInfo to get the timestamp
-/// 3. Verifies the message imprint (hash) matches the signature bytes
-/// 4. Verifies the CMS signature using the embedded or provided TSA certificate
-/// 5. Validates the TSA certificate chain to a trusted root
-///
-/// # Arguments
-///
-/// * `timestamp_token_bytes` - The RFC 3161 timestamp token bytes (DER encoded ContentInfo)
-/// * `signature_bytes` - The signature that was timestamped
-/// * `opts` - Verification options including trusted roots and validity period
-///
-/// # Returns
-///
-/// Returns `Ok(TimestampResult)` if verification succeeds, otherwise returns an error.
-pub fn verify_timestamp_response(
-    timestamp_token_bytes: &[u8],
-    signature_bytes: &[u8],
-    opts: VerifyOpts<'_>,
-) -> Result<TimestampResult> {
+/// This function supports both `TimeStampResp` and direct `ContentInfo` (TimeStampToken) formats.
+pub fn parse_timestamp_token(timestamp_token_bytes: &[u8]) -> Result<(TstInfo, SignedData)> {
     use cms::content_info::ContentInfo;
     use x509_cert::der::{Decode, Encode};
 
-    tracing::debug!("Starting RFC 3161 timestamp verification");
-
     // Try to parse as TimeStampResp first, if that fails, try as ContentInfo
-    let (content_info, _token_bytes) = match TimeStampResp::from_der(timestamp_token_bytes) {
+    let content_info = match TimeStampResp::from_der(timestamp_token_bytes) {
         Ok(resp) => {
             // Check status
             if resp.status.status != PkiStatus::Granted as u8
@@ -141,24 +120,20 @@ pub fn verify_timestamp_response(
             let token_any = resp.time_stamp_token.ok_or(Error::ParseError(
                 "TimeStampResp missing timeStampToken".to_string(),
             ))?;
-            // We need the DER bytes of the token for signature verification
+            // We need the DER bytes of the token for ContentInfo parsing
             let bytes = token_any
                 .to_der()
                 .map_err(|e| Error::ParseError(format!("failed to re-encode token: {}", e)))?;
 
             // Parse ContentInfo from bytes
-            let token = ContentInfo::from_der(&bytes).map_err(|e| {
+            ContentInfo::from_der(&bytes).map_err(|e| {
                 Error::ParseError(format!("failed to decode ContentInfo from token: {}", e))
-            })?;
-
-            (token, bytes)
+            })?
         }
         Err(_) => {
             // Try as ContentInfo directly
-            let token = ContentInfo::from_der(timestamp_token_bytes).map_err(|e| {
-                Error::ParseError(format!("failed to decode TimeStampToken: {}", e))
-            })?;
-            (token, timestamp_token_bytes.to_vec())
+            ContentInfo::from_der(timestamp_token_bytes)
+                .map_err(|e| Error::ParseError(format!("failed to decode TimeStampToken: {}", e)))?
         }
     };
 
@@ -195,6 +170,36 @@ pub fn verify_timestamp_response(
     } else {
         return Err(Error::NoTstInfo);
     };
+
+    Ok((tst_info, signed_data))
+}
+
+/// Verify an RFC 3161 timestamp token (ContentInfo).
+///
+/// This function:
+/// 1. Parses the timestamp token (DER encoded ContentInfo)
+/// 2. Extracts the TSTInfo to get the timestamp
+/// 3. Verifies the message imprint (hash) matches the signature bytes
+/// 4. Verifies the CMS signature using the embedded or provided TSA certificate
+/// 5. Validates the TSA certificate chain to a trusted root
+///
+/// # Arguments
+///
+/// * `timestamp_token_bytes` - The RFC 3161 timestamp token bytes (DER encoded ContentInfo)
+/// * `signature_bytes` - The signature that was timestamped
+/// * `opts` - Verification options including trusted roots and validity period
+///
+/// # Returns
+///
+/// Returns `Ok(TimestampResult)` if verification succeeds, otherwise returns an error.
+pub fn verify_timestamp_response(
+    timestamp_token_bytes: &[u8],
+    signature_bytes: &[u8],
+    opts: VerifyOpts<'_>,
+) -> Result<TimestampResult> {
+    tracing::debug!("Starting RFC 3161 timestamp verification");
+
+    let (tst_info, signed_data) = parse_timestamp_token(timestamp_token_bytes)?;
 
     // Verify the message imprint (hash of the signature) matches
     verify_message_imprint(&tst_info, signature_bytes)?;
@@ -908,5 +913,14 @@ mod tests {
 
         assert_eq!(opts.roots.len(), 2);
         assert_eq!(opts.intermediates.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_timestamp_token_extracts_nonce() {
+        let timestamp_token = extract_timestamp_token(VALID_BUNDLE);
+        let (tst_info, _) = parse_timestamp_token(&timestamp_token).unwrap();
+
+        // Verify that the nonce is correctly extracted
+        assert!(tst_info.nonce.is_some());
     }
 }

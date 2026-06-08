@@ -1,6 +1,6 @@
 //! TSA client for RFC 3161 Time-Stamp Protocol
 
-use crate::asn1::{AlgorithmIdentifier, Asn1MessageImprint, TimeStampReq, TimeStampResp};
+use crate::asn1::{AlgorithmIdentifier, Asn1MessageImprint, TimeStampReq};
 use crate::error::{Error, Result};
 use sigstore_types::SignatureBytes;
 use sigstore_types::TimestampToken;
@@ -77,15 +77,17 @@ impl TimestampClient {
             .await
             .map_err(|e| Error::Http(e.to_string()))?;
 
-        // Parse the response
-        let tsr = TimeStampResp::from_der_bytes(&response_bytes)
-            .map_err(|e| Error::Asn1(format!("failed to decode response: {}", e)))?;
+        // Parse the response and extract TstInfo
+        let (tst_info, _) = crate::verify::parse_timestamp_token(&response_bytes)?;
 
-        if !tsr.is_success() {
-            return Err(Error::InvalidResponse(format!(
-                "TSA returned status {:?}",
-                tsr.status.status_enum()
-            )));
+        // Verify the nonce matches the request nonce
+        if let Some(req_nonce) = &request.nonce {
+            if tst_info.nonce.as_ref() != Some(req_nonce) {
+                return Err(Error::InvalidResponse(format!(
+                    "TSA response nonce mismatch: expected {:?}, got {:?}",
+                    req_nonce, tst_info.nonce
+                )));
+            }
         }
 
         // Return the timestamp token
