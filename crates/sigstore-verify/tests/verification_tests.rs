@@ -30,7 +30,7 @@ fn extract_artifact_digest(bundle: &Bundle) -> Option<Sha256Hash> {
         sigstore_verify::types::SignatureContent::MessageSignature(msg_sig) => msg_sig
             .message_digest
             .as_ref()
-            .and_then(|d| Sha256Hash::try_from_slice(d.digest.as_bytes()).ok()),
+            .and_then(|d| Sha256Hash::try_from(&d.digest).ok()),
     }
 }
 

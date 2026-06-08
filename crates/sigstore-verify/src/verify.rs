@@ -408,7 +408,7 @@ impl Verifier {
                 let artifact_hash = compute_artifact_digest_algo(&artifact, digest.algorithm)?;
 
                 // Compare the digest in the bundle with the computed artifact hash
-                if digest.digest.as_bytes() != artifact_hash.as_slice() {
+                if digest.digest != artifact_hash {
                     return Err(Error::Verification(
                         "message digest in bundle does not match artifact hash".to_string(),
                     ));
@@ -599,7 +599,7 @@ pub fn verify_with_key<'a>(
             // Verify message digest matches artifact
             if let Some(ref digest) = msg_sig.message_digest {
                 let artifact_hash = compute_artifact_digest_algo(&artifact, digest.algorithm)?;
-                if digest.digest.as_bytes() != artifact_hash.as_slice() {
+                if digest.digest != artifact_hash {
                     return Err(Error::Verification(
                         "message digest in bundle does not match artifact hash".to_string(),
                     ));

@@ -4,7 +4,7 @@
 //! Artifacts can be provided as raw bytes or as pre-computed digests, allowing
 //! for efficient handling of large files without loading them entirely into memory.
 
-use crate::Sha256Hash;
+use crate::{DigestBytes, Sha256Hash};
 
 /// An artifact to be signed or verified
 ///
@@ -91,6 +91,12 @@ impl<'a> From<&'a Sha256Hash> for Artifact<'a> {
     }
 }
 
+impl<'a> From<&'a DigestBytes> for Artifact<'a> {
+    fn from(digest: &'a DigestBytes) -> Self {
+        Artifact::Digest(digest.as_bytes())
+    }
+}
+
 impl From<Sha256Hash> for Artifact<'static> {
     fn from(hash: Sha256Hash) -> Self {
         // Warning: This creates a memory leak to provide a 'static reference
@@ -124,6 +130,19 @@ mod tests {
         assert_eq!(
             artifact.pre_computed_digest(),
             Some(digest.as_bytes().as_slice())
+        );
+    }
+
+    #[test]
+    fn test_artifact_from_digest_bytes() {
+        let raw_bytes = vec![5u8; 32];
+        let digest = DigestBytes::from_bytes(raw_bytes.clone());
+        let artifact = Artifact::from(&digest);
+        assert!(!artifact.has_bytes());
+        assert_eq!(artifact.bytes(), None);
+        assert_eq!(
+            artifact.pre_computed_digest(),
+            Some(raw_bytes.as_slice())
         );
     }
 }
