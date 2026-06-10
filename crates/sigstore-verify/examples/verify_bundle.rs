@@ -203,7 +203,7 @@ async fn main() {
                 process::exit(1);
             }
         };
-        let artifact = Artifact::from(digest);
+        let artifact = Artifact::from(&digest);
         verify(artifact, &bundle, &policy, &trusted_root)
     } else {
         // Read artifact file

@@ -5,10 +5,10 @@
 use crate::error::{Error, Result};
 use sigstore_bundle::validate_bundle_with_options;
 use sigstore_bundle::ValidationOptions;
-use sigstore_crypto::parse_certificate_info;
+use sigstore_crypto::{parse_certificate_info, SigningScheme};
 use sigstore_trust_root::TrustedRoot;
 
-use sigstore_types::{Artifact, Bundle, SignatureContent, Statement};
+use sigstore_types::{Artifact, Bundle, HashAlgorithm, SignatureContent, Statement};
 
 /// Default clock skew tolerance in seconds (60 seconds = 1 minute)
 pub const DEFAULT_CLOCK_SKEW_SECONDS: i64 = 60;
@@ -414,10 +414,13 @@ impl Verifier {
                     ));
                 }
             }
+
+            // Cryptographically verify the signature over the artifact. This runs
+            // regardless of `policy.verify_tlog` so the signature is always checked;
+            // the transparency-log path (step 8) performs an equivalent check when
+            // enabled, but must not be the only place verification happens.
+            verify_message_signature_crypto(&cert_info, msg_sig, &artifact)?;
         }
-        // Note: For hashedrekord (MessageSignature), the signature verification
-        // is performed in step (8) by verify_hashedrekord_entries, which properly
-        // handles prehashed signatures.
 
         // (8): Verify the transparency log entry's consistency against the other
         //      materials, to prevent variants of CVE-2022-36056.
@@ -429,7 +432,6 @@ impl Verifier {
     }
 }
 
-use sigstore_types::HashAlgorithm;
 fn compute_artifact_digest_algo(artifact: &Artifact<'_>, algo: HashAlgorithm) -> Result<Vec<u8>> {
     match artifact {
         Artifact::Bytes(bytes) => match algo {
@@ -452,29 +454,55 @@ fn compute_artifact_digest_algo(artifact: &Artifact<'_>, algo: HashAlgorithm) ->
     }
 }
 
-use sigstore_crypto::SigningScheme;
-fn compute_artifact_digest_for_scheme(
-    artifact: &Artifact<'_>,
+/// Verify `signature` over `artifact` with an already-resolved signing scheme.
+///
+/// Raw bytes are verified directly; a pre-computed digest uses prehashed
+/// verification and fails closed if the scheme can't be prehashed (e.g. Ed25519),
+/// since the original bytes aren't available to verify over.
+pub(crate) fn verify_signature_over_artifact(
+    public_key: &sigstore_types::DerPublicKey,
     scheme: SigningScheme,
-) -> Result<Vec<u8>> {
-    let algo = match scheme {
-        SigningScheme::EcdsaP256Sha256
-        | SigningScheme::EcdsaP384Sha256
-        | SigningScheme::RsaPssSha256
-        | SigningScheme::RsaPkcs1Sha256 => HashAlgorithm::Sha2256,
-        SigningScheme::EcdsaP256Sha384
-        | SigningScheme::EcdsaP384Sha384
-        | SigningScheme::RsaPssSha384
-        | SigningScheme::RsaPkcs1Sha384 => HashAlgorithm::Sha2384,
-        SigningScheme::RsaPssSha512 | SigningScheme::RsaPkcs1Sha512 => HashAlgorithm::Sha2512,
-        _ => {
-            return Err(Error::Verification(format!(
-                "Unsupported scheme for prehashed verification: {:?}",
-                scheme
-            )))
+    signature: &sigstore_types::SignatureBytes,
+    artifact: &Artifact<'_>,
+) -> Result<()> {
+    let result = match artifact {
+        Artifact::Bytes(bytes) => {
+            sigstore_crypto::verify_signature(public_key, bytes, signature, scheme)
+        }
+        Artifact::Digest(hash) => {
+            if !scheme.supports_prehashed() {
+                return Err(Error::Verification(format!(
+                    "cannot verify signature with digest-only - scheme {} does not support prehashed mode",
+                    scheme.name()
+                )));
+            }
+            sigstore_crypto::verify_signature_prehashed(public_key, hash, signature, scheme)
         }
     };
-    compute_artifact_digest_algo(artifact, algo)
+    result.map_err(|e| Error::Verification(format!("signature verification failed: {}", e)))
+}
+
+/// Cryptographically verify a `MessageSignature`'s signature over the artifact
+/// using the signing certificate's public key.
+///
+/// This is intentionally independent of transparency-log verification. Without
+/// it, a `MessageSignature` bundle verified with `policy.verify_tlog == false`
+/// would only have its `messageDigest` compared against the artifact and its
+/// signature would never be cryptographically checked. The signature hash is
+/// resolved from the certificate's key algorithm plus the bundle's declared
+/// `messageDigest.algorithm` (falling back to the key's default scheme).
+pub(crate) fn verify_message_signature_crypto(
+    cert_info: &sigstore_crypto::CertificateInfo,
+    msg_sig: &sigstore_types::bundle::MessageSignature,
+    artifact: &Artifact<'_>,
+) -> Result<()> {
+    let scheme = match &msg_sig.message_digest {
+        Some(digest) => cert_info
+            .key_algorithm
+            .resolve_signing_scheme(digest.algorithm)?,
+        None => cert_info.key_algorithm.default_signing_scheme(),
+    };
+    verify_signature_over_artifact(&cert_info.public_key, scheme, &msg_sig.signature, artifact)
 }
 
 /// Convenience function to verify an artifact against a bundle
@@ -607,40 +635,12 @@ pub fn verify_with_key<'a>(
             }
 
             // Verify signature over the artifact
-            // Use prehashed verification if supported
-            if signing_scheme.supports_prehashed() {
-                let artifact_hash = compute_artifact_digest_for_scheme(&artifact, signing_scheme)?;
-                sigstore_crypto::verify_signature_prehashed(
-                    public_key,
-                    &artifact_hash,
-                    &msg_sig.signature,
-                    signing_scheme,
-                )
-                .map_err(|e| {
-                    Error::Verification(format!("signature verification failed: {}", e))
-                })?;
-            } else {
-                // For non-prehashed schemes, we need the original bytes
-                match &artifact {
-                    Artifact::Bytes(bytes) => {
-                        sigstore_crypto::verify_signature(
-                            public_key,
-                            bytes,
-                            &msg_sig.signature,
-                            signing_scheme,
-                        )
-                        .map_err(|e| {
-                            Error::Verification(format!("signature verification failed: {}", e))
-                        })?;
-                    }
-                    Artifact::Digest(_) => {
-                        return Err(Error::Verification(
-                            "cannot verify signature with digest-only for this key type"
-                                .to_string(),
-                        ));
-                    }
-                }
-            }
+            verify_signature_over_artifact(
+                public_key,
+                signing_scheme,
+                &msg_sig.signature,
+                &artifact,
+            )?;
         }
         SignatureContent::DsseEnvelope(envelope) => {
             let payload_bytes = envelope.decode_payload();
