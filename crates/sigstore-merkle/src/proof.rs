@@ -241,7 +241,7 @@ fn expected_inclusion_proof_length(leaf_index: u64, tree_size: u64) -> usize {
         }
         // Move to parent level
         index /= 2;
-        size = (size + 1) / 2;
+        size = (size / 2) + (size % 2);
     }
 
     count
