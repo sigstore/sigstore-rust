@@ -129,7 +129,8 @@ async fn main() {
             .await
             .expect("Failed to fetch production config via TUF")
     };
-    let base_config = SigningConfig::from_tuf_config(&tuf_config);
+    let base_config = SigningConfig::from_tuf_config(&tuf_config)
+        .expect("Missing required endpoints in TUF config");
 
     let config = if use_v2 {
         base_config.with_rekor_version(RekorApiVersion::V2)

@@ -119,7 +119,7 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
 
     let signing_config = if let Some(config_path) = &_signing_config {
         let tuf_config = TufSigningConfig::from_file(config_path)?;
-        SignerSigningConfig::from_tuf_config(&tuf_config)
+        SignerSigningConfig::from_tuf_config(&tuf_config)?
     } else if staging {
         SignerSigningConfig::staging()
     } else {
