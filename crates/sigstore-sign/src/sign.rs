@@ -215,7 +215,7 @@ impl Signer {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let context = SigningContext::production();
-    /// let token = IdentityToken::new("your-token-here".to_string());
+    /// let token = IdentityToken::from_jwt("header.payload.signature")?;
     /// let signer = context.signer(token);
     /// let artifact = b"hello world";
     /// let bundle = signer.sign(artifact.as_slice()).await?;
@@ -366,7 +366,7 @@ impl Signer {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let context = SigningContext::production();
-    /// let token = IdentityToken::new("your-token-here".to_string());
+    /// let token = IdentityToken::from_jwt("header.payload.signature")?;
     /// let signer = context.signer(token);
     ///
     /// // Create attestation with pre-computed digest (no raw bytes needed!)
@@ -611,7 +611,9 @@ mod tests {
     #[tokio::test]
     async fn test_create_dsse_rekor_entry_invalid_signature_count() {
         let context = SigningContext::new();
-        let token = IdentityToken::new("dummy-token".to_string());
+        let dummy_jwt =
+            "eyJhbGciOiJub25lIn0.eyJpc3MiOiJ0ZXN0Iiwic3ViIjoidGVzdCIsImV4cCI6MH0.signature";
+        let token = IdentityToken::from_jwt(dummy_jwt).unwrap();
         let signer = context.signer(token);
 
         let certificate = DerCertificate::new(vec![0x30, 0x00]);
