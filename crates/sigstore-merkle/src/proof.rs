@@ -4,7 +4,7 @@
 //! The algorithm follows the reference implementations from sigstore-python and sigstore-go.
 
 use crate::error::{Error, Result};
-use crate::tree::{bit_length, hash_children};
+use crate::tree::hash_children;
 use sigstore_types::Sha256Hash;
 
 /// Verify an inclusion proof for a leaf in a Merkle tree
@@ -216,7 +216,8 @@ fn decompose_inclusion_proof(index: u64, tree_size: u64) -> Result<(usize, usize
 
 /// Calculate the inner proof size for a given index and tree size
 fn inner_proof_size(index: u64, tree_size: u64) -> usize {
-    bit_length(index ^ (tree_size - 1)) as usize
+    let diff = index ^ (tree_size - 1);
+    64 - diff.leading_zeros() as usize
 }
 
 /// Calculate the expected inclusion proof length for a given leaf index and tree size
@@ -241,7 +242,7 @@ fn expected_inclusion_proof_length(leaf_index: u64, tree_size: u64) -> usize {
         }
         // Move to parent level
         index /= 2;
-        size = (size + 1) / 2;
+        size = (size / 2) + (size % 2);
     }
 
     count
