@@ -111,35 +111,6 @@ impl IdentityToken {
         }
     }
 
-    /// Create from raw token string without parsing
-    pub fn new(token: impl Into<String>) -> Self {
-        let raw = token.into();
-        // Try to parse, fall back to empty claims
-        let claims = Self::parse_claims(&raw).unwrap_or_else(|_| TokenClaims {
-            iss: String::new(),
-            sub: String::new(),
-            aud: Audience::None,
-            exp: 0,
-            iat: 0,
-            email: None,
-            email_verified: None,
-            federated_claims: None,
-        });
-        Self { raw, claims }
-    }
-
-    fn parse_claims(token: &str) -> Result<TokenClaims> {
-        let parts: Vec<&str> = token.split('.').collect();
-        if parts.len() != 3 {
-            return Err(Error::Token("invalid JWT format".to_string()));
-        }
-        let payload = URL_SAFE_NO_PAD
-            .decode(parts[1])
-            .map_err(|e| Error::Token(format!("failed to decode payload: {}", e)))?;
-        serde_json::from_slice(&payload)
-            .map_err(|e| Error::Token(format!("failed to parse claims: {}", e)))
-    }
-
     /// Get the raw JWT string
     pub fn raw(&self) -> &str {
         &self.raw

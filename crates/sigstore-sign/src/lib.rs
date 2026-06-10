@@ -10,7 +10,7 @@
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let context = SigningContext::production();
-//! let token = IdentityToken::new("your-identity-token".to_string());
+//! let token = IdentityToken::from_jwt("header.payload.signature")?;
 //! let signer = context.signer(token);
 //!
 //! let artifact = b"hello world";
