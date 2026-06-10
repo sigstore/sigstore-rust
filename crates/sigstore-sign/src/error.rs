@@ -9,6 +9,10 @@ pub enum Error {
     #[error("Signing error: {0}")]
     Signing(String),
 
+    /// Config error
+    #[error("Config error: {0}")]
+    Config(String),
+
     /// Types error
     #[error("Types error: {0}")]
     Types(#[from] sigstore_types::Error),

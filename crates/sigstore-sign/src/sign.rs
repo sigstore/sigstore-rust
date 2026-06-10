@@ -57,8 +57,9 @@ impl SigningConfig {
     pub fn production() -> Self {
         Self::from_tuf_config(
             &TufSigningConfig::from_json(SIGSTORE_PRODUCTION_SIGNING_CONFIG)
-                .expect("embedded config is valid"),
+                .expect("Failed to parse embedded production config"),
         )
+        .expect("Failed to find required endpoints in embedded production config")
     }
 
     /// Create configuration for Sigstore staging instance
@@ -68,8 +69,9 @@ impl SigningConfig {
     pub fn staging() -> Self {
         Self::from_tuf_config(
             &TufSigningConfig::from_json(SIGSTORE_STAGING_SIGNING_CONFIG)
-                .expect("embedded config is valid"),
+                .expect("Failed to parse embedded staging config"),
         )
+        .expect("Failed to find required endpoints in embedded staging config")
     }
 
     /// Create configuration from a TUF signing config
@@ -80,7 +82,7 @@ impl SigningConfig {
     /// # Arguments
     ///
     /// * `tuf_config` - The signing config from TUF
-    pub fn from_tuf_config(tuf_config: &TufSigningConfig) -> Self {
+    pub fn from_tuf_config(tuf_config: &TufSigningConfig) -> Result<Self> {
         Self::from_tuf_config_with_rekor_version(tuf_config, None)
     }
 
@@ -93,11 +95,11 @@ impl SigningConfig {
     pub fn from_tuf_config_with_rekor_version(
         tuf_config: &TufSigningConfig,
         force_rekor_version: Option<u32>,
-    ) -> Self {
+    ) -> Result<Self> {
         let fulcio_url = tuf_config
             .get_fulcio_url()
             .map(|e| e.url.clone())
-            .unwrap_or_else(|| "https://fulcio.sigstore.dev".to_string());
+            .ok_or_else(|| Error::Config("Missing Fulcio URL in TUF config".to_string()))?;
 
         let (rekor_url, rekor_api_version) =
             if let Some(rekor) = tuf_config.get_rekor_url(force_rekor_version) {
@@ -108,23 +110,20 @@ impl SigningConfig {
                 };
                 (rekor.url.clone(), version)
             } else {
-                (
-                    "https://rekor.sigstore.dev".to_string(),
-                    RekorApiVersion::V1,
-                )
+                return Err(Error::Config("Missing Rekor URL in TUF config".to_string()));
             };
 
         let tsa_url = tuf_config.get_tsa_url().map(|e| e.url.clone());
         let oidc_url = tuf_config.get_oidc_url().map(|e| e.url.clone());
 
-        Self {
+        Ok(Self {
             fulcio_url,
             rekor_url,
             tsa_url,
             signing_scheme: SigningScheme::EcdsaP256Sha256,
             rekor_api_version,
             oidc_url,
-        }
+        })
     }
 
     /// Set the Rekor API version and automatically update the URL

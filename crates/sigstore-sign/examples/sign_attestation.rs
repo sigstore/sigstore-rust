@@ -149,7 +149,8 @@ async fn main() {
             .await
             .expect("Failed to fetch production config via TUF")
     };
-    let config = SigningConfig::from_tuf_config(&tuf_config);
+    let config = SigningConfig::from_tuf_config(&tuf_config)
+        .expect("Missing required endpoints in TUF config");
 
     println!("  Fulcio URL: {}", config.fulcio_url);
     println!("  Rekor URL: {}", config.rekor_url);
