@@ -8,7 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [features]
-default = ["tuf"]
+default = ["tuf", "rustls"]
+rustls = ["sigstore-crypto/rustls"]
+native-tls = ["sigstore-crypto/native-tls"]
 tuf = [
   "tough",
   "tokio",

@@ -1,12 +1,18 @@
-//! Key generation and signing using aws-lc-rs
+//! Key generation and signing
 
 use crate::error::{Error, Result};
+#[cfg(feature = "rustls")]
 use aws_lc_rs::{
     rand::SystemRandom,
-    signature::{EcdsaKeyPair, KeyPair as AwsKeyPair, ECDSA_P256_SHA256_ASN1_SIGNING},
+    signature::{EcdsaKeyPair, KeyPair as _, ECDSA_P256_SHA256_ASN1_SIGNING},
 };
 use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, SECP_256_R_1};
 use der::{asn1::BitString, Encode as _};
+#[cfg(feature = "native-tls")]
+use ring::{
+    rand::SystemRandom,
+    signature::{EcdsaKeyPair, KeyPair as _, ECDSA_P256_SHA256_ASN1_SIGNING},
+};
 use sigstore_types::{DerPublicKey, SignatureBytes};
 use spki::{AlgorithmIdentifier, SubjectPublicKeyInfo};
 
@@ -91,7 +97,12 @@ impl KeyPair {
         let rng = SystemRandom::new();
         let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng)
             .map_err(|_| Error::KeyGeneration("failed to generate ECDSA P-256 key".to_string()))?;
-        let key_pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, pkcs8.as_ref())?;
+        #[cfg(feature = "rustls")]
+        let key_pair =
+            EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, pkcs8.as_ref())?;
+        #[cfg(feature = "native-tls")]
+        let key_pair =
+            EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, pkcs8.as_ref(), &rng)?;
         Ok(KeyPair::EcdsaP256(key_pair))
     }
 

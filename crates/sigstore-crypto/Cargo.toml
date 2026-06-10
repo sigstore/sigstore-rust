@@ -7,9 +7,15 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = ["rustls"]
+rustls = ["dep:aws-lc-rs"]
+native-tls = ["dep:ring"]
+
 [dependencies]
 sigstore-types = { workspace = true }
-aws-lc-rs = { workspace = true }
+aws-lc-rs = { workspace = true, optional = true }
+ring = { workspace = true, optional = true }
 sha2 = { workspace = true }
 digest = { workspace = true }
 signature = { workspace = true }

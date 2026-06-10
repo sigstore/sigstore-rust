@@ -50,10 +50,18 @@ rustls = [
   "sigstore-bundle/rustls",
   "sigstore-rekor/rustls",
   "sigstore-tsa/rustls",
+  "sigstore-trust-root/rustls",
+  "sigstore-crypto/rustls",
+  "sigstore-merkle/rustls",
+  "rustls-webpki/aws-lc-rs",
 ]
 native-tls = [
   "sigstore-bundle/native-tls",
   "sigstore-rekor/native-tls",
   "sigstore-tsa/native-tls",
+  "sigstore-trust-root/native-tls",
+  "sigstore-crypto/native-tls",
+  "sigstore-merkle/native-tls",
+  "rustls-webpki/ring",
 ]
 tuf = ["sigstore-trust-root/tuf"]

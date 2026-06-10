@@ -22,6 +22,8 @@ rustls = [
   "sigstore-rekor/rustls",
   "sigstore-tsa/rustls",
   "sigstore-bundle/rustls",
+  "sigstore-trust-root/rustls",
+  "sigstore-crypto/rustls",
 ]
 native-tls = [
   "sigstore-sign/native-tls",
@@ -31,6 +33,8 @@ native-tls = [
   "sigstore-rekor/native-tls",
   "sigstore-tsa/native-tls",
   "sigstore-bundle/native-tls",
+  "sigstore-trust-root/native-tls",
+  "sigstore-crypto/native-tls",
 ]
 
 [dependencies]

@@ -9,8 +9,8 @@ rust-version.workspace = true
 
 [features]
 default = ["rustls"]
-rustls = ["sigstore-tsa/rustls", "sigstore-rekor/rustls"]
-native-tls = ["sigstore-tsa/native-tls", "sigstore-rekor/native-tls"]
+rustls = ["sigstore-tsa/rustls", "sigstore-rekor/rustls", "sigstore-crypto/rustls", "sigstore-merkle/rustls"]
+native-tls = ["sigstore-tsa/native-tls", "sigstore-rekor/native-tls", "sigstore-crypto/native-tls", "sigstore-merkle/native-tls"]
 
 [dependencies]
 sigstore-types = { workspace = true }

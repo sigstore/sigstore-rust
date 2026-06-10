@@ -1,6 +1,10 @@
-//! Hashing utilities using aws-lc-rs
+//! Hashing utilities
 
+#[cfg(feature = "rustls")]
 use aws_lc_rs::digest::{self, Context, SHA256};
+#[cfg(feature = "native-tls")]
+use ring::digest::{self, Context, SHA256};
+
 use sigstore_types::Sha256Hash;
 use std::io::{self, Read};
 

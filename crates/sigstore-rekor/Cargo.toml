@@ -9,8 +9,8 @@ rust-version.workspace = true
 
 [features]
 default = ["rustls"]
-rustls = ["reqwest/rustls"]
-native-tls = ["reqwest/native-tls"]
+rustls = ["reqwest/rustls", "sigstore-crypto/rustls", "sigstore-merkle/rustls"]
+native-tls = ["reqwest/native-tls", "sigstore-crypto/native-tls", "sigstore-merkle/native-tls"]
 cache = ["sigstore-cache"]
 
 [dependencies]

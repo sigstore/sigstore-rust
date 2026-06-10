@@ -7,6 +7,11 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = ["rustls"]
+rustls = ["sigstore-crypto/rustls"]
+native-tls = ["sigstore-crypto/native-tls"]
+
 [dependencies]
 sigstore-types = { workspace = true }
 sigstore-crypto = { workspace = true }

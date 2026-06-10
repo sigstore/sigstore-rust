@@ -37,7 +37,7 @@ pub enum Error {
     #[error("Base64 error: {0}")]
     Base64(#[from] base64::DecodeError),
 
-    /// AWS-LC-RS error
+    /// Crypto backend error
     #[error("Crypto error: {0}")]
     AwsLc(String),
 
@@ -54,14 +54,30 @@ pub enum Error {
     InvalidKey(String),
 }
 
+#[cfg(feature = "rustls")]
 impl From<aws_lc_rs::error::Unspecified> for Error {
     fn from(_: aws_lc_rs::error::Unspecified) -> Self {
         Error::AwsLc("unspecified error".to_string())
     }
 }
 
+#[cfg(feature = "rustls")]
 impl From<aws_lc_rs::error::KeyRejected> for Error {
     fn from(e: aws_lc_rs::error::KeyRejected) -> Self {
+        Error::InvalidKeyFormat(e.to_string())
+    }
+}
+
+#[cfg(feature = "native-tls")]
+impl From<ring::error::Unspecified> for Error {
+    fn from(_: ring::error::Unspecified) -> Self {
+        Error::AwsLc("unspecified error".to_string())
+    }
+}
+
+#[cfg(feature = "native-tls")]
+impl From<ring::error::KeyRejected> for Error {
+    fn from(e: ring::error::KeyRejected) -> Self {
         Error::InvalidKeyFormat(e.to_string())
     }
 }
