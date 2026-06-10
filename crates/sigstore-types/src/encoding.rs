@@ -782,6 +782,170 @@ impl<'de> serde::Deserialize<'de> for Sha256Hash {
 }
 
 // ============================================================================
+// Arbitrary Digest Type (Flexible Size)
+// ============================================================================
+
+/// Arbitrary length hash digest
+///
+/// Flexible-size hash. Serializes as base64, deserializes from either hex or base64.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DigestBytes(Vec<u8>);
+
+impl DigestBytes {
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        DigestBytes(bytes)
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for DigestBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<Sha256Hash> for DigestBytes {
+    fn from(hash: Sha256Hash) -> Self {
+        DigestBytes(hash.as_bytes().to_vec())
+    }
+}
+
+impl From<&Sha256Hash> for DigestBytes {
+    fn from(hash: &Sha256Hash) -> Self {
+        DigestBytes(hash.as_bytes().to_vec())
+    }
+}
+
+impl From<&[u8]> for DigestBytes {
+    fn from(bytes: &[u8]) -> Self {
+        DigestBytes(bytes.to_vec())
+    }
+}
+
+impl serde::Serialize for DigestBytes {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(&self.0))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for DigestBytes {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        if s.len() % 2 == 0 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+            let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
+            return Ok(DigestBytes(bytes));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&s)
+            .map_err(serde::de::Error::custom)?;
+        Ok(DigestBytes(bytes))
+    }
+}
+
+impl TryFrom<DigestBytes> for Sha256Hash {
+    type Error = Error;
+
+    fn try_from(digest: DigestBytes) -> std::result::Result<Self, Self::Error> {
+        Self::try_from_slice(&digest.0)
+    }
+}
+
+impl TryFrom<&DigestBytes> for Sha256Hash {
+    type Error = Error;
+
+    fn try_from(digest: &DigestBytes) -> std::result::Result<Self, Self::Error> {
+        Self::try_from_slice(&digest.0)
+    }
+}
+
+impl From<Sha256Hash> for [u8; 32] {
+    fn from(hash: Sha256Hash) -> Self {
+        hash.0
+    }
+}
+
+impl PartialEq<DigestBytes> for Sha256Hash {
+    fn eq(&self, other: &DigestBytes) -> bool {
+        self.as_slice() == other.as_bytes()
+    }
+}
+
+impl PartialEq<Sha256Hash> for DigestBytes {
+    fn eq(&self, other: &Sha256Hash) -> bool {
+        self.as_bytes() == other.as_slice()
+    }
+}
+
+impl PartialEq<[u8; 32]> for Sha256Hash {
+    fn eq(&self, other: &[u8; 32]) -> bool {
+        &self.0 == other
+    }
+}
+
+impl PartialEq<Sha256Hash> for [u8; 32] {
+    fn eq(&self, other: &Sha256Hash) -> bool {
+        self == &other.0
+    }
+}
+
+impl<'a> PartialEq<&'a [u8]> for Sha256Hash {
+    fn eq(&self, other: &&'a [u8]) -> bool {
+        self.as_slice() == *other
+    }
+}
+
+impl PartialEq<Sha256Hash> for &[u8] {
+    fn eq(&self, other: &Sha256Hash) -> bool {
+        *self == other.as_slice()
+    }
+}
+
+impl PartialEq<Vec<u8>> for Sha256Hash {
+    fn eq(&self, other: &Vec<u8>) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl PartialEq<Sha256Hash> for Vec<u8> {
+    fn eq(&self, other: &Sha256Hash) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl<'a> PartialEq<&'a [u8]> for DigestBytes {
+    fn eq(&self, other: &&'a [u8]) -> bool {
+        self.as_bytes() == *other
+    }
+}
+
+impl PartialEq<DigestBytes> for &[u8] {
+    fn eq(&self, other: &DigestBytes) -> bool {
+        *self == other.as_bytes()
+    }
+}
+
+impl PartialEq<Vec<u8>> for DigestBytes {
+    fn eq(&self, other: &Vec<u8>) -> bool {
+        self.as_bytes() == other.as_slice()
+    }
+}
+
+impl PartialEq<DigestBytes> for Vec<u8> {
+    fn eq(&self, other: &DigestBytes) -> bool {
+        self.as_slice() == other.as_bytes()
+    }
+}
+
+// ============================================================================
 // Hex-Encoded Log ID (for Rekor V1 API compatibility)
 // ============================================================================
 
@@ -1003,5 +1167,50 @@ mod tests {
         // Round-trip
         let key2 = DerPublicKey::from_pem(&pem).unwrap();
         assert_eq!(key, key2);
+    }
+
+    #[test]
+    fn test_digest_interoperability() {
+        let raw_bytes = [5u8; 32];
+        let sha_hash = Sha256Hash::from_bytes(raw_bytes);
+        let digest_bytes = DigestBytes::from_bytes(raw_bytes.to_vec());
+
+        // From/TryFrom conversions
+        let converted_digest: DigestBytes = sha_hash.into();
+        assert_eq!(converted_digest, digest_bytes);
+
+        let converted_sha1: Sha256Hash = digest_bytes.clone().try_into().unwrap();
+        assert_eq!(converted_sha1, sha_hash);
+
+        let converted_sha2: Sha256Hash = (&digest_bytes).try_into().unwrap();
+        assert_eq!(converted_sha2, sha_hash);
+
+        let array: [u8; 32] = sha_hash.into();
+        assert_eq!(array, raw_bytes);
+
+        // Invalid length TryFrom
+        let bad_digest = DigestBytes::from_bytes(vec![1u8; 16]);
+        let bad_sha_result = Sha256Hash::try_from(bad_digest);
+        assert!(bad_sha_result.is_err());
+
+        // PartialEq comparisons
+        assert_eq!(sha_hash, digest_bytes);
+        assert_eq!(digest_bytes, sha_hash);
+
+        assert_eq!(sha_hash, raw_bytes);
+        assert_eq!(raw_bytes, sha_hash);
+
+        assert_eq!(sha_hash, raw_bytes.as_slice());
+        assert_eq!(raw_bytes.as_slice(), sha_hash);
+
+        let vec_bytes = raw_bytes.to_vec();
+        assert_eq!(sha_hash, vec_bytes);
+        assert_eq!(vec_bytes, sha_hash);
+
+        assert_eq!(digest_bytes, raw_bytes.as_slice());
+        assert_eq!(raw_bytes.as_slice(), digest_bytes);
+
+        assert_eq!(digest_bytes, vec_bytes);
+        assert_eq!(vec_bytes, digest_bytes);
     }
 }

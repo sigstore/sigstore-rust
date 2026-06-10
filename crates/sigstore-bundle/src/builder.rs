@@ -75,7 +75,7 @@ impl BundleV03 {
             SignatureContent::MessageSignature(MessageSignature {
                 message_digest: Some(sigstore_types::bundle::MessageDigest {
                     algorithm: sigstore_types::HashAlgorithm::Sha2256,
-                    digest: artifact_digest,
+                    digest: artifact_digest.into(),
                 }),
                 signature,
             }),
