@@ -394,7 +394,13 @@ impl Verifier {
                     Error::Verification(format!("failed to parse in-toto statement: {}", e))
                 })?;
 
-                if !statement.subject.is_empty() && !statement.matches_sha256(&artifact_hash_hex) {
+                if statement.subject.is_empty() {
+                    return Err(Error::Verification(
+                        "in-toto statement has no subjects: cannot bind artifact to attestation"
+                            .to_string(),
+                    ));
+                }
+                if !statement.matches_sha256(&artifact_hash_hex) {
                     return Err(Error::Verification(
                         "artifact hash does not match any subject in attestation".to_string(),
                     ));
@@ -683,7 +689,13 @@ pub fn verify_with_key<'a>(
                     Error::Verification(format!("failed to parse in-toto statement: {}", e))
                 })?;
 
-                if !statement.subject.is_empty() && !statement.matches_sha256(&artifact_hash_hex) {
+                if statement.subject.is_empty() {
+                    return Err(Error::Verification(
+                        "in-toto statement has no subjects: cannot bind artifact to attestation"
+                            .to_string(),
+                    ));
+                }
+                if !statement.matches_sha256(&artifact_hash_hex) {
                     return Err(Error::Verification(
                         "artifact hash does not match any subject in attestation".to_string(),
                     ));
