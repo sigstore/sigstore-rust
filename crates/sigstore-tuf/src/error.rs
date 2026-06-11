@@ -105,7 +105,7 @@ pub enum Error {
     },
 
     /// A length or hash recorded in a parent role did not match the child.
-    #[error("integrity check failed for {0}: length or hash mismatch")]
+    #[error("integrity check failed: {0}")]
     IntegrityMismatch(String),
 
     /// An expiry timestamp could not be parsed.

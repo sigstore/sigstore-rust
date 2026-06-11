@@ -68,8 +68,8 @@ impl Role for Root {
 
 /// A delegated targets role (the `roles` entries inside a `delegations` block).
 ///
-/// Captured so targets delegation can be implemented without a metadata-model
-/// change; the delegation *walk* itself is not wired up yet.
+/// The delegation walk that consumes these lives in
+/// [`Updater::get_targetinfo`](crate::client::Updater::get_targetinfo).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DelegatedRole {
     /// The delegated role's name.

@@ -114,6 +114,19 @@ impl<T: Role> Metadata<T> {
             }
         }
 
+        // Reject metadata written against an incompatible (future) major spec
+        // version: a 2.x file could carry semantics this client would silently
+        // misinterpret. Matches python-tuf, which compares major versions only.
+        // (A missing or non-string `spec_version` fails typed deserialization
+        // below, since every role requires the field.)
+        if let Some(sv) = signed_value.get("spec_version").and_then(Value::as_str) {
+            if sv.split('.').next() != Some("1") {
+                return Err(Error::Malformed(format!(
+                    "unsupported TUF spec_version {sv:?} (this client implements 1.x)"
+                )));
+            }
+        }
+
         let canonical_signed = canonical_json::to_canonical_bytes(signed_value)?;
         let signatures: Vec<Signature> = serde_json::from_value(signatures_value.clone())?;
         let signed: T = serde_json::from_value(signed_value.clone())?;
@@ -141,6 +154,14 @@ impl<T: Role> Metadata<T> {
         role_keys: &RoleKeys,
         role_name: &str,
     ) -> Result<()> {
+        // A threshold below 1 would make the check below pass with zero valid
+        // signatures. No legitimate metadata declares one (python-tuf rejects
+        // it at parse time); fail closed rather than verify vacuously.
+        if role_keys.threshold == 0 {
+            return Err(Error::Malformed(format!(
+                "role {role_name} declares signature threshold 0; at least 1 is required"
+            )));
+        }
         let authorized: BTreeSet<&String> = role_keys.keyids.iter().collect();
         let mut good: BTreeSet<&str> = BTreeSet::new();
         let mut seen: BTreeSet<&str> = BTreeSet::new();

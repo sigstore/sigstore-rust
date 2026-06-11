@@ -110,6 +110,33 @@ impl TrustedMetadataSet {
         ensure_not_expired(&self.root.signed, "root", now)
     }
 
+    /// Assert that the trusted timestamp, if one is loaded, has not expired as
+    /// of `now`.
+    ///
+    /// The TUF workflow requires this whenever the trusted timestamp is *used*,
+    /// not only when it is first loaded: a timestamp carried over unchanged from
+    /// an earlier refresh (the equal-version case) was last expiry-checked
+    /// against an older `now`, and accepting it indefinitely would let a mirror
+    /// freeze the client by replaying the same timestamp forever. Mirrors
+    /// python-tuf's `_check_final_timestamp`.
+    pub fn check_timestamp_expired(&self, now: jiff::Timestamp) -> Result<()> {
+        match &self.timestamp {
+            Some(ts) => ensure_not_expired(&ts.signed, "timestamp", now),
+            None => Ok(()),
+        }
+    }
+
+    /// Assert that the trusted snapshot, if one is loaded, has not expired as
+    /// of `now`. See [`TrustedMetadataSet::check_timestamp_expired`] for why
+    /// this is checked at use time, not only at load time (python-tuf's
+    /// `_check_final_snapshot`).
+    pub fn check_snapshot_expired(&self, now: jiff::Timestamp) -> Result<()> {
+        match &self.snapshot {
+            Some(snap) => ensure_not_expired(&snap.signed, "snapshot", now),
+            None => Ok(()),
+        }
+    }
+
     /// Incorporate a candidate timestamp.
     ///
     /// Verifies the `timestamp`-role signature threshold, rejects rollback of
@@ -168,6 +195,9 @@ impl TrustedMetadataSet {
             .timestamp
             .as_ref()
             .ok_or_else(|| Error::Malformed("cannot load snapshot before timestamp".to_string()))?;
+        // The timestamp authorizing this snapshot must itself still be fresh
+        // (freeze protection; python-tuf's `_check_final_timestamp`).
+        ensure_not_expired(&timestamp.signed, "timestamp", now)?;
         let pin = timestamp
             .signed
             .snapshot_meta()
@@ -228,7 +258,7 @@ impl TrustedMetadataSet {
     /// snapshot pin, verifies the `targets`-role signature threshold **against
     /// the root**, and checks expiry.
     pub fn update_targets(&mut self, bytes: &[u8], now: jiff::Timestamp) -> Result<&Targets> {
-        let new = self.verify_targets_pin(bytes, "targets")?;
+        let new = self.verify_targets_pin(bytes, "targets", now)?;
         verify_with_root(&new, &self.root.signed, "targets")?;
         ensure_not_expired(&new.signed, "targets", now)?;
         self.targets.insert("targets".to_string(), new);
@@ -258,7 +288,7 @@ impl TrustedMetadataSet {
             )));
         }
         let (keys, role_keys) = self.delegation_authority(delegator_name, role_name)?;
-        let new = self.verify_targets_pin(bytes, role_name)?;
+        let new = self.verify_targets_pin(bytes, role_name, now)?;
         new.verify_threshold(&keys, &role_keys, role_name)?;
         ensure_not_expired(&new.signed, role_name, now)?;
         self.targets.insert(role_name.to_string(), new);
@@ -268,11 +298,19 @@ impl TrustedMetadataSet {
     /// Parse a targets file and check it against the snapshot pin (length, hash,
     /// and version), without verifying signatures (the caller decides whether
     /// the authority is the root or a delegator).
-    fn verify_targets_pin(&self, bytes: &[u8], role_name: &str) -> Result<Metadata<Targets>> {
+    fn verify_targets_pin(
+        &self,
+        bytes: &[u8],
+        role_name: &str,
+        now: jiff::Timestamp,
+    ) -> Result<Metadata<Targets>> {
         let snapshot = self
             .snapshot
             .as_ref()
             .ok_or_else(|| Error::Malformed("cannot load targets before snapshot".to_string()))?;
+        // The snapshot authorizing this targets file must itself still be fresh
+        // (freeze protection; python-tuf's `_check_final_snapshot`).
+        ensure_not_expired(&snapshot.signed, "snapshot", now)?;
         let meta_name = format!("{role_name}.json");
         let pin = snapshot
             .signed
