@@ -81,6 +81,10 @@ fn metafile(bytes: &[u8], version: u64) -> Value {
 /// Assemble a complete, signed, non-consistent-snapshot repo with one
 /// delegation. Returns the repo and the pinned bootstrap root bytes.
 fn build_repo() -> (MemRepo, Vec<u8>) {
+    build_repo_with_timestamp_expiry(FAR_FUTURE)
+}
+
+fn build_repo_with_timestamp_expiry(timestamp_expires: &str) -> (MemRepo, Vec<u8>) {
     let root_kp = KeyPair::generate_ecdsa_p256().unwrap();
     let deleg_kp = KeyPair::generate_ecdsa_p256().unwrap();
     let (root_kid, root_key) = key_entry(&root_kp);
@@ -152,7 +156,7 @@ fn build_repo() -> (MemRepo, Vec<u8>) {
         "_type": "timestamp",
         "spec_version": "1.0.0",
         "version": 1,
-        "expires": FAR_FUTURE,
+        "expires": timestamp_expires,
         "meta": { "snapshot.json": metafile(&snapshot_bytes, 1) },
     });
     let timestamp_bytes = envelope(
@@ -252,6 +256,84 @@ async fn size_limit_is_enforced() {
         .await
         .expect_err("oversized timestamp must be rejected");
     assert!(err.to_string().contains("exceeds"), "got: {err}");
+}
+
+/// A mirror that keeps replaying the same (equal-version) timestamp must not
+/// be able to freeze a long-lived client past that timestamp's expiry: the
+/// equal-version "keep what we have" path still has to notice that what we
+/// have has since expired.
+#[tokio::test]
+async fn replayed_timestamp_does_not_freeze_past_expiry() {
+    let (repo, root_bytes) = build_repo_with_timestamp_expiry("2026-06-15T00:00:00Z");
+    let mut updater = Updater::new(repo, &root_bytes).unwrap();
+    updater
+        .refresh(now())
+        .await
+        .expect("refresh before expiry succeeds");
+
+    // Same repo content, but the trusted timestamp has expired in the meantime.
+    let later = "2026-07-01T00:00:00Z".parse().unwrap();
+    let err = updater
+        .refresh(later)
+        .await
+        .expect_err("unchanged expired timestamp must fail the refresh");
+    assert!(err.to_string().contains("expired"), "got: {err}");
+}
+
+/// A signature threshold of 0 must fail closed instead of verifying with zero
+/// signatures.
+#[test]
+fn zero_signature_threshold_is_rejected() {
+    let kp = KeyPair::generate_ecdsa_p256().unwrap();
+    let (kid, key) = key_entry(&kp);
+    let role = json!({ "keyids": [kid.clone()], "threshold": 0 });
+    let root_signed = json!({
+        "_type": "root",
+        "spec_version": "1.0.0",
+        "version": 1,
+        "expires": FAR_FUTURE,
+        "consistent_snapshot": false,
+        "keys": { kid.clone(): key },
+        "roles": {
+            "root": role, "timestamp": role,
+            "snapshot": role, "targets": role,
+        },
+    });
+    let root_bytes = envelope(
+        root_signed.clone(),
+        vec![signature(&root_signed, &kid, &kp)],
+    );
+    let err = sigstore_tuf::TrustedMetadataSet::from_root(&root_bytes)
+        .expect_err("threshold 0 must be rejected");
+    assert!(err.to_string().contains("threshold 0"), "got: {err}");
+}
+
+/// Metadata declaring a future major spec version must be rejected rather than
+/// interpreted with 1.x semantics.
+#[test]
+fn future_spec_version_is_rejected() {
+    let kp = KeyPair::generate_ecdsa_p256().unwrap();
+    let (kid, key) = key_entry(&kp);
+    let role = json!({ "keyids": [kid.clone()], "threshold": 1 });
+    let root_signed = json!({
+        "_type": "root",
+        "spec_version": "2.0.0",
+        "version": 1,
+        "expires": FAR_FUTURE,
+        "consistent_snapshot": false,
+        "keys": { kid.clone(): key },
+        "roles": {
+            "root": role, "timestamp": role,
+            "snapshot": role, "targets": role,
+        },
+    });
+    let root_bytes = envelope(
+        root_signed.clone(),
+        vec![signature(&root_signed, &kid, &kp)],
+    );
+    let err = sigstore_tuf::TrustedMetadataSet::from_root(&root_bytes)
+        .expect_err("spec_version 2.x must be rejected");
+    assert!(err.to_string().contains("spec_version"), "got: {err}");
 }
 
 #[tokio::test]
