@@ -191,6 +191,12 @@ impl Updater {
             .map(|m| m.version)
             .ok_or_else(|| Error::Malformed("timestamp does not pin snapshot".to_string()))?;
 
+        // Freeze protection: the timestamp we rely on here may have been kept
+        // unchanged from a previous refresh (the equal-version case), in which
+        // case its expiry was last checked against an older `now`. Re-check it
+        // before trusting anything it pins.
+        self.trusted.check_timestamp_expired(now)?;
+
         // If we already trust the snapshot the timestamp pins (e.g. seeded from
         // cache and the timestamp didn't change), reuse it instead of
         // downloading — matching python-tuf's "use valid local metadata" rule.
@@ -218,6 +224,11 @@ impl Updater {
     }
 
     async fn refresh_targets(&mut self, now: jiff::Timestamp) -> Result<()> {
+        // Freeze protection for the reuse path below, mirroring the timestamp
+        // check in `refresh_snapshot` (the fetch path re-checks this inside
+        // `update_targets`).
+        self.trusted.check_snapshot_expired(now)?;
+
         // Reuse a valid local top-level targets if the snapshot still pins its
         // version (same rationale as snapshot reuse above).
         let pinned = self
@@ -507,10 +518,19 @@ mod http {
             let targets_base = base
                 .join("targets/")
                 .map_err(|e| Error::Transport(format!("invalid targets base: {e}")))?;
+            // Timeouts defend against the slow-retrieval attack (TUF spec §1.5.10):
+            // without them a malicious mirror can hang a refresh indefinitely. The
+            // read timeout is per read operation, so large-but-flowing target
+            // downloads are unaffected; only a stalled connection trips it.
+            let client = reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .read_timeout(std::time::Duration::from_secs(60))
+                .build()
+                .map_err(|e| Error::Transport(format!("failed to build HTTP client: {e}")))?;
             Ok(Self {
                 metadata_base: base,
                 targets_base,
-                client: reqwest::Client::new(),
+                client,
             })
         }
 
@@ -528,7 +548,13 @@ mod http {
                 .await
                 .map_err(|e| Error::Transport(format!("GET {url} failed: {e}")))?;
 
-            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            // 403 is treated as "not found" alongside 404 because S3 and GCS
+            // return it for missing objects; python-tuf accepts both when
+            // probing for the next root version, and Sigstore repositories are
+            // commonly hosted on such object stores.
+            if resp.status() == reqwest::StatusCode::NOT_FOUND
+                || resp.status() == reqwest::StatusCode::FORBIDDEN
+            {
                 return Ok(None);
             }
             if !resp.status().is_success() {
