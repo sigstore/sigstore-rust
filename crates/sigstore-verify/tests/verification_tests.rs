@@ -1170,3 +1170,71 @@ fn test_verify_dsse_with_key_fails_with_tampered_artifact() {
         result
     );
 }
+
+/// Key-based verification of an untampered DSSE bundle succeeds, including
+/// the transparency log consistency checks.
+#[test]
+fn test_verify_dsse_with_key_succeeds_with_correct_artifact() {
+    use sigstore_verify::verify_with_key;
+
+    let bundle =
+        Bundle::from_json(CONDA_ATTESTATION_BUNDLE).expect("Failed to parse conda attestation");
+
+    let cert = bundle
+        .signing_certificate()
+        .expect("Should have a signing certificate");
+    let cert_info = sigstore_crypto::parse_certificate_info(cert.as_bytes())
+        .expect("Failed to parse certificate info");
+
+    let result = verify_with_key(
+        CONDA_PACKAGE,
+        &bundle,
+        &cert_info.public_key,
+        &production_root(),
+    );
+
+    assert!(
+        result.is_ok(),
+        "Key-based verification of untampered DSSE bundle should succeed: {:?}",
+        result.err()
+    );
+}
+
+/// verify_with_key must reject bundles whose transparency log entry disagrees
+/// with the bundle content (CVE-2022-36056 class), like Verifier::verify does.
+#[test]
+fn test_verify_with_key_fails_with_mismatched_log_entry_kind() {
+    use sigstore_verify::verify_with_key;
+
+    let mut json_val: serde_json::Value = serde_json::from_str(CONDA_ATTESTATION_BUNDLE).unwrap();
+    json_val["verificationMaterial"]["tlogEntries"][0]["kindVersion"]["kind"] =
+        serde_json::json!("not-a-known-kind");
+    let corrupted_bundle_json = serde_json::to_string(&json_val).unwrap();
+
+    let bundle =
+        Bundle::from_json(&corrupted_bundle_json).expect("Failed to parse corrupted bundle");
+
+    let cert = bundle
+        .signing_certificate()
+        .expect("Should have a signing certificate");
+    let cert_info = sigstore_crypto::parse_certificate_info(cert.as_bytes())
+        .expect("Failed to parse certificate info");
+
+    let result = verify_with_key(
+        CONDA_PACKAGE,
+        &bundle,
+        &cert_info.public_key,
+        &production_root(),
+    );
+
+    assert!(
+        result.is_err(),
+        "Key-based verification must fail when the log entry kind does not match the bundle content"
+    );
+    let err_msg = result.err().unwrap().to_string();
+    assert!(
+        err_msg.contains("unsupported log entry kind"),
+        "Unexpected error: {}",
+        err_msg
+    );
+}

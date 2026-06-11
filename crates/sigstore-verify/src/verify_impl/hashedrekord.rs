@@ -102,6 +102,21 @@ fn validate_certificate_match(
     body: &RekorEntryBody,
     bundle: &Bundle,
 ) -> Result<()> {
+    // Get the certificate from the bundle. Key-based bundles carry no
+    // certificate (the Rekor verifier is a public key, not a certificate),
+    // so there is nothing to compare; the signature bytes are still matched
+    // by `validate_signature_match`.
+    let bundle_cert = match &bundle.verification_material.content {
+        VerificationMaterialContent::X509CertificateChain { certificates } => {
+            certificates.first().map(|c| &c.raw_bytes)
+        }
+        VerificationMaterialContent::Certificate(cert) => Some(&cert.raw_bytes),
+        VerificationMaterialContent::PublicKey { .. } => None,
+    };
+    let Some(bundle_cert) = bundle_cert else {
+        return Ok(());
+    };
+
     // Extract certificate DER from Rekor entry
     let rekor_cert_der_opt = match body {
         RekorEntryBody::HashedRekordV001(rekord) => {
@@ -129,25 +144,11 @@ fn validate_certificate_match(
     };
 
     if let Some(rekor_cert_der) = rekor_cert_der_opt {
-        // Get the certificate from the bundle
-        let bundle_cert = match &bundle.verification_material.content {
-            VerificationMaterialContent::X509CertificateChain { certificates } => {
-                certificates.first().map(|c| &c.raw_bytes)
-            }
-            VerificationMaterialContent::Certificate(cert) => Some(&cert.raw_bytes),
-            _ => None,
-        };
-
-        if let Some(bundle_cert) = bundle_cert {
-            // Bundle certificate is DerCertificate, get raw bytes
-            let bundle_cert_der = bundle_cert.as_bytes();
-
-            // Compare certificates
-            if bundle_cert_der != rekor_cert_der {
-                return Err(Error::Verification(
-                    "certificate in bundle does not match certificate in Rekor entry".to_string(),
-                ));
-            }
+        // Compare certificates
+        if bundle_cert.as_bytes() != rekor_cert_der {
+            return Err(Error::Verification(
+                "certificate in bundle does not match certificate in Rekor entry".to_string(),
+            ));
         }
     }
 

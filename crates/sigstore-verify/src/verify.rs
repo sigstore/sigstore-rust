@@ -688,6 +688,12 @@ pub fn verify_with_key<'a>(
         }
     }
 
+    // Verify the transparency log entries' consistency against the bundle's
+    // other materials and the artifact (CVE-2022-36056 class), mirroring
+    // step 8 of `Verifier::verify`. Without this, a log entry whose body
+    // (hash, signature, verifier) disagrees with the bundle passes silently.
+    crate::verify_impl::verify_tlog_consistency(bundle, &artifact)?;
+
     Ok(result)
 }
 
