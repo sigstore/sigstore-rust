@@ -10,8 +10,14 @@ use sigstore_types::{Artifact, Bundle, Sha256Hash, SignatureContent, Transparenc
 use x509_cert::der::Decode;
 use x509_cert::Certificate;
 
-/// Verify artifact/dsse hash matches what's in Rekor (for hashedrekord entries)
-/// Verify a single hashedrekord entry
+/// Verify a single hashedrekord entry's consistency against the bundle and
+/// artifact: the artifact/DSSE hash, certificate, and signature recorded in
+/// Rekor must match the bundle's materials.
+///
+/// This does NOT cryptographically verify the signature itself; that happens
+/// unconditionally in `Verifier::verify` (step 7). Since the Rekor entry's
+/// signature is checked for equality with the bundle's signature here, that
+/// single verification covers both.
 pub(crate) fn verify_hashedrekord_entry(
     entry: &TransparencyLogEntry,
     bundle: &Bundle,
@@ -63,9 +69,6 @@ pub(crate) fn verify_hashedrekord_entry(
 
     // Validate integrated time is within certificate validity (for v0.0.1)
     validate_integrated_time(entry, bundle)?;
-
-    // Perform cryptographic signature verification
-    verify_signature_cryptographically(bundle, artifact)?;
 
     Ok(())
 }
@@ -202,36 +205,6 @@ fn validate_signature_match(
     }
 
     Ok(())
-}
-
-/// Perform cryptographic verification of the signature over the artifact.
-///
-/// In Sigstore's hashedrekord format, the signature is created over the **artifact
-/// itself**, not over the artifact's hash. The hash in the Rekor entry is used for
-/// lookup/deduplication. The bundle and Rekor signatures are already checked to be
-/// equal by [`validate_signature_match`], so verifying the bundle's signature here
-/// (via the shared helper) is equivalent to verifying the Rekor one.
-fn verify_signature_cryptographically(bundle: &Bundle, artifact: &Artifact<'_>) -> Result<()> {
-    // Only verify for MessageSignature (not DSSE envelopes)
-    let SignatureContent::MessageSignature(msg_sig) = &bundle.content else {
-        return Ok(());
-    };
-
-    // Get the signing certificate from the bundle
-    let bundle_cert = match &bundle.verification_material.content {
-        VerificationMaterialContent::X509CertificateChain { certificates } => {
-            certificates.first().map(|c| &c.raw_bytes)
-        }
-        VerificationMaterialContent::Certificate(cert) => Some(&cert.raw_bytes),
-        _ => None,
-    };
-
-    let Some(bundle_cert) = bundle_cert else {
-        return Ok(());
-    };
-
-    let cert_info = sigstore_crypto::x509::parse_certificate_info(bundle_cert.as_bytes())?;
-    crate::verify::verify_message_signature_crypto(&cert_info, msg_sig, artifact)
 }
 
 /// Validate that integrated time is within certificate validity period

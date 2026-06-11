@@ -459,7 +459,7 @@ fn compute_artifact_digest_algo(artifact: &Artifact<'_>, algo: HashAlgorithm) ->
 /// Raw bytes are verified directly; a pre-computed digest uses prehashed
 /// verification and fails closed if the scheme can't be prehashed (e.g. Ed25519),
 /// since the original bytes aren't available to verify over.
-pub(crate) fn verify_signature_over_artifact(
+fn verify_signature_over_artifact(
     public_key: &sigstore_types::DerPublicKey,
     scheme: SigningScheme,
     signature: &sigstore_types::SignatureBytes,
@@ -491,7 +491,7 @@ pub(crate) fn verify_signature_over_artifact(
 /// signature would never be cryptographically checked. The signature hash is
 /// resolved from the certificate's key algorithm plus the bundle's declared
 /// `messageDigest.algorithm` (falling back to the key's default scheme).
-pub(crate) fn verify_message_signature_crypto(
+fn verify_message_signature_crypto(
     cert_info: &sigstore_crypto::CertificateInfo,
     msg_sig: &sigstore_types::bundle::MessageSignature,
     artifact: &Artifact<'_>,
