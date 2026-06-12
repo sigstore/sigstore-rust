@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/sigstore/sigstore-rust/compare/sigstore-tsa-v0.8.0...sigstore-tsa-v0.8.1) - 2026-06-12
+
+### Other
+
+- fail-closed if no root certs provided ([#114](https://github.com/sigstore/sigstore-rust/pull/114))
+- Verify TSA response nonce ([#113](https://github.com/sigstore/sigstore-rust/pull/113))
+- Make our use of jiff more idiomatic ([#100](https://github.com/sigstore/sigstore-rust/pull/100))
+
 ## [0.8.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-tsa-v0.7.0...sigstore-tsa-v0.8.0) - 2026-05-21
 
 ### Other
