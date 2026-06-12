@@ -272,4 +272,42 @@ mod tests {
             Error::UnsupportedAlgorithm(_)
         ));
     }
+
+    /// A standard P-384/SHA-384 signature verifies via `EcdsaP384Sha384` (raw and
+    /// prehashed), while the mismatched `EcdsaP384Sha256` scheme fails closed.
+    #[test]
+    fn test_verify_p384_sha384_roundtrip_and_mismatch_fails_closed() {
+        use aws_lc_rs::rand::SystemRandom;
+        use aws_lc_rs::signature::{
+            EcdsaKeyPair, KeyPair as AwsKeyPair, ECDSA_P384_SHA384_ASN1_SIGNING,
+        };
+
+        let rng = SystemRandom::new();
+        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P384_SHA384_ASN1_SIGNING, &rng).unwrap();
+        let kp = EcdsaKeyPair::from_pkcs8(&ECDSA_P384_SHA384_ASN1_SIGNING, pkcs8.as_ref()).unwrap();
+
+        let data = b"artifact signed with a P-384 key";
+        let sig = SignatureBytes::new(kp.sign(&rng, data).unwrap().as_ref().to_vec());
+
+        // Raw uncompressed point, as `from_spki` would extract from an SPKI key.
+        let raw_pubkey = kp.public_key().as_ref().to_vec();
+
+        // Standard pairing: verifies over raw artifact and SHA-384 prehash.
+        let vk384 = VerificationKey {
+            bytes: raw_pubkey.clone(),
+            scheme: SigningScheme::EcdsaP384Sha384,
+        };
+        assert!(vk384.verify(data, &sig).is_ok());
+        let sha384 = crate::hash::sha384(data);
+        assert!(vk384.verify_prehashed(&sha384, &sig).is_ok());
+
+        // Mismatched hash must fail closed.
+        let vk256 = VerificationKey {
+            bytes: raw_pubkey,
+            scheme: SigningScheme::EcdsaP384Sha256,
+        };
+        let sha256 = crate::hash::sha256(data);
+        assert!(vk256.verify(data, &sig).is_err());
+        assert!(vk256.verify_prehashed(sha256.as_bytes(), &sig).is_err());
+    }
 }

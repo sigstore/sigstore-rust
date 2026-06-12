@@ -5,10 +5,10 @@
 use crate::error::{Error, Result};
 use sigstore_bundle::validate_bundle_with_options;
 use sigstore_bundle::ValidationOptions;
-use sigstore_crypto::parse_certificate_info;
+use sigstore_crypto::{parse_certificate_info, SigningScheme};
 use sigstore_trust_root::TrustedRoot;
 
-use sigstore_types::{Artifact, Bundle, SignatureContent, Statement};
+use sigstore_types::{Artifact, Bundle, HashAlgorithm, SignatureContent, Statement};
 
 /// Default clock skew tolerance in seconds (60 seconds = 1 minute)
 pub const DEFAULT_CLOCK_SKEW_SECONDS: i64 = 60;
@@ -373,33 +373,8 @@ impl Verifier {
                 ));
             }
 
-            // Verify artifact hash matches (for DSSE with in-toto statements)
-            if envelope.payload_type == "application/vnd.in-toto+json" {
-                let payload_bytes = envelope.payload.as_bytes();
-
-                // Note: only SHA-256 used for attestation subjects here
-                let artifact_hash = compute_artifact_digest_algo(
-                    &artifact,
-                    sigstore_types::HashAlgorithm::Sha2256,
-                )?;
-                let artifact_hash_hex = sigstore_types::Sha256Hash::try_from_slice(&artifact_hash)
-                    .map_err(|_| Error::Verification("invalid SHA-256 hash length".to_string()))?
-                    .to_hex();
-
-                let payload_str = std::str::from_utf8(payload_bytes).map_err(|e| {
-                    Error::Verification(format!("payload is not valid UTF-8: {}", e))
-                })?;
-
-                let statement: Statement = serde_json::from_str(payload_str).map_err(|e| {
-                    Error::Verification(format!("failed to parse in-toto statement: {}", e))
-                })?;
-
-                if !statement.subject.is_empty() && !statement.matches_sha256(&artifact_hash_hex) {
-                    return Err(Error::Verification(
-                        "artifact hash does not match any subject in attestation".to_string(),
-                    ));
-                }
-            }
+            // Verify the payload binds the artifact
+            verify_dsse_artifact_binding(envelope, &artifact)?;
         }
 
         // For MessageSignature bundles, verify the messageDigest matches the artifact
@@ -414,10 +389,13 @@ impl Verifier {
                     ));
                 }
             }
+
+            // Cryptographically verify the signature over the artifact. This runs
+            // regardless of `policy.verify_tlog` so the signature is always checked;
+            // the transparency-log path (step 8) performs an equivalent check when
+            // enabled, but must not be the only place verification happens.
+            verify_message_signature_crypto(&cert_info, msg_sig, &artifact)?;
         }
-        // Note: For hashedrekord (MessageSignature), the signature verification
-        // is performed in step (8) by verify_hashedrekord_entries, which properly
-        // handles prehashed signatures.
 
         // (8): Verify the transparency log entry's consistency against the other
         //      materials, to prevent variants of CVE-2022-36056.
@@ -429,7 +407,6 @@ impl Verifier {
     }
 }
 
-use sigstore_types::HashAlgorithm;
 fn compute_artifact_digest_algo(artifact: &Artifact<'_>, algo: HashAlgorithm) -> Result<Vec<u8>> {
     match artifact {
         Artifact::Bytes(bytes) => match algo {
@@ -452,29 +429,100 @@ fn compute_artifact_digest_algo(artifact: &Artifact<'_>, algo: HashAlgorithm) ->
     }
 }
 
-use sigstore_crypto::SigningScheme;
-fn compute_artifact_digest_for_scheme(
+/// Verify that a DSSE envelope's payload binds the artifact being verified.
+///
+/// Only in-toto statements are supported: any other payload type has no
+/// defined relationship to the artifact, so verification fails closed rather
+/// than accepting an arbitrary artifact alongside a validly-signed envelope.
+/// The artifact's SHA-256 digest must match at least one subject of the
+/// statement, and the statement must have at least one subject.
+///
+/// Note: in-toto supports multiple digest algorithms (e.g. sha512), but
+/// Sigstore currently mandates SHA-256 for attestation subjects.
+fn verify_dsse_artifact_binding(
+    envelope: &sigstore_types::DsseEnvelope,
     artifact: &Artifact<'_>,
+) -> Result<()> {
+    if envelope.payload_type != "application/vnd.in-toto+json" {
+        return Err(Error::Verification(format!(
+            "unsupported DSSE payload type {:?}: cannot bind artifact to attestation",
+            envelope.payload_type
+        )));
+    }
+
+    let artifact_hash = compute_artifact_digest_algo(artifact, HashAlgorithm::Sha2256)?;
+    let artifact_hash_hex = sigstore_types::Sha256Hash::try_from_slice(&artifact_hash)
+        .map_err(|_| Error::Verification("invalid SHA-256 hash length".to_string()))?
+        .to_hex();
+
+    let payload_str = std::str::from_utf8(envelope.payload.as_bytes())
+        .map_err(|e| Error::Verification(format!("payload is not valid UTF-8: {}", e)))?;
+    let statement: Statement = serde_json::from_str(payload_str)
+        .map_err(|e| Error::Verification(format!("failed to parse in-toto statement: {}", e)))?;
+
+    if statement.subject.is_empty() {
+        return Err(Error::Verification(
+            "in-toto statement has no subjects: cannot bind artifact to attestation".to_string(),
+        ));
+    }
+    if !statement.matches_sha256(&artifact_hash_hex) {
+        return Err(Error::Verification(
+            "artifact hash does not match any subject in attestation".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Verify `signature` over `artifact` with an already-resolved signing scheme.
+///
+/// Raw bytes are verified directly; a pre-computed digest uses prehashed
+/// verification and fails closed if the scheme can't be prehashed (e.g. Ed25519),
+/// since the original bytes aren't available to verify over.
+fn verify_signature_over_artifact(
+    public_key: &sigstore_types::DerPublicKey,
     scheme: SigningScheme,
-) -> Result<Vec<u8>> {
-    let algo = match scheme {
-        SigningScheme::EcdsaP256Sha256
-        | SigningScheme::EcdsaP384Sha256
-        | SigningScheme::RsaPssSha256
-        | SigningScheme::RsaPkcs1Sha256 => HashAlgorithm::Sha2256,
-        SigningScheme::EcdsaP256Sha384
-        | SigningScheme::EcdsaP384Sha384
-        | SigningScheme::RsaPssSha384
-        | SigningScheme::RsaPkcs1Sha384 => HashAlgorithm::Sha2384,
-        SigningScheme::RsaPssSha512 | SigningScheme::RsaPkcs1Sha512 => HashAlgorithm::Sha2512,
-        _ => {
-            return Err(Error::Verification(format!(
-                "Unsupported scheme for prehashed verification: {:?}",
-                scheme
-            )))
+    signature: &sigstore_types::SignatureBytes,
+    artifact: &Artifact<'_>,
+) -> Result<()> {
+    let result = match artifact {
+        Artifact::Bytes(bytes) => {
+            sigstore_crypto::verify_signature(public_key, bytes, signature, scheme)
+        }
+        Artifact::Digest(hash) => {
+            if !scheme.supports_prehashed() {
+                return Err(Error::Verification(format!(
+                    "cannot verify signature with digest-only - scheme {} does not support prehashed mode",
+                    scheme.name()
+                )));
+            }
+            sigstore_crypto::verify_signature_prehashed(public_key, hash, signature, scheme)
         }
     };
-    compute_artifact_digest_algo(artifact, algo)
+    result.map_err(|e| Error::Verification(format!("signature verification failed: {}", e)))
+}
+
+/// Cryptographically verify a `MessageSignature`'s signature over the artifact
+/// using the signing certificate's public key.
+///
+/// This is intentionally independent of transparency-log verification. Without
+/// it, a `MessageSignature` bundle verified with `policy.verify_tlog == false`
+/// would only have its `messageDigest` compared against the artifact and its
+/// signature would never be cryptographically checked. The signature hash is
+/// resolved from the certificate's key algorithm plus the bundle's declared
+/// `messageDigest.algorithm` (falling back to the key's default scheme).
+fn verify_message_signature_crypto(
+    cert_info: &sigstore_crypto::CertificateInfo,
+    msg_sig: &sigstore_types::bundle::MessageSignature,
+    artifact: &Artifact<'_>,
+) -> Result<()> {
+    let scheme = match &msg_sig.message_digest {
+        Some(digest) => cert_info
+            .key_algorithm
+            .resolve_signing_scheme(digest.algorithm)?,
+        None => cert_info.key_algorithm.default_signing_scheme(),
+    };
+    verify_signature_over_artifact(&cert_info.public_key, scheme, &msg_sig.signature, artifact)
 }
 
 /// Convenience function to verify an artifact against a bundle
@@ -607,40 +655,12 @@ pub fn verify_with_key<'a>(
             }
 
             // Verify signature over the artifact
-            // Use prehashed verification if supported
-            if signing_scheme.supports_prehashed() {
-                let artifact_hash = compute_artifact_digest_for_scheme(&artifact, signing_scheme)?;
-                sigstore_crypto::verify_signature_prehashed(
-                    public_key,
-                    &artifact_hash,
-                    &msg_sig.signature,
-                    signing_scheme,
-                )
-                .map_err(|e| {
-                    Error::Verification(format!("signature verification failed: {}", e))
-                })?;
-            } else {
-                // For non-prehashed schemes, we need the original bytes
-                match &artifact {
-                    Artifact::Bytes(bytes) => {
-                        sigstore_crypto::verify_signature(
-                            public_key,
-                            bytes,
-                            &msg_sig.signature,
-                            signing_scheme,
-                        )
-                        .map_err(|e| {
-                            Error::Verification(format!("signature verification failed: {}", e))
-                        })?;
-                    }
-                    Artifact::Digest(_) => {
-                        return Err(Error::Verification(
-                            "cannot verify signature with digest-only for this key type"
-                                .to_string(),
-                        ));
-                    }
-                }
-            }
+            verify_signature_over_artifact(
+                public_key,
+                signing_scheme,
+                &msg_sig.signature,
+                &artifact,
+            )?;
         }
         SignatureContent::DsseEnvelope(envelope) => {
             let payload_bytes = envelope.decode_payload();
@@ -663,34 +683,16 @@ pub fn verify_with_key<'a>(
                 ));
             }
 
-            // Verify artifact hash matches for in-toto statements
-            if envelope.payload_type == "application/vnd.in-toto+json" {
-                // Note: In-toto specification supports multiple hash algorithms (e.g., sha512),
-                // but Sigstore currently mandates/defaults to SHA-256 for attestation subjects.
-                let artifact_hash = compute_artifact_digest_algo(
-                    &artifact,
-                    sigstore_types::HashAlgorithm::Sha2256,
-                )?;
-                let artifact_hash_hex = sigstore_types::Sha256Hash::try_from_slice(&artifact_hash)
-                    .map_err(|_| Error::Verification("invalid SHA-256 hash length".to_string()))?
-                    .to_hex();
-
-                let payload_str = std::str::from_utf8(&payload_bytes).map_err(|e| {
-                    Error::Verification(format!("payload is not valid UTF-8: {}", e))
-                })?;
-
-                let statement: Statement = serde_json::from_str(payload_str).map_err(|e| {
-                    Error::Verification(format!("failed to parse in-toto statement: {}", e))
-                })?;
-
-                if !statement.subject.is_empty() && !statement.matches_sha256(&artifact_hash_hex) {
-                    return Err(Error::Verification(
-                        "artifact hash does not match any subject in attestation".to_string(),
-                    ));
-                }
-            }
+            // Verify the payload binds the artifact
+            verify_dsse_artifact_binding(envelope, &artifact)?;
         }
     }
+
+    // Verify the transparency log entries' consistency against the bundle's
+    // other materials and the artifact (CVE-2022-36056 class), mirroring
+    // step 8 of `Verifier::verify`. Without this, a log entry whose body
+    // (hash, signature, verifier) disagrees with the bundle passes silently.
+    crate::verify_impl::verify_tlog_consistency(bundle, &artifact)?;
 
     Ok(result)
 }
@@ -737,5 +739,65 @@ mod tests {
 
         assert!(!policy.verify_certificate);
         assert!(!policy.verify_sct);
+    }
+
+    fn in_toto_envelope(payload: &str) -> sigstore_types::DsseEnvelope {
+        sigstore_types::DsseEnvelope::new(
+            "application/vnd.in-toto+json".to_string(),
+            sigstore_types::PayloadBytes::from_bytes(payload.as_bytes()),
+            vec![],
+        )
+    }
+
+    fn statement_with_subject_sha256(hash_hex: &str) -> String {
+        format!(
+            r#"{{"_type":"https://in-toto.io/Statement/v1","subject":[{{"name":"artifact","digest":{{"sha256":"{}"}}}}],"predicateType":"https://example.com/predicate/v1","predicate":{{}}}}"#,
+            hash_hex
+        )
+    }
+
+    #[test]
+    fn test_dsse_binding_matching_subject_ok() {
+        let artifact_bytes = b"hello world";
+        let hash_hex = sigstore_crypto::sha256(artifact_bytes).to_hex();
+        let envelope = in_toto_envelope(&statement_with_subject_sha256(&hash_hex));
+
+        let artifact = Artifact::from(artifact_bytes.as_slice());
+        assert!(verify_dsse_artifact_binding(&envelope, &artifact).is_ok());
+    }
+
+    #[test]
+    fn test_dsse_binding_mismatched_subject_fails() {
+        let hash_hex = sigstore_crypto::sha256(b"some other artifact").to_hex();
+        let envelope = in_toto_envelope(&statement_with_subject_sha256(&hash_hex));
+
+        let artifact = Artifact::from(b"hello world".as_slice());
+        let err = verify_dsse_artifact_binding(&envelope, &artifact).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("does not match any subject in attestation"));
+    }
+
+    #[test]
+    fn test_dsse_binding_empty_subjects_fails_closed() {
+        let payload = r#"{"_type":"https://in-toto.io/Statement/v1","subject":[],"predicateType":"https://example.com/predicate/v1","predicate":{}}"#;
+        let envelope = in_toto_envelope(payload);
+
+        let artifact = Artifact::from(b"hello world".as_slice());
+        let err = verify_dsse_artifact_binding(&envelope, &artifact).unwrap_err();
+        assert!(err.to_string().contains("no subjects"));
+    }
+
+    #[test]
+    fn test_dsse_binding_unknown_payload_type_fails_closed() {
+        let envelope = sigstore_types::DsseEnvelope::new(
+            "application/vnd.example+json".to_string(),
+            sigstore_types::PayloadBytes::from_bytes(b"{}"),
+            vec![],
+        );
+
+        let artifact = Artifact::from(b"hello world".as_slice());
+        let err = verify_dsse_artifact_binding(&envelope, &artifact).unwrap_err();
+        assert!(err.to_string().contains("unsupported DSSE payload type"));
     }
 }

@@ -6,14 +6,18 @@
 use crate::error::{Error, Result};
 use sigstore_rekor::body::RekorEntryBody;
 use sigstore_types::bundle::VerificationMaterialContent;
-use sigstore_types::{
-    Artifact, Bundle, Sha256Hash, SignatureBytes, SignatureContent, TransparencyLogEntry,
-};
+use sigstore_types::{Artifact, Bundle, Sha256Hash, SignatureContent, TransparencyLogEntry};
 use x509_cert::der::Decode;
 use x509_cert::Certificate;
 
-/// Verify artifact/dsse hash matches what's in Rekor (for hashedrekord entries)
-/// Verify a single hashedrekord entry
+/// Verify a single hashedrekord entry's consistency against the bundle and
+/// artifact: the artifact/DSSE hash, certificate, and signature recorded in
+/// Rekor must match the bundle's materials.
+///
+/// This does NOT cryptographically verify the signature itself; that happens
+/// unconditionally in `Verifier::verify` (step 7). Since the Rekor entry's
+/// signature is checked for equality with the bundle's signature here, that
+/// single verification covers both.
 pub(crate) fn verify_hashedrekord_entry(
     entry: &TransparencyLogEntry,
     bundle: &Bundle,
@@ -66,9 +70,6 @@ pub(crate) fn verify_hashedrekord_entry(
     // Validate integrated time is within certificate validity (for v0.0.1)
     validate_integrated_time(entry, bundle)?;
 
-    // Perform cryptographic signature verification
-    verify_signature_cryptographically(entry, &body, bundle, artifact)?;
-
     Ok(())
 }
 
@@ -101,6 +102,21 @@ fn validate_certificate_match(
     body: &RekorEntryBody,
     bundle: &Bundle,
 ) -> Result<()> {
+    // Get the certificate from the bundle. Key-based bundles carry no
+    // certificate (the Rekor verifier is a public key, not a certificate),
+    // so there is nothing to compare; the signature bytes are still matched
+    // by `validate_signature_match`.
+    let bundle_cert = match &bundle.verification_material.content {
+        VerificationMaterialContent::X509CertificateChain { certificates } => {
+            certificates.first().map(|c| &c.raw_bytes)
+        }
+        VerificationMaterialContent::Certificate(cert) => Some(&cert.raw_bytes),
+        VerificationMaterialContent::PublicKey { .. } => None,
+    };
+    let Some(bundle_cert) = bundle_cert else {
+        return Ok(());
+    };
+
     // Extract certificate DER from Rekor entry
     let rekor_cert_der_opt = match body {
         RekorEntryBody::HashedRekordV001(rekord) => {
@@ -128,25 +144,11 @@ fn validate_certificate_match(
     };
 
     if let Some(rekor_cert_der) = rekor_cert_der_opt {
-        // Get the certificate from the bundle
-        let bundle_cert = match &bundle.verification_material.content {
-            VerificationMaterialContent::X509CertificateChain { certificates } => {
-                certificates.first().map(|c| &c.raw_bytes)
-            }
-            VerificationMaterialContent::Certificate(cert) => Some(&cert.raw_bytes),
-            _ => None,
-        };
-
-        if let Some(bundle_cert) = bundle_cert {
-            // Bundle certificate is DerCertificate, get raw bytes
-            let bundle_cert_der = bundle_cert.as_bytes();
-
-            // Compare certificates
-            if bundle_cert_der != rekor_cert_der {
-                return Err(Error::Verification(
-                    "certificate in bundle does not match certificate in Rekor entry".to_string(),
-                ));
-            }
+        // Compare certificates
+        if bundle_cert.as_bytes() != rekor_cert_der {
+            return Err(Error::Verification(
+                "certificate in bundle does not match certificate in Rekor entry".to_string(),
+            ));
         }
     }
 
@@ -198,123 +200,6 @@ fn validate_signature_match(
                     return Err(Error::Verification(
                         "No signatures found in DSSE envelope".to_string(),
                     ));
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Perform cryptographic verification of the signature over the artifact
-///
-/// In Sigstore's hashedrekord format, the signature is created over the **artifact itself**,
-/// not over the artifact's hash. The hash in the Rekor entry is used for lookup/deduplication.
-///
-/// Verification strategy:
-/// - If we have the artifact bytes: verify signature over the artifact using `verify_signature`
-/// - If we only have the digest:
-///   - Verify using `verify_signature_prehashed` which will dynamically map to the correct digest
-///     algorithm based on the signing scheme.
-///   - If the scheme does not support prehashed mode (like Ed25519), we fail closed and return an error.
-fn verify_signature_cryptographically(
-    _entry: &TransparencyLogEntry,
-    body: &RekorEntryBody,
-    bundle: &Bundle,
-    artifact: &Artifact<'_>,
-) -> Result<()> {
-    // Only verify for MessageSignature (not DSSE envelopes)
-    if let SignatureContent::MessageSignature(_) = &bundle.content {
-        // Extract the signature from Rekor
-        let signature_bytes = match body {
-            RekorEntryBody::HashedRekordV001(rekord) => {
-                SignatureBytes::new(rekord.spec.signature.content.as_bytes().to_vec())
-            }
-            RekorEntryBody::HashedRekordV002(rekord) => SignatureBytes::new(
-                rekord
-                    .spec
-                    .hashed_rekord_v002
-                    .signature
-                    .content
-                    .as_bytes()
-                    .to_vec(),
-            ),
-            _ => return Ok(()),
-        };
-
-        // Get the certificate from the bundle
-        let bundle_cert = match &bundle.verification_material.content {
-            VerificationMaterialContent::X509CertificateChain { certificates } => {
-                certificates.first().map(|c| &c.raw_bytes)
-            }
-            VerificationMaterialContent::Certificate(cert) => Some(&cert.raw_bytes),
-            _ => None,
-        };
-
-        if let Some(bundle_cert) = bundle_cert {
-            // Get certificate DER bytes directly
-            let cert_der = bundle_cert.as_bytes();
-
-            // Parse certificate to extract public key and algorithm
-            let cert_info = sigstore_crypto::x509::parse_certificate_info(cert_der)?;
-
-            // use digest algorithm from message digest, or the default for key algorithm
-            let scheme = match &bundle.content {
-                SignatureContent::MessageSignature(msg_sig) => {
-                    if let Some(ref digest) = msg_sig.message_digest {
-                        cert_info
-                            .key_algorithm
-                            .resolve_signing_scheme(digest.algorithm)?
-                    } else {
-                        cert_info.key_algorithm.default_signing_scheme()
-                    }
-                }
-                _ => cert_info.key_algorithm.default_signing_scheme(),
-            };
-
-            match artifact {
-                Artifact::Bytes(bytes) => {
-                    // We have the artifact bytes - verify signature over them
-                    sigstore_crypto::verification::verify_signature(
-                        &cert_info.public_key,
-                        bytes,
-                        &signature_bytes,
-                        scheme,
-                    )
-                    .map_err(|e| {
-                        Error::Verification(format!(
-                            "cryptographic signature verification failed: {}",
-                            e
-                        ))
-                    })?;
-                }
-                Artifact::Digest(hash) => {
-                    // We only have the digest - use prehashed verification if supported
-                    if scheme.supports_prehashed() {
-                        tracing::debug!(
-                            "Using prehashed verification for {} with pre-computed digest",
-                            scheme.name()
-                        );
-
-                        sigstore_crypto::verification::verify_signature_prehashed(
-                            &cert_info.public_key,
-                            hash,
-                            &signature_bytes,
-                            scheme,
-                        )
-                        .map_err(|e| {
-                            Error::Verification(format!(
-                                "cryptographic signature verification failed: {}",
-                                e
-                            ))
-                        })?;
-                    } else {
-                        // Scheme doesn't support prehashed verification: fail closed
-                        return Err(Error::Verification(format!(
-                            "cannot verify signature with digest-only - scheme {} does not support prehashed mode",
-                            scheme.name()
-                        )));
-                    }
                 }
             }
         }

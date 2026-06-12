@@ -6,6 +6,7 @@
 use crate::error::{Error, Result};
 use base64::Engine;
 use sigstore_rekor::body::RekorEntryBody;
+use sigstore_types::bundle::VerificationMaterialContent;
 use sigstore_types::{Bundle, SignatureContent, TransparencyLogEntry};
 
 /// Verify that all log entries are consistent with the bundle's content and artifact
@@ -127,8 +128,16 @@ fn verify_dsse_v001(
         )));
     }
 
-    // Extract the signing certificate from the bundle
-    let cert = super::helpers::extract_certificate(&bundle.verification_material.content)?;
+    // Extract the signing certificate from the bundle. Key-based bundles
+    // carry no certificate (the Rekor verifier is a public key), so only the
+    // signature bytes can be compared for them.
+    let bundle_cert = match &bundle.verification_material.content {
+        VerificationMaterialContent::X509CertificateChain { certificates } => {
+            certificates.first().map(|c| c.raw_bytes.clone())
+        }
+        VerificationMaterialContent::Certificate(cert) => Some(cert.raw_bytes.clone()),
+        VerificationMaterialContent::PublicKey { .. } => None,
+    };
 
     // Verify that the signatures in the bundle match what's in Rekor
     // This prevents signature substitution attacks
@@ -146,17 +155,24 @@ fn verify_dsse_v001(
     for bundle_sig in &envelope.signatures {
         let mut found = false;
         for rekor_sig in rekor_signatures {
-            // Convert Rekor's PEM verifier to DER for canonical comparison
-            let rekor_cert_der = rekor_sig
-                .to_certificate()
-                .map_err(|e| Error::Verification(format!("{}", e)))?;
-
-            // Compare both signature bytes AND the verifier (certificate as DER)
-            if bundle_sig.sig.as_bytes() == rekor_sig.signature.as_bytes()
-                && cert.as_bytes() == rekor_cert_der.as_bytes()
-            {
-                found = true;
-                break;
+            if bundle_sig.sig.as_bytes() != rekor_sig.signature.as_bytes() {
+                continue;
+            }
+            match &bundle_cert {
+                Some(cert) => {
+                    // Convert Rekor's PEM verifier to DER for canonical comparison
+                    let rekor_cert_der = rekor_sig
+                        .to_certificate()
+                        .map_err(|e| Error::Verification(format!("{}", e)))?;
+                    if cert.as_bytes() == rekor_cert_der.as_bytes() {
+                        found = true;
+                        break;
+                    }
+                }
+                None => {
+                    found = true;
+                    break;
+                }
             }
         }
         if !found {

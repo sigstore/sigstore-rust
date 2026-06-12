@@ -5,12 +5,17 @@
 //! for efficient handling of large files without loading them entirely into memory.
 
 use crate::{DigestBytes, Sha256Hash};
+use std::borrow::Cow;
 
 /// An artifact to be signed or verified
 ///
 /// This enum allows flexible input for signing and verification operations:
 /// - `Bytes`: Raw artifact bytes (hash will be computed internally)
 /// - `Digest`: Pre-computed digest (no raw bytes needed)
+///
+/// The digest is stored as a [`Cow`] so it can either borrow from the caller
+/// (zero-copy, the common case) or own its bytes when an owned value is
+/// converted into an `Artifact` (e.g. `Artifact::from(some_sha256_hash)`).
 ///
 /// # Example
 ///
@@ -20,18 +25,18 @@ use crate::{DigestBytes, Sha256Hash};
 /// // From raw bytes
 /// let artifact = Artifact::from(b"hello world".as_slice());
 ///
-/// // From pre-computed digest
+/// // From a pre-computed digest (borrowed, zero-copy)
 /// let digest = Sha256Hash::from_hex(
 ///     "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
 /// ).unwrap();
-/// let artifact = Artifact::from(digest);
+/// let artifact = Artifact::from(&digest);
 /// ```
 #[derive(Debug, Clone)]
 pub enum Artifact<'a> {
     /// Raw artifact bytes (hash will be computed)
     Bytes(&'a [u8]),
     /// Pre-computed digest bytes
-    Digest(&'a [u8]),
+    Digest(Cow<'a, [u8]>),
 }
 
 impl<'a> Artifact<'a> {
@@ -40,9 +45,9 @@ impl<'a> Artifact<'a> {
         Artifact::Bytes(bytes)
     }
 
-    /// Create an artifact from a pre-computed digest
+    /// Create an artifact from a pre-computed digest (borrowed, zero-copy)
     pub fn from_digest(digest: &'a [u8]) -> Self {
-        Artifact::Digest(digest)
+        Artifact::Digest(Cow::Borrowed(digest))
     }
 
     /// Check if this artifact has raw bytes available
@@ -62,7 +67,7 @@ impl<'a> Artifact<'a> {
     pub fn pre_computed_digest(&self) -> Option<&[u8]> {
         match self {
             Artifact::Bytes(_) => None,
-            Artifact::Digest(hash) => Some(*hash),
+            Artifact::Digest(hash) => Some(hash.as_ref()),
         }
     }
 }
@@ -87,22 +92,27 @@ impl<'a, const N: usize> From<&'a [u8; N]> for Artifact<'a> {
 
 impl<'a> From<&'a Sha256Hash> for Artifact<'a> {
     fn from(hash: &'a Sha256Hash) -> Self {
-        Artifact::Digest(hash.as_bytes())
+        Artifact::Digest(Cow::Borrowed(hash.as_bytes()))
     }
 }
 
 impl<'a> From<&'a DigestBytes> for Artifact<'a> {
     fn from(digest: &'a DigestBytes) -> Self {
-        Artifact::Digest(digest.as_bytes())
+        Artifact::Digest(Cow::Borrowed(digest.as_bytes()))
     }
 }
 
 impl From<Sha256Hash> for Artifact<'static> {
     fn from(hash: Sha256Hash) -> Self {
-        // Warning: This creates a memory leak to provide a 'static reference
-        // This is kept for backwards compatibility with the previous API
-        let bytes: &'static [u8] = Box::leak(Box::new(*hash.as_bytes()));
-        Artifact::Digest(bytes)
+        // Owned digest: copies the 32 bytes into the `Cow`. Prefer the
+        // borrowing `From<&Sha256Hash>` when the hash outlives the `Artifact`.
+        Artifact::Digest(Cow::Owned(hash.as_bytes().to_vec()))
+    }
+}
+
+impl From<DigestBytes> for Artifact<'static> {
+    fn from(digest: DigestBytes) -> Self {
+        Artifact::Digest(Cow::Owned(digest.as_bytes().to_vec()))
     }
 }
 
