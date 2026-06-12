@@ -6,6 +6,7 @@ members = [
     "crates/sigstore-merkle",
     "crates/sigstore-tsa",
     "crates/sigstore-trust-root",
+    "crates/sigstore-tuf",
     "crates/sigstore-bundle",
     "crates/sigstore-cache",
     "crates/sigstore-rekor",
@@ -85,6 +86,10 @@ serde_json_canonicalizer = "0.3"
 # TUF / Package management
 tough = { version = "0.22", features = ["http"] }
 
+# Glob matching for TUF delegation paths (same crate `tough` uses; its default
+# options match python-tuf's `fnmatch` semantics).
+globset = "0.4"
+
 # Async utilities
 futures = "0.3"
 
@@ -100,6 +105,7 @@ sigstore-crypto = { path = "crates/sigstore-crypto", version = "0.8.0" }
 sigstore-merkle = { path = "crates/sigstore-merkle", version = "0.8.0" }
 sigstore-tsa = { path = "crates/sigstore-tsa", version = "0.8.0", default-features = false }
 sigstore-trust-root = { path = "crates/sigstore-trust-root", version = "0.8.0", default-features = false }
+sigstore-tuf = { path = "crates/sigstore-tuf", version = "0.8.0", default-features = false }
 sigstore-bundle = { path = "crates/sigstore-bundle", version = "0.8.0", default-features = false }
 sigstore-rekor = { path = "crates/sigstore-rekor", version = "0.8.0", default-features = false }
 sigstore-fulcio = { path = "crates/sigstore-fulcio", version = "0.8.0", default-features = false }
