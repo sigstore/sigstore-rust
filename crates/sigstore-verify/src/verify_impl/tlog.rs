@@ -146,15 +146,34 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
         .as_ref()
         .ok_or(Error::Verification("Missing inclusion promise".into()))?;
 
-    // Find the key for the log ID
-    let log_key = trusted_root
-        .rekor_key_for_log(&entry.log_id.key_id)
-        .map_err(|_| Error::Verification(format!("Unknown log ID: {}", entry.log_id.key_id)))?;
+    let integrated_time = entry.integrated_time;
+
+    // Find the key for the log ID. When the entry carries a real integrated
+    // time, require the log key's validity window to cover it: an entry must
+    // have been integrated while the log key was valid.
+    let log_key = if integrated_time > 0 {
+        let integrated_ts = jiff::Timestamp::from_second(integrated_time).map_err(|e| {
+            Error::Verification(format!(
+                "Invalid integrated time {}: {}",
+                integrated_time, e
+            ))
+        })?;
+        trusted_root
+            .rekor_key_for_log_at(&entry.log_id.key_id, integrated_ts)
+            .map_err(|e| {
+                Error::Verification(format!(
+                    "No log key valid at integrated time {} for log ID {}: {}",
+                    integrated_ts, entry.log_id.key_id, e
+                ))
+            })?
+    } else {
+        trusted_root
+            .rekor_key_for_log(&entry.log_id.key_id)
+            .map_err(|_| Error::Verification(format!("Unknown log ID: {}", entry.log_id.key_id)))?
+    };
 
     // Construct the payload (base64-encoded body)
     let body = entry.canonicalized_body.to_base64();
-
-    let integrated_time = entry.integrated_time;
     let log_index = entry
         .log_index
         .as_u64()

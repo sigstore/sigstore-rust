@@ -99,7 +99,15 @@ pub fn extract_tsa_timestamp(
         })?;
 
         // Check that the timestamp falls within the TSA's validity period from the trust root
-        if !trusted_root.is_timestamp_within_tsa_validity(result.time) {
+        let within_validity = trusted_root
+            .is_timestamp_within_tsa_validity(result.time)
+            .map_err(|e| {
+                Error::Verification(format!(
+                    "invalid TSA validity period in trusted root: {}",
+                    e
+                ))
+            })?;
+        if !within_validity {
             return Err(Error::Verification(format!(
                 "TSA timestamp {} is outside the trust root's TSA validity period",
                 result.time
