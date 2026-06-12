@@ -20,10 +20,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: 1.89.0
-          components: rustfmt
+      - name: Install Rust toolchain
+        run: rustup toolchain install
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -34,10 +32,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: 1.89.0
-          components: clippy
+      - name: Install Rust toolchain
+        run: rustup toolchain install
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
@@ -48,9 +44,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: 1.89.0
+      - name: Install Rust toolchain
+        run: rustup toolchain install
       - name: Install cargo-audit
         run: cargo install cargo-audit --version 0.22.1 --locked
       - name: Audit dependencies
@@ -67,9 +62,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: 1.89.0
+      - name: Install Rust toolchain
+        run: rustup toolchain install
       - name: Run tests
         run: cargo test --all-features --workspace
 
@@ -84,9 +78,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: 1.89.0
+      - name: Install Rust toolchain
+        run: rustup toolchain install
       - name: Run tests
         shell: bash
         run: ./scripts/check-native-tls.sh
@@ -98,9 +91,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: 1.89.0
+      - name: Install Rust toolchain
+        run: rustup toolchain install
       - name: Check documentation
         env:
           RUSTDOCFLAGS: -D warnings
@@ -117,9 +109,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: 1.89.0
+      - name: Install Rust toolchain
+        run: rustup toolchain install
 
       - name: Build binaries
         run: |
