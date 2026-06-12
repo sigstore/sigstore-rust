@@ -1,0 +1,95 @@
+# Checks whether the TUF data embedded in the sigstore-trust-root crate
+# (TUF root.json metadata plus the trusted_root.json / signing config targets
+# for the production, staging, and GitHub Sigstore instances) is still
+# current, and files an issue if an update is available.
+#
+# The actual update is performed with this repository's own TUF client:
+#
+#     cargo run -p sigstore-trust-root --example update-embedded-roots
+#
+# which fetches the data through the TUF protocol and writes the served bytes
+# verbatim to the embedded file locations, so the resulting diff is reviewable.
+
+name: Check embedded TUF data
+
+on:
+  schedule:
+    # Weekly, Wednesday 13:13 UTC
+    - cron: "13 13 * * 3"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check-embedded-root:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: 1.89.0
+
+      - name: Update embedded TUF data via the TUF client
+        run: cargo run -p sigstore-trust-root --example update-embedded-roots
+
+      - name: Check if embedded TUF data changed
+        run: git diff --exit-code
+
+      - name: File an issue if update failed or data changed
+        if: failure()
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const label = "embedded-root-update";
+            const open_issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: label,
+            });
+            if (open_issues.data.length > 0) {
+              core.info(`Open issue already exists: ${open_issues.data[0].html_url}`);
+              return;
+            }
+
+            // Make sure the label exists so issue creation cannot fail on it.
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+              });
+            } catch (error) {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+                color: "e99695",
+                description: "The embedded TUF data needs updating",
+              });
+            }
+
+            const run_url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: "Embedded TUF data is not up-to-date",
+              labels: [label],
+              body:
+                "The Sigstore TUF repository contents have changed (or the update " +
+                "check failed): the TUF data embedded in the sigstore-trust-root " +
+                "crate can be updated.\n\n" +
+                "Run\n" +
+                "```\n" +
+                "cargo run -p sigstore-trust-root --example update-embedded-roots\n" +
+                "```\n" +
+                "review the diff, and open a PR with the changes.\n\n" +
+                `This issue was filed by [a scheduled workflow run](${run_url}).`,
+            });
+            core.info(`Filed ${issue.data.html_url}`);
