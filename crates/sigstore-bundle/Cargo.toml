@@ -15,7 +15,6 @@ native-tls = ["sigstore-tsa/native-tls", "sigstore-rekor/native-tls"]
 [dependencies]
 sigstore-types = { workspace = true }
 sigstore-crypto = { workspace = true }
-sigstore-merkle = { workspace = true }
 sigstore-tsa = { workspace = true, default-features = false }
 sigstore-rekor = { workspace = true, default-features = false }
 serde = { workspace = true }
@@ -26,3 +25,4 @@ hex = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }
+sigstore-merkle = { workspace = true }
