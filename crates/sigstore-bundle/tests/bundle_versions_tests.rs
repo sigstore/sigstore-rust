@@ -3,7 +3,7 @@
 //! These tests use real bundle fixtures from sigstore-rs and sigstore-python.
 
 use sigstore_bundle::{validate_bundle, validate_bundle_with_options, ValidationOptions};
-use sigstore_types::Bundle;
+use sigstore_types::{Bundle, Sha256Hash};
 
 /// v0.1 bundle with x509CertificateChain (from sigstore-rs)
 const V01_BUNDLE: &str = r#"{
@@ -374,6 +374,74 @@ fn test_v03_with_certificate_chain_fails() {
     assert!(
         err_msg.contains("single certificate"),
         "Error should mention single certificate requirement"
+    );
+}
+
+// ==== Structural-Only Contract Tests ====
+//
+// validate_bundle() is purely structural: it must NOT perform cryptographic
+// verification (Merkle proofs, checkpoint signatures, SETs, ...). These tests
+// pin that contract; the crypto checks live in sigstore-verify.
+
+#[test]
+fn test_structural_validation_does_not_verify_inclusion_proof_crypto() {
+    let mut bundle = Bundle::from_json(V03_BUNDLE_WITH_PROOF).expect("Failed to parse bundle");
+
+    // Tamper with the Merkle proof hashes. The proof is now cryptographically
+    // invalid, but still structurally well-formed.
+    let proof = bundle.verification_material.tlog_entries[0]
+        .inclusion_proof
+        .as_mut()
+        .expect("bundle has inclusion proof");
+    proof.hashes[0] = Sha256Hash::from_bytes([0u8; 32]);
+
+    let result = validate_bundle(&bundle);
+    assert!(
+        result.is_ok(),
+        "structural validation must not verify Merkle proofs (crypto belongs to sigstore-verify): {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_structural_validation_rejects_root_hash_mismatch() {
+    let mut bundle = Bundle::from_json(V03_BUNDLE_WITH_PROOF).expect("Failed to parse bundle");
+
+    // A proof whose root hash disagrees with its own checkpoint is malformed.
+    let proof = bundle.verification_material.tlog_entries[0]
+        .inclusion_proof
+        .as_mut()
+        .expect("bundle has inclusion proof");
+    proof.root_hash = Sha256Hash::from_bytes([0u8; 32]);
+
+    let result = validate_bundle(&bundle);
+    assert!(
+        result.is_err(),
+        "proof root hash inconsistent with checkpoint root hash should fail structural validation"
+    );
+    let err_msg = format!("{:?}", result.err());
+    assert!(
+        err_msg.contains("root hash"),
+        "Error should mention root hash mismatch: {}",
+        err_msg
+    );
+}
+
+#[test]
+fn test_structural_validation_rejects_out_of_range_log_index() {
+    let mut bundle = Bundle::from_json(V03_BUNDLE_WITH_PROOF).expect("Failed to parse bundle");
+
+    // log_index must be < tree_size
+    let proof = bundle.verification_material.tlog_entries[0]
+        .inclusion_proof
+        .as_mut()
+        .expect("bundle has inclusion proof");
+    proof.log_index = sigstore_types::LogIndex::new(proof.tree_size);
+
+    let result = validate_bundle(&bundle);
+    assert!(
+        result.is_err(),
+        "log_index >= tree_size should fail structural validation"
     );
 }
 
