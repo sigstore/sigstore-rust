@@ -1,0 +1,5 @@
+# TUF metadata fixtures are byte-exact: signatures and the cross-role
+# length/hash pins are computed over the precise file bytes. Never let git
+# normalize line endings (e.g. core.autocrlf=true on Windows runners), or the
+# integrity checks fail. Treat everything here as binary.
+* -text

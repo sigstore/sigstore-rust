@@ -39,8 +39,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tough::{HttpTransport, IntoVec, RepositoryLoader, TargetName};
-use url::Url;
+use sigstore_tuf::{FileStore, HttpRepository, Updater};
 
 use crate::{Error, Result, SigningConfig, SigstoreInstance, TrustedRoot};
 
@@ -321,8 +320,11 @@ impl TufClient {
         if self.config.offline {
             return self.fetch_target_offline(target_name).await;
         }
-        let repo = self.load_repository().await?;
-        self.read_target_from_repo(&repo, target_name).await
+        let mut updater = self.build_updater().await?;
+        updater
+            .get_target(target_name, jiff::Timestamp::now())
+            .await
+            .map_err(|e| Error::Tuf(format!("Failed to fetch target {target_name}: {e}")))
     }
 
     /// Fetch multiple targets in a single TUF session
@@ -337,73 +339,44 @@ impl TufClient {
             }
             return Ok(results);
         }
-        let repo = self.load_repository().await?;
+        let mut updater = self.build_updater().await?;
+        let now = jiff::Timestamp::now();
         let mut results = Vec::with_capacity(target_names.len());
         for name in target_names {
-            results.push(self.read_target_from_repo(&repo, name).await?);
+            let bytes = updater
+                .get_target(name, now)
+                .await
+                .map_err(|e| Error::Tuf(format!("Failed to fetch target {name}: {e}")))?;
+            results.push(bytes);
         }
         Ok(results)
     }
 
-    /// Load the TUF repository (fetches and verifies all metadata)
-    async fn load_repository(&self) -> Result<tough::Repository> {
-        let base_url = Url::parse(&self.config.url).map_err(|e| Error::Tuf(e.to_string()))?;
-        let metadata_url = base_url.clone();
-        let targets_url = base_url
-            .join("targets/")
-            .map_err(|e| Error::Tuf(e.to_string()))?;
-
-        let root_bytes = self.config.get_root_json()?.to_vec();
-        let mut loader = RepositoryLoader::new(&root_bytes, metadata_url, targets_url);
-        loader = loader.transport(HttpTransport::default());
+    /// Build a `sigstore-tuf` updater and run the TUF refresh workflow
+    /// (root → timestamp → snapshot → targets), verifying all metadata against
+    /// the configured bootstrap root.
+    ///
+    /// When caching is enabled, verified metadata and downloaded targets are
+    /// written through to the per-URL cache directory so a later `offline()`
+    /// run can serve them.
+    async fn build_updater(&self) -> Result<Updater> {
+        let repo = HttpRepository::new(&self.config.url).map_err(|e| Error::Tuf(e.to_string()))?;
+        let root_bytes = self.config.get_root_json()?;
+        let mut updater = Updater::new(repo, root_bytes).map_err(|e| Error::Tuf(e.to_string()))?;
 
         if !self.config.disable_cache {
             let cache_dir = self.get_cache_dir()?;
             tokio::fs::create_dir_all(&cache_dir)
                 .await
-                .map_err(|e| Error::Tuf(format!("Failed to create cache directory: {}", e)))?;
-            loader = loader.datastore(cache_dir);
+                .map_err(|e| Error::Tuf(format!("Failed to create cache directory: {e}")))?;
+            updater = updater.with_store(FileStore::new(cache_dir));
         }
 
-        loader
-            .load()
+        updater
+            .refresh(jiff::Timestamp::now())
             .await
-            .map_err(|e| Error::Tuf(format!("TUF repository load failed: {}", e)))
-    }
-
-    /// Read a single target from an already-loaded repository
-    async fn read_target_from_repo(
-        &self,
-        repo: &tough::Repository,
-        target_name: &str,
-    ) -> Result<Vec<u8>> {
-        let target = TargetName::new(target_name)
-            .map_err(|e| Error::Tuf(format!("Invalid target name: {}", e)))?;
-        let stream = repo
-            .read_target(&target)
-            .await
-            .map_err(|e| Error::Tuf(format!("Failed to read target: {}", e)))?
-            .ok_or_else(|| Error::Tuf(format!("Target not found: {}", target_name)))?;
-
-        let bytes = stream
-            .into_vec()
-            .await
-            .map_err(|e| Error::Tuf(format!("Failed to read target contents: {}", e)))?;
-
-        // Cache the target bytes for offline use
-        if !self.config.disable_cache {
-            if let Ok(cache_dir) = self.get_cache_dir() {
-                // Store in our own subdirectory to avoid conflicts with
-                // tough's internal datastore layout.
-                let targets_dir = cache_dir.join("sigstore-rust");
-                if tokio::fs::create_dir_all(&targets_dir).await.is_ok() {
-                    // Best-effort: don't fail the fetch if caching fails
-                    let _ = tokio::fs::write(targets_dir.join(target_name), &bytes).await;
-                }
-            }
-        }
-
-        Ok(bytes)
+            .map_err(|e| Error::Tuf(format!("TUF repository load failed: {e}")))?;
+        Ok(updater)
     }
 
     /// Fetch target in offline mode (no network)
@@ -419,7 +392,9 @@ impl TufClient {
     async fn fetch_target_offline(&self, target_name: &str) -> Result<Vec<u8>> {
         if !self.config.disable_cache {
             if let Ok(cache_dir) = self.get_cache_dir() {
-                let cached_path = cache_dir.join("sigstore-rust").join(target_name);
+                // `sigstore-tuf`'s `FileStore` writes downloaded targets under a
+                // `targets/` subdirectory of the cache root.
+                let cached_path = cache_dir.join("targets").join(target_name);
                 if let Ok(bytes) = tokio::fs::read(&cached_path).await {
                     return Ok(bytes);
                 }
