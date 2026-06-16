@@ -49,9 +49,6 @@ url = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
+# Only the test-runtime features are added here; the crates themselves are
+# already non-optional dependencies above and so are available to tests.
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-sigstore-crypto = { workspace = true }
-serde_json = { workspace = true }
-sha2 = { workspace = true }
-hex = { workspace = true }
-jiff = { workspace = true }

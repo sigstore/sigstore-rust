@@ -322,7 +322,7 @@ impl TufClient {
         }
         let mut updater = self.build_updater().await?;
         updater
-            .download_target(target_name, jiff::Timestamp::now())
+            .get_target(target_name, jiff::Timestamp::now())
             .await
             .map_err(|e| Error::Tuf(format!("Failed to fetch target {target_name}: {e}")))
     }
@@ -344,7 +344,7 @@ impl TufClient {
         let mut results = Vec::with_capacity(target_names.len());
         for name in target_names {
             let bytes = updater
-                .download_target(name, now)
+                .get_target(name, now)
                 .await
                 .map_err(|e| Error::Tuf(format!("Failed to fetch target {name}: {e}")))?;
             results.push(bytes);

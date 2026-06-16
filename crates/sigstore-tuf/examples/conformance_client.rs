@@ -163,7 +163,7 @@ async fn cmd_download(args: &Args) -> Result<()> {
         }
     }
 
-    let bytes = updater.download_target(target_name, now).await?;
+    let bytes = updater.download_target(&info, target_name).await?;
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| Error::Transport(format!("creating target dir: {e}")))?;

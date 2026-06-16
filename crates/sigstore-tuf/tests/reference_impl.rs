@@ -84,9 +84,9 @@ async fn full_refresh_and_read_targets() {
         .expect("refresh over python-tuf repo should verify end to end");
 
     // Top-level targets.
-    let f1 = updater.download_target("file1.txt", now()).await.unwrap();
+    let f1 = updater.get_target("file1.txt", now()).await.unwrap();
     assert_eq!(f1, b"This is an example target file.");
-    let f2 = updater.download_target("file2.txt", now()).await.unwrap();
+    let f2 = updater.get_target("file2.txt", now()).await.unwrap();
     assert_eq!(f2, b"This is an another example target file.");
 
     // `custom` metadata round-trips.
@@ -117,7 +117,7 @@ async fn resolves_target_through_delegation() {
         .expect("delegation walk should resolve file3.txt via role1");
     assert!(info.length > 0);
 
-    let bytes = updater.download_target("file3.txt", now()).await.unwrap();
+    let bytes = updater.download_target(&info, "file3.txt").await.unwrap();
     assert_eq!(bytes, b"This is role1's target file.");
 }
 

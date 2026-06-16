@@ -196,6 +196,42 @@ fn build_repo_with_timestamp_expiry(timestamp_expires: &str) -> (MemRepo, Vec<u8
 }
 
 #[tokio::test]
+async fn get_target_serves_a_cached_target_without_re_downloading() {
+    // Regression: an online updater with a store must reuse a previously cached
+    // target instead of fetching it again every run.
+    let (repo, root_bytes) = build_repo();
+    // Keep the metadata so a second repo can serve it with an empty target set.
+    let metadata = repo.metadata.clone();
+    let store = Arc::new(MemoryStore::new());
+
+    let mut first = Updater::new(repo, &root_bytes)
+        .unwrap()
+        .with_store(Arc::clone(&store));
+    first.refresh(now()).await.unwrap();
+    let bytes = first.get_target("delegated/file.txt", now()).await.unwrap();
+    assert_eq!(bytes, b"hello from the delegated role");
+    assert!(store.load("targets/delegated/file.txt").is_some());
+
+    // A second updater backed by the same (populated) store but a repository
+    // that serves the metadata yet no targets: the refresh and delegation walk
+    // succeed, and `get_target` must satisfy the request from the cache. If it
+    // tried the network it would fail.
+    let starved_repo = MemRepo {
+        metadata,
+        targets: HashMap::new(),
+    };
+    let mut second = Updater::new(starved_repo, &root_bytes)
+        .unwrap()
+        .with_store(Arc::clone(&store));
+    second.refresh(now()).await.unwrap();
+    let cached = second
+        .get_target("delegated/file.txt", now())
+        .await
+        .expect("a cached target must be served without hitting the network");
+    assert_eq!(cached, b"hello from the delegated role");
+}
+
+#[tokio::test]
 async fn full_refresh_resolves_delegated_target_and_caches() {
     let (repo, root_bytes) = build_repo();
     let store = Arc::new(MemoryStore::new());
@@ -219,7 +255,7 @@ async fn full_refresh_resolves_delegated_target_and_caches() {
     assert_eq!(info.length, b"hello from the delegated role".len() as u64);
 
     let bytes = updater
-        .download_target("delegated/file.txt", now())
+        .download_target(&info, "delegated/file.txt")
         .await
         .expect("download + verify should succeed");
     assert_eq!(bytes, b"hello from the delegated role");
@@ -237,7 +273,7 @@ async fn full_refresh_resolves_delegated_target_and_caches() {
         .await
         .expect("offline refresh from cache should re-verify");
     let offline_bytes = offline
-        .download_target("delegated/file.txt", now())
+        .get_target("delegated/file.txt", now())
         .await
         .expect("offline download from cache");
     assert_eq!(offline_bytes, b"hello from the delegated role");

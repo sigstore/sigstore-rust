@@ -61,7 +61,7 @@
 //! updater.refresh(jiff::Timestamp::now()).await?;
 //!
 //! let trusted_root = updater
-//!     .download_target("trusted_root.json", jiff::Timestamp::now())
+//!     .get_target("trusted_root.json", jiff::Timestamp::now())
 //!     .await?;
 //! # let _ = trusted_root;
 //! # Ok(())

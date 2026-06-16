@@ -376,19 +376,55 @@ impl Updater {
         self.trusted.targets_role("targets")?.target(target_path)
     }
 
-    /// Download a target file and verify its length and hash against the trusted
-    /// targets metadata (searching delegations). Requires a prior
-    /// [`Updater::refresh`].
-    pub async fn download_target(
-        &mut self,
-        target_path: &str,
-        now: jiff::Timestamp,
-    ) -> Result<Vec<u8>> {
+    /// Return a cached, already-verified copy of `target` from the attached
+    /// store, or `None` when there is no store, no cached file, or the cached
+    /// bytes no longer match the pinned length and hash.
+    ///
+    /// Lets a caller skip the network when a byte-identical copy is already
+    /// present, mirroring python-tuf's `find_cached_target`. A cache entry that
+    /// fails verification (stale or tampered) is ignored rather than trusted.
+    pub fn find_cached_target(&self, target: &TargetFile, target_path: &str) -> Option<Vec<u8>> {
+        let bytes = self
+            .store
+            .as_ref()?
+            .load(&format!("targets/{target_path}"))?;
+        verify_target_bytes(&bytes, target, target_path).ok()?;
+        Some(bytes)
+    }
+
+    /// Resolve, cache-check, and download a target by path — the common
+    /// one-call path. Returns a byte-identical cached copy when the attached
+    /// store already holds one (no network), otherwise downloads, verifies, and
+    /// writes it through to the cache. Requires a prior [`Updater::refresh`].
+    ///
+    /// Equivalent to [`Updater::get_targetinfo`] followed by
+    /// [`Updater::find_cached_target`] and, on a miss,
+    /// [`Updater::download_target`].
+    pub async fn get_target(&mut self, target_path: &str, now: jiff::Timestamp) -> Result<Vec<u8>> {
         let target = self
             .get_targetinfo(target_path, now)
             .await?
             .ok_or_else(|| Error::Malformed(format!("unknown target {target_path:?}")))?;
+        if let Some(cached) = self.find_cached_target(&target, target_path) {
+            return Ok(cached);
+        }
+        self.download_target(&target, target_path).await
+    }
 
+    /// Download a resolved target over the network, verify its length and hash
+    /// against `target`, and (when a store is attached) write it through to the
+    /// cache. This always fetches; call [`Updater::find_cached_target`] first,
+    /// or use [`Updater::get_target`], to avoid re-downloading a cached target.
+    ///
+    /// Takes the [`TargetFile`] resolved by [`Updater::get_targetinfo`] rather
+    /// than a path, so a caller that has already resolved the target (and
+    /// perhaps checked the cache) does not pay for a second delegation walk.
+    /// Mirrors python-tuf's `download_target(targetinfo)`.
+    pub async fn download_target(
+        &mut self,
+        target: &TargetFile,
+        target_path: &str,
+    ) -> Result<Vec<u8>> {
         if target.length > self.config.target_max_length {
             return Err(Error::IntegrityMismatch(format!(
                 "{target_path}: pinned length {} exceeds configured max {}",
@@ -419,10 +455,8 @@ impl Updater {
             .await?
             .ok_or_else(|| Error::Transport(format!("target {relative} not found")))?;
 
-        verify_target_bytes(&bytes, &target, target_path)?;
-        if self.store.is_some() {
-            self.cache_put(&format!("targets/{target_path}"), &bytes);
-        }
+        verify_target_bytes(&bytes, target, target_path)?;
+        self.cache_put(&format!("targets/{target_path}"), &bytes);
         Ok(bytes)
     }
 }
