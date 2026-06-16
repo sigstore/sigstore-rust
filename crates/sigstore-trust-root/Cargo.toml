@@ -55,6 +55,12 @@ reqwest_0_12 = { package = "reqwest", version = "0.12", default-features = false
   "rustls-tls",
 ], optional = true }
 
+[[example]]
+# Refreshes the embedded TUF data (root.json files, trusted roots, signing
+# configs) using the TUF client. See .github/workflows/check-embedded-root.yml.
+name = "update-embedded-roots"
+required-features = ["tuf"]
+
 [dev-dependencies]
 tempfile = "3.27.0"
 # For testing

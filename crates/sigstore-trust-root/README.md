@@ -79,6 +79,23 @@ To opt out of TUF support:
 sigstore-trust-root = { version = "0.1", default-features = false }
 ```
 
+## Updating the Embedded Data
+
+This crate embeds a snapshot of trust material for the production, staging,
+and GitHub Sigstore instances: the TUF `root.json` metadata (under
+`repository/`) and the `trusted_root.json` / signing config TUF targets
+(under `src/` and `repository/`). To refresh all of them using the crate's
+own TUF client, run:
+
+```sh
+cargo run -p sigstore-trust-root --example update-embedded-roots
+```
+
+The fetched bytes are written verbatim, so `git diff` shows exactly what
+changed upstream. A scheduled workflow
+([`check-embedded-root.yml`](../../.github/workflows/check-embedded-root.yml))
+runs this weekly and files an issue when the embedded data is out of date.
+
 ## Related Crates
 
 Used by:
