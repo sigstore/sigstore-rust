@@ -28,8 +28,8 @@
 
 use std::path::Path;
 
-use tough::{ExpirationEnforcement, IntoVec, RepositoryLoader, TargetName};
-use url::Url;
+use sigstore_tuf::cache::FileStore;
+use sigstore_tuf::client::{HttpRepository, Updater};
 
 use sigstore_trust_root::{
     DEFAULT_TUF_URL, GITHUB_TUF_ROOT, GITHUB_TUF_URL, PRODUCTION_TUF_ROOT, SIGNING_CONFIG_TARGET,
@@ -85,21 +85,6 @@ const INSTANCES: &[Instance] = &[
     },
 ];
 
-/// Load a TUF repository, trusting `root` as the initial root of trust.
-async fn load_repository(
-    url: &str,
-    root: &[u8],
-) -> Result<tough::Repository, Box<dyn std::error::Error>> {
-    let base_url = Url::parse(url)?;
-    let targets_url = base_url.join("targets/")?;
-    let repo = RepositoryLoader::new(&root, base_url, targets_url)
-        // Refuse stale metadata: this tool exists to fetch *current* data.
-        .expiration_enforcement(ExpirationEnforcement::Safe)
-        .load()
-        .await?;
-    Ok(repo)
-}
-
 /// Write `bytes` to `path` only if the contents differ, reporting the result.
 fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<bool, Box<dyn std::error::Error>> {
     if std::fs::read(path).ok().as_deref() == Some(bytes) {
@@ -114,25 +99,25 @@ fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<bool, Box<dyn std::erro
 async fn update_instance(instance: &Instance) -> Result<bool, Box<dyn std::error::Error>> {
     println!("{} ({})", instance.name, instance.url);
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let now = jiff::Timestamp::now();
 
-    // Walk the TUF root chain from the embedded root.json; this verifies
-    // every intermediate root signature, exactly like the library does.
-    let repo = load_repository(instance.url, instance.embedded_root).await?;
-
-    // Fetch the latest root.json (as raw bytes, to keep the file byte-for-byte
-    // identical to what the repository serves). `cache_metadata` re-downloads
-    // the root chain, so verify the result by loading the repository again
-    // with the downloaded root.json as the sole trust anchor.
-    let latest_root_version = repo.root().signed.version.get();
+    // Refresh from the embedded root.json: this walks and verifies the whole
+    // root chain and the timestamp/snapshot/targets metadata, exactly as the
+    // library does at runtime. The write-through store captures every verified
+    // file so we can read the latest root.json back as raw bytes.
     let metadata_dir = tempfile::tempdir()?;
-    repo.cache_metadata(metadata_dir.path(), true).await?;
-    let latest_root = std::fs::read(
-        metadata_dir
-            .path()
-            .join(format!("{latest_root_version}.root.json")),
-    )?;
-    load_repository(instance.url, &latest_root)
-        .await
+    let repo = HttpRepository::new(instance.url)?;
+    let mut updater =
+        Updater::new(repo, instance.embedded_root)?.with_store(FileStore::new(metadata_dir.path()));
+    updater.refresh(now).await?;
+
+    // Read the freshest verified root.json verbatim, to keep the embedded file
+    // byte-for-byte identical to what the repository serves.
+    let latest_root = std::fs::read(metadata_dir.path().join("root.json"))?;
+
+    // Sanity check: the downloaded root.json must bootstrap on its own (it has
+    // to be correctly self-signed to its `root` threshold).
+    Updater::new(HttpRepository::new(instance.url)?, &latest_root)
         .map_err(|e| format!("downloaded root.json failed verification: {e}"))?;
 
     let mut changed = write_if_changed(&crate_dir.join(instance.root_path), &latest_root)?;
@@ -140,13 +125,7 @@ async fn update_instance(instance: &Instance) -> Result<bool, Box<dyn std::error
     // Fetch each embedded target through the TUF client (hash/length checked
     // against the verified targets metadata) and write the bytes verbatim.
     for (target_name, embedded_path) in instance.targets {
-        let target = TargetName::new(*target_name)?;
-        let bytes = repo
-            .read_target(&target)
-            .await?
-            .ok_or_else(|| format!("target not found: {target_name}"))?
-            .into_vec()
-            .await?;
+        let bytes = updater.get_target(target_name, now).await?;
         changed |= write_if_changed(&crate_dir.join(embedded_path), &bytes)?;
     }
 
