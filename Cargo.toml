@@ -96,6 +96,9 @@ futures = "0.3"
 # Directory utilities
 directories = "6.0"
 
+# Atomic file writes / temp files
+tempfile = "3.27.0"
+
 # Browser opening
 open = "5.3"
 
