@@ -8,7 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [features]
-default = ["tuf"]
+default = ["tuf", "rustls"]
+rustls = ["sigstore-tuf/rustls"]
+native-tls = ["sigstore-tuf/native-tls"]
 tuf = [
   "sigstore-tuf",
   "tokio",
@@ -42,7 +44,7 @@ hex = { workspace = true }
 # TUF feature dependencies (optional). The TUF client (metadata fetch +
 # verification) is now provided by the in-workspace `sigstore-tuf` crate, which
 # brings its own HTTP transport and (via the `rustls` feature) TLS backend.
-sigstore-tuf = { workspace = true, features = ["fetch", "rustls"], optional = true }
+sigstore-tuf = { workspace = true, features = ["fetch"], optional = true }
 tokio = { workspace = true, optional = true }
 directories = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }

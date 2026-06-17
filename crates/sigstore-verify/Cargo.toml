@@ -50,10 +50,12 @@ rustls = [
   "sigstore-bundle/rustls",
   "sigstore-rekor/rustls",
   "sigstore-tsa/rustls",
+  "sigstore-trust-root/rustls",
 ]
 native-tls = [
   "sigstore-bundle/native-tls",
   "sigstore-rekor/native-tls",
   "sigstore-tsa/native-tls",
+  "sigstore-trust-root/native-tls",
 ]
 tuf = ["sigstore-trust-root/tuf"]
