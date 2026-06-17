@@ -54,6 +54,6 @@ name = "update-embedded-roots"
 required-features = ["tuf"]
 
 [dev-dependencies]
-tempfile = "3.27.0"
+tempfile = { workspace = true }
 # For testing
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

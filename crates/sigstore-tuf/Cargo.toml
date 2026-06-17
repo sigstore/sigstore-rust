@@ -36,6 +36,9 @@ globset = { workspace = true }
 # Encoding
 hex = { workspace = true }
 
+# Atomic on-disk cache writes (temp file + persist/rename)
+tempfile = { workspace = true }
+
 # Time / expiration handling
 jiff = { workspace = true }
 

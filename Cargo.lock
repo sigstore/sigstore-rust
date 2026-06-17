@@ -2047,6 +2047,7 @@ dependencies = [
  "sha2",
  "sigstore-crypto",
  "sigstore-types",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",

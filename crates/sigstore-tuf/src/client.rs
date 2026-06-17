@@ -420,6 +420,13 @@ impl Updater {
     /// than a path, so a caller that has already resolved the target (and
     /// perhaps checked the cache) does not pay for a second delegation walk.
     /// Mirrors python-tuf's `download_target(targetinfo)`.
+    ///
+    /// The target is **buffered fully in memory** (bounded by the pinned length,
+    /// itself capped by [`UpdaterConfig::target_max_length`]) before its hash is
+    /// verified — there is no streaming-to-disk path. This is intentional for
+    /// Sigstore's small targets (`trusted_root.json` and friends); a caller that
+    /// needs to fetch very large targets without buffering should add a
+    /// streaming variant rather than relying on this method.
     pub async fn download_target(
         &mut self,
         target: &TargetFile,
