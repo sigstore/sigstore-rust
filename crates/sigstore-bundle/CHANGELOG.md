@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-bundle-v0.8.0...sigstore-bundle-v0.9.0) - 2026-06-17
+
+### Other
+
+- separate structural validation from crypto verification ([#123](https://github.com/sigstore/sigstore-rust/pull/123))
+- Various improvements ([#109](https://github.com/sigstore/sigstore-rust/pull/109))
+- Support dsse as hashedrekord ([#99](https://github.com/sigstore/sigstore-rust/pull/99))
+
 ## [0.6.5](https://github.com/sigstore/sigstore-rust/compare/sigstore-bundle-v0.6.4...sigstore-bundle-v0.6.5) - 2026-04-19
 
 ### Other

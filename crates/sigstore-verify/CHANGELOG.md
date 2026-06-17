@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-verify-v0.8.0...sigstore-verify-v0.9.0) - 2026-06-17
+
+### Other
+
+- bump dependencies ([#127](https://github.com/sigstore/sigstore-rust/pull/127))
+- separate structural validation from crypto verification ([#123](https://github.com/sigstore/sigstore-rust/pull/123))
+- enforce valid_for in key accessors, surface parse errors ([#122](https://github.com/sigstore/sigstore-rust/pull/122))
+- Add sigstore-tuf crate; bootstrap trusted roots over TUF without tough ([#106](https://github.com/sigstore/sigstore-rust/pull/106))
+- harden message-signature verification, drop digest leak ([#119](https://github.com/sigstore/sigstore-rust/pull/119))
+- Various improvements ([#109](https://github.com/sigstore/sigstore-rust/pull/109))
+- simplify conformance client using native DSSE validation ([#111](https://github.com/sigstore/sigstore-rust/pull/111))
+- Support dsse as hashedrekord ([#99](https://github.com/sigstore/sigstore-rust/pull/99))
+- Refactor log entry consistency verification ([#103](https://github.com/sigstore/sigstore-rust/pull/103))
+- Include OIDC in signing config, use TUF in examples ([#102](https://github.com/sigstore/sigstore-rust/pull/102))
+
 ## [0.8.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-verify-v0.7.0...sigstore-verify-v0.8.0) - 2026-05-21
 
 ### Other

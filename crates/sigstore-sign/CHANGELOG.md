@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-sign-v0.8.0...sigstore-sign-v0.9.0) - 2026-06-17
+
+### Other
+
+- bump dependencies ([#127](https://github.com/sigstore/sigstore-rust/pull/127))
+- Require complete SigningConfig from tuf ([#117](https://github.com/sigstore/sigstore-rust/pull/117))
+- Don't advertize unreliable parsing mechanism ([#118](https://github.com/sigstore/sigstore-rust/pull/118))
+- Support dsse as hashedrekord ([#99](https://github.com/sigstore/sigstore-rust/pull/99))
+- Include OIDC in signing config, use TUF in examples ([#102](https://github.com/sigstore/sigstore-rust/pull/102))
+
 ## [0.8.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-sign-v0.7.0...sigstore-sign-v0.8.0) - 2026-05-21
 
 ### Other

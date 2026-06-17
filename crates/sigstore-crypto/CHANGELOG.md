@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-crypto-v0.8.0...sigstore-crypto-v0.9.0) - 2026-06-17
+
+### Other
+
+- harden message-signature verification, drop digest leak ([#119](https://github.com/sigstore/sigstore-rust/pull/119))
+- support sha256/384/512 digests, fail closed on unsupported signing schemes, and add `KeyAlgorithm` ([#109](https://github.com/sigstore/sigstore-rust/pull/109))
+- If a Fulcio OID is found, it must be parseable ([#108](https://github.com/sigstore/sigstore-rust/pull/108))
+
 ## [0.8.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-crypto-v0.7.0...sigstore-crypto-v0.8.0) - 2026-05-21
 
 ### Other

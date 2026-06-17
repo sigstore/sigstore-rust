@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-trust-root-v0.8.0...sigstore-trust-root-v0.9.0) - 2026-06-17
+
+### Other
+
+- bump dependencies ([#127](https://github.com/sigstore/sigstore-rust/pull/127))
+- enforce valid_for in key accessors, surface parse errors ([#122](https://github.com/sigstore/sigstore-rust/pull/122))
+- use tempfile and write atomically ([#128](https://github.com/sigstore/sigstore-rust/pull/128))
+- Add sigstore-tuf crate; bootstrap trusted roots over TUF without tough ([#106](https://github.com/sigstore/sigstore-rust/pull/106))
+- refresh embedded TUF data (production root v14 → v15) ([#126](https://github.com/sigstore/sigstore-rust/pull/126))
+- add automation for embedded TUF data updates ([#121](https://github.com/sigstore/sigstore-rust/pull/121))
+
 ## [0.8.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-trust-root-v0.7.0...sigstore-trust-root-v0.8.0) - 2026-05-21
 
 ### Other
