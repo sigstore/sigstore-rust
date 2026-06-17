@@ -12,10 +12,6 @@ pub enum Error {
     /// JSON error
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
-
-    /// Merkle proof error
-    #[error("Merkle proof error: {0}")]
-    Merkle(#[from] sigstore_merkle::Error),
 }
 
 /// Result type for bundle operations

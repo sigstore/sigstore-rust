@@ -138,20 +138,55 @@ fn test_validate_bundle_with_inclusion_proof() {
 }
 
 #[test]
-fn test_validate_bundle_merkle_proof() {
-    let bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
+fn test_tampered_inclusion_proof_fails_verification() {
+    let mut bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
 
-    // This validates the Merkle inclusion proof
-    let options = ValidationOptions {
-        require_inclusion_proof: true,
-        require_timestamp: false,
-    };
+    // Tamper with the Merkle inclusion proof hashes.
+    let proof = bundle.verification_material.tlog_entries[0]
+        .inclusion_proof
+        .as_mut()
+        .expect("bundle has inclusion proof");
+    proof.hashes[0] = Sha256Hash::from_bytes([0u8; 32]);
 
-    let result = validate_bundle_with_options(&bundle, &options);
+    // Structural validation intentionally performs no crypto, so the
+    // tampered bundle still passes it...
     assert!(
-        result.is_ok(),
-        "Merkle proof validation failed: {:?}",
-        result.err()
+        validate_bundle(&bundle).is_ok(),
+        "structural validation should not perform Merkle proof crypto"
+    );
+
+    // ...but the verification path must reject the invalid Merkle proof.
+    let artifact_digest =
+        extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
+    let policy = VerificationPolicy::default().skip_timestamp();
+
+    let err = verify(artifact_digest, &bundle, &policy, &production_root())
+        .expect_err("verification must fail with a tampered inclusion proof");
+    assert!(
+        err.to_string().contains("inclusion proof"),
+        "unexpected error: {}",
+        err
+    );
+}
+
+#[test]
+fn test_tampered_canonicalized_body_fails_verification() {
+    let mut bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
+
+    // Tamper with the entry body the Merkle leaf hash is computed from.
+    let entry = &mut bundle.verification_material.tlog_entries[0];
+    let mut body = entry.canonicalized_body.as_bytes().to_vec();
+    body[0] ^= 0xff;
+    entry.canonicalized_body = sigstore_verify::types::CanonicalizedBody::new(body);
+
+    let artifact_digest =
+        extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
+    let policy = VerificationPolicy::default().skip_timestamp();
+
+    let result = verify(artifact_digest, &bundle, &policy, &production_root());
+    assert!(
+        result.is_err(),
+        "verification must fail when the canonicalized body does not match the inclusion proof"
     );
 }
 

@@ -11,7 +11,18 @@ use sigstore_trust_root::TrustedRoot;
 use sigstore_types::bundle::InclusionProof;
 use sigstore_types::{Bundle, SignatureBytes, TransparencyLogEntry};
 
-/// Verify transparency log entries (checkpoints and SETs)
+/// Verify transparency log entries (checkpoints, Merkle inclusion proofs and SETs)
+///
+/// For every tlog entry this cryptographically verifies (via
+/// [`verify_entry_inclusion`]):
+/// - the Merkle inclusion proof of the entry's canonicalized body against
+///   the proof's root hash (if an inclusion proof is present),
+/// - the checkpoint signature with the Rekor keys from the trusted root,
+///   and that the checkpoint's root hash matches the proof's root hash,
+/// - the inclusion promise (SET), if present.
+///
+/// It also validates the entry's integrated time against the certificate
+/// validity window.
 ///
 /// # Arguments
 /// * `bundle` - The bundle containing transparency log entries
@@ -29,19 +40,8 @@ pub fn verify_tlog_entries(
     let mut integrated_time_result: Option<i64> = None;
 
     for entry in &bundle.verification_material.tlog_entries {
-        // Verify checkpoint signature if present
-        if let Some(ref inclusion_proof) = entry.inclusion_proof {
-            verify_checkpoint(
-                &inclusion_proof.checkpoint.envelope,
-                inclusion_proof,
-                trusted_root,
-            )?;
-        }
-
-        // Verify inclusion promise (SET) if present
-        if entry.inclusion_promise.is_some() {
-            verify_set(entry, trusted_root)?;
-        }
+        // Verify Merkle inclusion proof, checkpoint signature and SET
+        verify_entry_inclusion(entry, trusted_root)?;
 
         // Validate integrated time (0 indicates missing/invalid time in v2 entries)
         let time = entry.integrated_time;
@@ -75,6 +75,69 @@ pub fn verify_tlog_entries(
     }
 
     Ok(integrated_time_result)
+}
+
+/// Cryptographically verify the log-inclusion material of a single tlog entry.
+///
+/// This performs all per-entry transparency log crypto checks:
+/// - If an inclusion proof is present:
+///   - verifies the Merkle inclusion proof, i.e. that the leaf hash of the
+///     entry's canonicalized body hashes up to the proof's root hash, and
+///   - verifies the checkpoint: its root hash must match the proof's root
+///     hash, and its signature must verify against a Rekor key from the
+///     trusted root (see [`verify_checkpoint`]).
+/// - If an inclusion promise (SET) is present, verifies it against the
+///   Rekor key for the entry's log ID (see [`verify_set`]).
+///
+/// Time-related checks (integrated time vs. certificate validity) are not
+/// performed here; see [`verify_tlog_entries`].
+pub fn verify_entry_inclusion(
+    entry: &TransparencyLogEntry,
+    trusted_root: &TrustedRoot,
+) -> Result<()> {
+    if let Some(ref inclusion_proof) = entry.inclusion_proof {
+        verify_merkle_inclusion(entry, inclusion_proof)?;
+        verify_checkpoint(
+            &inclusion_proof.checkpoint.envelope,
+            inclusion_proof,
+            trusted_root,
+        )?;
+    }
+
+    if entry.inclusion_promise.is_some() {
+        verify_set(entry, trusted_root)?;
+    }
+
+    Ok(())
+}
+
+/// Verify the Merkle inclusion proof of a tlog entry.
+///
+/// Computes the leaf hash of the entry's canonicalized body and verifies
+/// that, combined with the proof hashes, it reproduces the proof's root
+/// hash. Note that this alone does not authenticate the root hash; the
+/// accompanying checkpoint signature check in [`verify_checkpoint`] binds
+/// the root hash to a key in the trusted root.
+fn verify_merkle_inclusion(entry: &TransparencyLogEntry, proof: &InclusionProof) -> Result<()> {
+    let leaf_index: u64 = proof
+        .log_index
+        .as_u64()
+        .ok_or_else(|| Error::Verification("invalid log_index in inclusion proof".to_string()))?;
+    let tree_size: u64 = proof
+        .tree_size
+        .try_into()
+        .map_err(|_| Error::Verification("invalid tree_size in inclusion proof".to_string()))?;
+
+    let leaf_hash = sigstore_merkle::hash_leaf(entry.canonicalized_body.as_bytes());
+
+    sigstore_merkle::verify_inclusion_proof(
+        &leaf_hash,
+        leaf_index,
+        tree_size,
+        &proof.hashes,
+        &proof.root_hash,
+    )
+    .map_err(|e| Error::Verification(format!("inclusion proof verification failed: {}", e)))
 }
 
 /// Verify a checkpoint signature using the trusted root

@@ -233,7 +233,9 @@ impl Verifier {
         let artifact = artifact.into();
         let mut result = VerificationResult::success();
 
-        // Validate bundle structure first
+        // Validate bundle structure first. This is a purely structural
+        // (shape/required-fields) check; all cryptographic verification of
+        // the bundle's contents happens in the steps below.
         let options = ValidationOptions {
             require_inclusion_proof: policy.verify_tlog,
             require_timestamp: false, // Don't require timestamps, but verify if present
@@ -569,7 +571,7 @@ pub fn verify<'a>(
 ///
 /// This verification:
 /// - Verifies the signature using the provided public key
-/// - Verifies transparency log entries (checkpoints, SETs)
+/// - Verifies transparency log entries (Merkle inclusion proofs, checkpoints, SETs)
 /// - Skips certificate chain verification (no certificate present)
 /// - Skips identity/issuer verification
 ///
@@ -605,7 +607,8 @@ pub fn verify_with_key<'a>(
     let artifact = artifact.into();
     let result = VerificationResult::success();
 
-    // Validate bundle structure
+    // Validate bundle structure (structural only; the cryptographic checks
+    // follow below)
     let options = ValidationOptions {
         require_inclusion_proof: true,
         require_timestamp: false,
@@ -624,21 +627,10 @@ pub fn verify_with_key<'a>(
         }
     };
 
-    // Verify transparency log entries (checkpoints, SETs) without certificate time validation
+    // Verify transparency log entries (Merkle inclusion proofs, checkpoints,
+    // SETs) without certificate time validation
     for entry in &bundle.verification_material.tlog_entries {
-        // Verify checkpoint signature if present
-        if let Some(ref inclusion_proof) = entry.inclusion_proof {
-            crate::verify_impl::tlog::verify_checkpoint(
-                &inclusion_proof.checkpoint.envelope,
-                inclusion_proof,
-                trusted_root,
-            )?;
-        }
-
-        // Verify inclusion promise (SET) if present
-        if entry.inclusion_promise.is_some() {
-            crate::verify_impl::tlog::verify_set(entry, trusted_root)?;
-        }
+        crate::verify_impl::tlog::verify_entry_inclusion(entry, trusted_root)?;
     }
 
     // Verify the signature
