@@ -112,8 +112,16 @@ async fn update_instance(instance: &Instance) -> Result<bool, Box<dyn std::error
     updater.refresh(now).await?;
 
     // Read the freshest verified root.json verbatim, to keep the embedded file
-    // byte-for-byte identical to what the repository serves.
-    let latest_root = std::fs::read(metadata_dir.path().join("root.json"))?;
+    // byte-for-byte identical to what the repository serves. The updater only
+    // writes `root.json` to the store when it rotates the root during this
+    // refresh; in the common steady state (embedded root already current) no
+    // rotation happens and the store has no `root.json`, so the freshest
+    // verified root is the embedded one we bootstrapped from.
+    let latest_root = match std::fs::read(metadata_dir.path().join("root.json")) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => instance.embedded_root.to_vec(),
+        Err(e) => return Err(e.into()),
+    };
 
     // Sanity check: the downloaded root.json must bootstrap on its own (it has
     // to be correctly self-signed to its `root` threshold).
