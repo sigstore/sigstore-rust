@@ -1,0 +1,35 @@
+[package]
+name = "sigstore-python"
+description = "Python bindings for the sigstore-rust library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+# Per-crate MSRV override: pyo3 0.29 requires Rust 1.76+
+rust-version = "1.76"
+publish = false
+
+[lib]
+name = "_internal"
+# cdylib: compiled Python extension module (.so / .pyd)
+# rlib:   needed so the stub_gen binary can link against this crate
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "stub_gen"
+path = "src/bin/stub_gen.rs"
+
+[dependencies]
+pyo3 = { version = "0.29", features = ["abi3-py310"] }
+pyo3-stub-gen = { version = "0.23" }
+tokio = { workspace = true }
+
+# Sigstore workspace crates
+# Explicitly enable `rustls` (TLS backend) since the workspace sets
+# default-features = false for most sigstore-* crates.
+sigstore-types = { workspace = true }
+sigstore-bundle = { workspace = true, features = ["rustls"] }
+sigstore-verify = { workspace = true, features = ["rustls", "tuf"] }
+sigstore-sign = { workspace = true, features = ["rustls"] }
+sigstore-oidc = { workspace = true, features = ["rustls"] }
+sigstore-trust-root = { workspace = true, features = ["tuf", "rustls"] }
