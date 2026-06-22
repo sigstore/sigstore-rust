@@ -1,5 +1,5 @@
 [package]
-name = "sigstore-python"
+name = "py-sigstore"
 description = "Python bindings for the sigstore-rust library"
 version.workspace = true
 edition.workspace = true

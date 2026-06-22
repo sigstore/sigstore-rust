@@ -6,7 +6,7 @@ on:
       - "py-v*"
   pull_request:
     paths:
-      - "crates/sigstore-python/**"
+      - "crates/py-sigstore/**"
       - ".github/workflows/wheels.yml"
   workflow_dispatch:
 
@@ -30,7 +30,7 @@ jobs:
 
       - uses: PyO3/maturin-action@v1
         with:
-          working-directory: crates/sigstore-python
+          working-directory: crates/py-sigstore
           target: ${{ matrix.target }}
           manylinux: 2_28
           args: --release --locked --out dist
@@ -40,7 +40,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-${{ matrix.target }}
-          path: crates/sigstore-python/dist
+          path: crates/py-sigstore/dist
 
   # ──────────────────────────────────────────────────────────────────────────
   # macOS — x86_64 and arm64 (Apple Silicon)
@@ -64,14 +64,14 @@ jobs:
 
       - uses: PyO3/maturin-action@v1
         with:
-          working-directory: crates/sigstore-python
+          working-directory: crates/py-sigstore
           target: ${{ matrix.target }}
           args: --release --locked --out dist
 
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-macos-${{ matrix.target }}
-          path: crates/sigstore-python/dist
+          path: crates/py-sigstore/dist
 
   # ──────────────────────────────────────────────────────────────────────────
   # Windows x86_64
@@ -90,7 +90,7 @@ jobs:
 
       - uses: PyO3/maturin-action@v1
         with:
-          working-directory: crates/sigstore-python
+          working-directory: crates/py-sigstore
           target: x86_64
           args: >-
             --release --locked --out dist
@@ -99,7 +99,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-windows-x86_64
-          path: crates/sigstore-python/dist
+          path: crates/py-sigstore/dist
 
   # ──────────────────────────────────────────────────────────────────────────
   # Source distribution (sdist) — required for PyPI completeness
@@ -112,14 +112,14 @@ jobs:
 
       - uses: PyO3/maturin-action@v1
         with:
-          working-directory: crates/sigstore-python
+          working-directory: crates/py-sigstore
           command: sdist
           args: --out dist
 
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-sdist
-          path: crates/sigstore-python/dist
+          path: crates/py-sigstore/dist
 
   # ──────────────────────────────────────────────────────────────────────────
   # Stub check — regenerate .pyi and fail if it differs from committed copy
@@ -134,13 +134,43 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Regenerate stubs
-        working-directory: crates/sigstore-python
+        working-directory: crates/py-sigstore
         run: cargo run --bin stub_gen
 
       - name: Check for drift
         run: |
-          git diff --exit-code crates/sigstore-python/python/py_sigstore_rust/_internal.pyi \
+          git diff --exit-code crates/py-sigstore/python/sigstore/_internal.pyi \
             || (echo "ERROR: _internal.pyi is out of date. Run 'cargo run --bin stub_gen' and commit the result." && exit 1)
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Python test suite — runs after the Linux x86_64 wheel is built
+  # Executes offline + network tests (not ci-marker signing tests).
+  # ──────────────────────────────────────────────────────────────────────────
+  test:
+    name: Python tests
+    runs-on: ubuntu-latest
+    needs: [linux]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Download Linux x86_64 wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-linux-x86_64
+          path: dist
+
+      - name: Install wheel and pytest
+        run: |
+          pip install dist/*.whl
+          pip install pytest
+
+      - name: Run tests (offline + network, no signing)
+        working-directory: crates/py-sigstore
+        run: pytest -m "not ci"
 
   # ──────────────────────────────────────────────────────────────────────────
   # Publish to PyPI — only on `py-v*` tags, after all wheels succeed
@@ -152,7 +182,7 @@ jobs:
     needs: [linux, macos, windows, sdist]
     environment:
       name: pypi
-      url: https://pypi.org/p/py-sigstore-rust
+      url: https://pypi.org/p/py-sigstore
     permissions:
       id-token: write  # Required for trusted publishing (OIDC)
     steps:

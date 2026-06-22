@@ -15,7 +15,7 @@ members = [
     "crates/sigstore-sign",
     "crates/sigstore-conformance",
     "crates/sigstore-protobuf-compat",
-    "crates/sigstore-python",
+    "crates/py-sigstore",
 ]
 
 [workspace.package]

@@ -20,6 +20,6 @@ pub fn get_runtime() -> &'static tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .expect("Failed to build embedded Tokio runtime for py-sigstore-rust")
+            .expect("Failed to build embedded Tokio runtime for py-sigstore")
     })
 }

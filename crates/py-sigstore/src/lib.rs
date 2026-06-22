@@ -2,7 +2,7 @@
 //!
 //! This crate exposes a Pythonic facade over the sigstore-rust workspace
 //! crates. It is built as a Python extension module (`_internal`) and
-//! re-exported through the `py_sigstore_rust` Python package.
+//! re-exported through the `sigstore` Python package.
 
 use pyo3::prelude::*;
 use pyo3_stub_gen::define_stub_info_gatherer;
@@ -21,7 +21,7 @@ define_stub_info_gatherer!(stub_info);
 
 /// Python module entry point.
 ///
-/// The module is named `_internal`; the public `py_sigstore_rust` package
+/// The module is named `_internal`; the public `sigstore` package
 /// re-exports everything from here via `__init__.py`.
 #[pymodule]
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {

@@ -1,11 +1,11 @@
-# py-sigstore-rust
+# py-sigstore
 
 Python bindings for [sigstore-rust](https://github.com/prefix-dev/sigstore-rust) — fast Sigstore artifact signing and verification backed by a native Rust implementation.
 
 ## Installation
 
 ```bash
-pip install py-sigstore-rust
+pip install py-sigstore
 ```
 
 ## Usage
@@ -13,7 +13,7 @@ pip install py-sigstore-rust
 ### Verification
 
 ```python
-import py_sigstore_rust as sr
+import sigstore as sr
 
 bundle = sr.Bundle.from_json(open("artifact.sigstore.json").read())
 policy = sr.Identity(
@@ -28,7 +28,7 @@ verifier.verify_artifact(open("artifact.bin", "rb").read(), bundle, policy)
 ### Signing (CI / ambient OIDC)
 
 ```python
-import py_sigstore_rust as sr
+import sigstore as sr
 
 token = sr.IdentityToken.detect_ambient()
 signer = sr.Signer.production(token)
@@ -41,7 +41,7 @@ with open("artifact.sigstore.json", "w") as f:
 ### One-shot convenience API
 
 ```python
-import py_sigstore_rust as sr
+import sigstore as sr
 
 # Verify
 sr.verify(artifact_bytes, bundle_json_str, identity="user@example.com",

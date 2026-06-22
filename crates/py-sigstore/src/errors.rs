@@ -1,10 +1,10 @@
-//! Python exception hierarchy for py-sigstore-rust.
+//! Python exception hierarchy for py-sigstore.
 //!
 //! All exceptions derive from `SigstoreError` so callers can catch the base
 //! class or a specific subclass.
 //!
 //! ```python
-//! import py_sigstore_rust as sr
+//! import sigstore as sr
 //!
 //! try:
 //!     sr.verify(artifact, bundle, identity="...", issuer="...")
@@ -22,47 +22,47 @@ use pyo3::prelude::*;
 //
 // Using plain pyo3::create_exception! (not the stub-gen wrapper) because
 // pyo3_stub_gen::create_exception! uses `stringify!($module)` internally,
-// which cannot handle dotted module paths like "py_sigstore_rust._internal".
+// which cannot handle dotted module paths like "sigstore._internal".
 // The exceptions are documented in the hand-written _internal.pyi stub instead.
 // ---------------------------------------------------------------------------
 
 pyo3::create_exception!(
-    py_sigstore_rust,
+    sigstore,
     SigstoreError,
     PyException,
-    "Base exception for all py-sigstore-rust errors."
+    "Base exception for all py-sigstore errors."
 );
 
 pyo3::create_exception!(
-    py_sigstore_rust,
+    sigstore,
     VerificationError,
     SigstoreError,
     "Raised when artifact or bundle verification fails."
 );
 
 pyo3::create_exception!(
-    py_sigstore_rust,
+    sigstore,
     SigningError,
     SigstoreError,
     "Raised when artifact signing fails."
 );
 
 pyo3::create_exception!(
-    py_sigstore_rust,
+    sigstore,
     BundleError,
     SigstoreError,
     "Raised when a Sigstore bundle cannot be parsed or is structurally invalid."
 );
 
 pyo3::create_exception!(
-    py_sigstore_rust,
+    sigstore,
     TrustedRootError,
     SigstoreError,
     "Raised when a TrustedRoot cannot be loaded, fetched, or parsed."
 );
 
 pyo3::create_exception!(
-    py_sigstore_rust,
+    sigstore,
     IdentityTokenError,
     SigstoreError,
     "Raised when an OIDC identity token is invalid, expired, or cannot be detected."

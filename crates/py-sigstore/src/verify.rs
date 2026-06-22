@@ -36,7 +36,7 @@ use sigstore_verify::{VerificationPolicy, Verifier};
 ///         issuer="https://token.actions.githubusercontent.com",
 ///     )
 #[gen_stub_pyclass]
-#[pyclass(name = "Identity", module = "py_sigstore_rust._internal")]
+#[pyclass(name = "Identity", module = "sigstore._internal")]
 pub struct PyIdentity {
     pub inner: VerificationPolicy,
 }
@@ -94,7 +94,7 @@ impl PyIdentity {
 ///     verifier.verify_artifact(open("artifact.bin", "rb").read(), bundle, policy)
 ///     # raises VerificationError on failure, returns None on success
 #[gen_stub_pyclass]
-#[pyclass(name = "Verifier", module = "py_sigstore_rust._internal")]
+#[pyclass(name = "Verifier", module = "sigstore._internal")]
 pub struct PyVerifier {
     inner: Verifier,
 }
@@ -252,7 +252,7 @@ impl PyVerifier {
 ///     :exc:`VerificationError`: If verification fails.
 ///     :exc:`BundleError`:       If ``bundle`` is a string that cannot be parsed.
 ///     :exc:`TrustedRootError`:  If the trusted root cannot be fetched.
-#[gen_stub_pyfunction(module = "py_sigstore_rust._internal")]
+#[gen_stub_pyfunction(module = "sigstore._internal")]
 #[pyfunction]
 #[pyo3(signature = (input, bundle, identity, issuer=None, *, trusted_root=None))]
 pub fn py_verify(

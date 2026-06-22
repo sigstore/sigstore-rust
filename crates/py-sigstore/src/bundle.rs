@@ -16,7 +16,7 @@ use sigstore_types::Bundle;
 ///     bundle = Bundle.from_json(open("artifact.sigstore.json").read())
 ///     print(bundle.media_type)
 #[gen_stub_pyclass]
-#[pyclass(name = "Bundle", module = "py_sigstore_rust._internal")]
+#[pyclass(name = "Bundle", module = "sigstore._internal")]
 pub struct PyBundle {
     pub inner: Bundle,
 }
