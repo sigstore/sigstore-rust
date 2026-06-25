@@ -61,6 +61,7 @@ async fn main() {
     let mut identity: Option<String> = None;
     let mut identity_regexp: Option<String> = None;
     let mut issuer: Option<String> = None;
+    let mut instance: Option<String> = None;
     let mut staging = false;
     let mut positional: Vec<String> = Vec::new();
 
@@ -90,6 +91,14 @@ async fn main() {
                     process::exit(1);
                 }
                 issuer = Some(args[i].clone());
+            }
+            "--instance" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("Error: --instance requires a value");
+                    process::exit(1);
+                }
+                instance = Some(args[i].clone());
             }
             "--staging" => {
                 staging = true;
@@ -140,9 +149,19 @@ async fn main() {
         }
     };
 
-    // Load trusted root (staging or production Sigstore infrastructure)
-    let trusted_root = if staging {
-        println!("  Using: staging infrastructure (fetching via TUF)");
+    // Load trusted root (staging or production Sigstore instance)
+    let trusted_root = if let Some(url) = instance {
+        println!("  Using: custom instance ({})", url);
+        let config = sigstore_trust_root::tuf::TufConfig::custom(&url);
+        match TrustedRoot::from_tuf(config).await {
+            Ok(root) => root,
+            Err(e) => {
+                eprintln!("Error fetching custom trusted root via TUF: {}", e);
+                process::exit(1);
+            }
+        }
+    } else if staging {
+        println!("  Using: staging instance");
         match TrustedRoot::staging().await {
             Ok(root) => root,
             Err(e) => {
@@ -151,7 +170,7 @@ async fn main() {
             }
         }
     } else {
-        println!("  Using: production infrastructure (fetching via TUF)");
+        println!("  Using: production instance");
         match TrustedRoot::production().await {
             Ok(root) => root,
             Err(e) => {
@@ -282,7 +301,8 @@ fn print_usage(program: &str) {
     eprintln!("  --certificate-identity <ID>        Required certificate identity (exact match)");
     eprintln!("  --certificate-identity-regexp <RE> Required certificate identity (regex)");
     eprintln!("  --certificate-oidc-issuer <ISSUER> Required OIDC issuer");
-    eprintln!("  --staging                          Use Sigstore staging infrastructure");
+    eprintln!("  --instance <URL>                   Use a custom Sigstore instance");
+    eprintln!("  --staging                          Use Sigstore staging instance");
     eprintln!("  -h, --help                         Print this help message");
     eprintln!();
     eprintln!("Aliases (for backwards compatibility):");

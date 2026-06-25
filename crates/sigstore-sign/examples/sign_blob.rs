@@ -51,6 +51,7 @@ async fn main() {
     // Parse arguments
     let mut token: Option<String> = None;
     let mut output: Option<String> = None;
+    let mut instance: Option<String> = None;
     let mut staging = false;
     let mut use_v2 = false;
     let mut positional: Vec<String> = Vec::new();
@@ -73,6 +74,14 @@ async fn main() {
                     process::exit(1);
                 }
                 output = Some(args[i].clone());
+            }
+            "--instance" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("Error: --instance requires a value");
+                    process::exit(1);
+                }
+                instance = Some(args[i].clone());
             }
             "--staging" => {
                 staging = true;
@@ -118,13 +127,22 @@ async fn main() {
     println!("  Size: {} bytes", artifact.len());
 
     // Create signing context with appropriate API version
-    let tuf_config = if staging {
-        println!("  Using: staging infrastructure");
+    let tuf_config = if let Some(url) = instance {
+        println!("  Using: custom instance ({})", url);
+        let config = sigstore_trust_root::tuf::TufConfig::custom(&url);
+        sigstore_trust_root::SigningConfig::from_tuf(config)
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to fetch custom config via TUF: {}", e);
+                process::exit(1);
+            })
+    } else if staging {
+        println!("  Using: staging instance");
         sigstore_trust_root::SigningConfig::staging()
             .await
             .expect("Failed to fetch staging config via TUF")
     } else {
-        println!("  Using: production infrastructure");
+        println!("  Using: production instance");
         sigstore_trust_root::SigningConfig::production()
             .await
             .expect("Failed to fetch production config via TUF")
@@ -277,6 +295,7 @@ fn print_usage(program: &str) {
     eprintln!("Options:");
     eprintln!("  -o, --output <FILE>  Output bundle path (default: <artifact>.sigstore.json)");
     eprintln!("  -t, --token <TOKEN>  OIDC identity token (skips interactive auth)");
+    eprintln!("      --instance <URL> Use a custom Sigstore instance");
     eprintln!("      --staging        Use Sigstore staging infrastructure");
     eprintln!("      --v2             Use Rekor V2 API (uses log2025-1.rekor.sigstore.dev)");
     eprintln!("  -h, --help           Print this help message");
