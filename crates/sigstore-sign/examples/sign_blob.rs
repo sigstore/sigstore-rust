@@ -127,9 +127,9 @@ async fn main() {
     println!("  Size: {} bytes", artifact.len());
 
     // Create signing context with appropriate API version
-    let tuf_config = if let Some(url) = instance {
+    let tuf_config = if let Some(ref url) = instance {
         println!("  Using: custom instance ({})", url);
-        let config = sigstore_trust_root::tuf::TufConfig::custom(&url);
+        let config = sigstore_trust_root::tuf::TufConfig::custom(url);
         sigstore_trust_root::SigningConfig::from_tuf(config)
             .await
             .unwrap_or_else(|e| {
@@ -249,10 +249,18 @@ async fn main() {
         println!("  RFC3161 Timestamps: none (V2 bundles require timestamps!)");
     }
 
+    let extra_flags = if let Some(ref url) = instance {
+        format!("--instance {} ", url)
+    } else if staging {
+        "--staging ".to_string()
+    } else {
+        String::new()
+    };
+
     println!("\nVerify with:");
     println!(
-        "  cargo run -p sigstore-verify --example verify_bundle -- {} {}",
-        artifact_path, output_path
+        "  cargo run -p sigstore-verify --example verify_bundle -- {}{} {}",
+        extra_flags, artifact_path, output_path
     );
 }
 
