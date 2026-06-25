@@ -68,6 +68,8 @@ impl Updater {
     /// root. A cached root that doesn't chain from the bootstrap is ignored.
     pub fn with_store(mut self, store: impl MetadataStore + 'static) -> Self {
         let store: Box<dyn MetadataStore> = Box::new(store);
+
+        // Fast-forward from cached history
         loop {
             let next = self.trusted.root().version + 1;
             match store.load(&format!("root_history/{next}.root.json")) {
@@ -77,6 +79,18 @@ impl Updater {
                 _ => break,
             }
         }
+
+        // Ensure root.json in cache matches the final trusted local version
+        let version = self.trusted.root().version;
+        let root_bytes = self.trusted.root_bytes();
+
+        if let Err(e) = store.store("root.json", root_bytes) {
+            tracing::warn!(error = %e, "failed to update root.json in cache");
+        }
+        if let Err(e) = store.store(&format!("root_history/{version}.root.json"), root_bytes) {
+            tracing::warn!(error = %e, version, "failed to cache root history");
+        }
+
         self.store = Some(store);
         self
     }
