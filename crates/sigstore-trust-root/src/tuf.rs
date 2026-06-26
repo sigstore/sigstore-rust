@@ -703,7 +703,7 @@ mod tests {
     #[test]
     fn test_tuf_config_custom() {
         let root_json = b"test root json";
-        let config = TufConfig::custom("https://custom.tuf/", root_json);
+        let config = TufConfig::custom("https://custom.tuf/").with_root(root_json);
         assert_eq!(config.url, "https://custom.tuf/");
         assert_eq!(config.root_json, Some(root_json.to_vec()));
     }
@@ -722,26 +722,35 @@ mod tests {
     #[test]
     fn test_tuf_config_get_root_json_production() {
         let config = TufConfig::production();
-        assert_eq!(config.get_root_json().unwrap(), PRODUCTION_TUF_ROOT);
+        assert_eq!(
+            TufClient::new(config).get_root_json().unwrap(),
+            PRODUCTION_TUF_ROOT
+        );
     }
 
     #[test]
     fn test_tuf_config_get_root_json_staging() {
         let config = TufConfig::staging();
-        assert_eq!(config.get_root_json().unwrap(), STAGING_TUF_ROOT);
+        assert_eq!(
+            TufClient::new(config).get_root_json().unwrap(),
+            STAGING_TUF_ROOT
+        );
     }
 
     #[test]
     fn test_tuf_config_get_root_json_github() {
         let config = TufConfig::github();
-        assert_eq!(config.get_root_json().unwrap(), GITHUB_TUF_ROOT);
+        assert_eq!(
+            TufClient::new(config).get_root_json().unwrap(),
+            GITHUB_TUF_ROOT
+        );
     }
 
     #[test]
     fn test_tuf_config_get_root_json_custom() {
         let root_json = b"custom root";
-        let config = TufConfig::custom("https://custom.tuf/", root_json);
-        assert_eq!(config.get_root_json().unwrap(), root_json);
+        let config = TufConfig::custom("https://custom.tuf/").with_root(root_json);
+        assert_eq!(TufClient::new(config).get_root_json().unwrap(), root_json);
     }
 
     #[test]
@@ -753,7 +762,7 @@ mod tests {
             offline: false,
             root_json: None,
         };
-        let err = config.get_root_json().unwrap_err();
+        let err = TufClient::new(config).get_root_json().unwrap_err();
         assert!(err
             .to_string()
             .contains("No root.json provided for custom URL"));
@@ -844,7 +853,8 @@ mod tests {
     #[tokio::test]
     async fn test_custom_url_offline_fails_without_cache() {
         // Custom URLs have no embedded fallback
-        let config = TufConfig::custom("https://custom.tuf/", b"root")
+        let config = TufConfig::custom("https://custom.tuf/")
+            .with_root(b"root")
             .offline()
             .without_cache();
         let client = TufClient::new(config);
