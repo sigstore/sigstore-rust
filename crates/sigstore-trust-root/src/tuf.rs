@@ -239,7 +239,6 @@ impl TufConfig {
     }
 }
 
-
 /// Embedded production trusted root (same as SIGSTORE_PRODUCTION_TRUSTED_ROOT but as bytes)
 const EMBEDDED_PRODUCTION_TRUSTED_ROOT: &[u8] = include_bytes!("trusted_root.json");
 
@@ -271,18 +270,19 @@ impl TufClient {
     /// (production, staging, and GitHub).
     fn new(config: TufConfig) -> Self {
         // Determine embedded targets based on URL for offline fallback
+        let normalized_url = config.url.trim_end_matches('/');
         let embedded_targets: &'static [(&'static str, &'static [u8])] =
-            if config.url == DEFAULT_TUF_URL || config.url.starts_with(DEFAULT_TUF_URL) {
+            if normalized_url == DEFAULT_TUF_URL {
                 &[
                     (TRUSTED_ROOT_TARGET, EMBEDDED_PRODUCTION_TRUSTED_ROOT),
                     (SIGNING_CONFIG_TARGET, EMBEDDED_PRODUCTION_SIGNING_CONFIG),
                 ]
-            } else if config.url == STAGING_TUF_URL || config.url.starts_with(STAGING_TUF_URL) {
+            } else if normalized_url == STAGING_TUF_URL {
                 &[
                     (TRUSTED_ROOT_TARGET, EMBEDDED_STAGING_TRUSTED_ROOT),
                     (SIGNING_CONFIG_TARGET, EMBEDDED_STAGING_SIGNING_CONFIG),
                 ]
-            } else if config.url == GITHUB_TUF_URL || config.url.starts_with(GITHUB_TUF_URL) {
+            } else if normalized_url == GITHUB_TUF_URL {
                 &[(TRUSTED_ROOT_TARGET, EMBEDDED_GITHUB_TRUSTED_ROOT)]
             } else {
                 // Custom URLs have no embedded fallback
@@ -342,11 +342,12 @@ impl TufClient {
         }
 
         // Fall back to embedded roots for known URLs
-        if self.config.url == DEFAULT_TUF_URL || self.config.url.starts_with(DEFAULT_TUF_URL) {
+        let normalized_url = self.config.url.trim_end_matches('/');
+        if normalized_url == DEFAULT_TUF_URL {
             return Ok(PRODUCTION_TUF_ROOT.to_vec());
-        } else if self.config.url == STAGING_TUF_URL || self.config.url.starts_with(STAGING_TUF_URL) {
+        } else if normalized_url == STAGING_TUF_URL {
             return Ok(STAGING_TUF_ROOT.to_vec());
-        } else if self.config.url == GITHUB_TUF_URL || self.config.url.starts_with(GITHUB_TUF_URL) {
+        } else if normalized_url == GITHUB_TUF_URL {
             return Ok(GITHUB_TUF_ROOT.to_vec());
         }
 
