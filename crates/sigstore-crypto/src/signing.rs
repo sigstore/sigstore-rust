@@ -35,6 +35,12 @@ pub enum SigningScheme {
     RsaPkcs1Sha384,
     /// RSA PKCS#1 v1.5 with SHA-512
     RsaPkcs1Sha512,
+    /// ML-DSA-44
+    MlDsa44,
+    /// ML-DSA-65
+    MlDsa65,
+    /// ML-DSA-87
+    MlDsa87,
 }
 
 impl SigningScheme {
@@ -52,6 +58,9 @@ impl SigningScheme {
             SigningScheme::RsaPkcs1Sha256 => "RSA_PKCS1_SHA256",
             SigningScheme::RsaPkcs1Sha384 => "RSA_PKCS1_SHA384",
             SigningScheme::RsaPkcs1Sha512 => "RSA_PKCS1_SHA512",
+            SigningScheme::MlDsa44 => "ML_DSA_44",
+            SigningScheme::MlDsa65 => "ML_DSA_65",
+            SigningScheme::MlDsa87 => "ML_DSA_87",
         }
     }
 
@@ -60,7 +69,13 @@ impl SigningScheme {
     /// Ed25519 doesn't support prehashed verification (it signs the full message).
     /// ECDSA and RSA schemes support prehashed verification.
     pub fn supports_prehashed(&self) -> bool {
-        !matches!(self, SigningScheme::Ed25519)
+        !matches!(
+            self,
+            SigningScheme::Ed25519
+                | SigningScheme::MlDsa44
+                | SigningScheme::MlDsa65
+                | SigningScheme::MlDsa87
+        )
     }
 }
 
