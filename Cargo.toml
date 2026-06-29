@@ -83,11 +83,8 @@ tracing = { version = "0.1" }
 # Serialization / JSON
 serde_json_canonicalizer = "0.3"
 
-# TUF / Package management
-tough = { version = "0.22", features = ["http"] }
-
-# Glob matching for TUF delegation paths (same crate `tough` uses; its default
-# options match python-tuf's `fnmatch` semantics).
+# Glob matching for TUF delegation paths (matches python-tuf's `fnmatch`
+# semantics, the same behaviour `tough` relies on).
 globset = "0.4"
 
 # Async utilities
