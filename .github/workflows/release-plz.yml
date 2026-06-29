@@ -65,8 +65,30 @@ jobs:
         run: rustup toolchain install
 
       - name: Run release-plz
+        id: release-plz
         uses: release-plz/action@e8792575c7f2366cf6ff3ccc33ead9ace5b691c7 # v0.5.130
         with:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+
+      # release-plz creates the commit via libgit2, so it cannot add a DCO
+      # sign-off itself. Amend the commit it just pushed to append a
+      # `Signed-off-by` trailer matching the commit author, then force-push.
+      - name: Add DCO sign-off to release PR commit
+        if: steps.release-plz.outputs.pr != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          PR: ${{ steps.release-plz.outputs.pr }}
+        run: |
+          head_branch="$(echo "$PR" | jq -r .head_branch)"
+          git fetch origin "$head_branch"
+          git checkout -B "$head_branch" FETCH_HEAD
+          name="$(git log -1 --format='%an')"
+          email="$(git log -1 --format='%ae')"
+          # --signoff is a no-op if an identical trailer is already present.
+          git -c "user.name=$name" -c "user.email=$email" \
+            commit --amend --signoff --no-edit
+          git push --force-with-lease \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
+            "HEAD:$head_branch"
