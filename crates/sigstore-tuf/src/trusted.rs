@@ -23,6 +23,7 @@ use crate::metadata::{MetaFile, Metadata, Role, RoleKeys, Root, Snapshot, Target
 #[derive(Debug, Clone)]
 pub struct TrustedMetadataSet {
     root: Metadata<Root>,
+    root_bytes: Vec<u8>,
     timestamp: Option<Metadata<Timestamp>>,
     snapshot: Option<Metadata<Snapshot>>,
     /// Top-level targets and any delegated targets, keyed by role name.
@@ -41,6 +42,7 @@ impl TrustedMetadataSet {
         verify_root_self_signed(&root)?;
         Ok(Self {
             root,
+            root_bytes: bytes.to_vec(),
             timestamp: None,
             snapshot: None,
             targets: BTreeMap::new(),
@@ -50,6 +52,11 @@ impl TrustedMetadataSet {
     /// The currently trusted root payload.
     pub fn root(&self) -> &Root {
         &self.root.signed
+    }
+
+    /// The raw bytes of the currently trusted root.
+    pub fn root_bytes(&self) -> &[u8] {
+        &self.root_bytes
     }
 
     /// The currently trusted timestamp payload, if one has been loaded.
@@ -94,6 +101,7 @@ impl TrustedMetadataSet {
         verify_root_self_signed(&new_root)?;
 
         self.root = new_root;
+        self.root_bytes = bytes.to_vec();
         // A new root may rotate keys; previously trusted lower roles must be
         // re-verified against it, so drop them.
         self.timestamp = None;

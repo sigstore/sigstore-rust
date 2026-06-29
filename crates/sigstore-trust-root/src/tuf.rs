@@ -167,14 +167,20 @@ impl TufConfig {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn custom(url: impl Into<String>, root_json: impl AsRef<[u8]>) -> Self {
+    pub fn custom(url: impl Into<String>) -> Self {
         Self {
             url: url.into(),
             cache_dir: None,
             disable_cache: false,
             offline: false,
-            root_json: Some(root_json.as_ref().to_vec()),
+            root_json: None,
         }
+    }
+
+    /// Provide a custom root.json for bootstrapping trust
+    pub fn with_root(mut self, root_json: impl AsRef<[u8]>) -> Self {
+        self.root_json = Some(root_json.as_ref().to_vec());
+        self
     }
 
     /// Create configuration for a custom TUF repository, loading root.json from a file
@@ -203,7 +209,7 @@ impl TufConfig {
         root_path: impl AsRef<Path>,
     ) -> std::io::Result<Self> {
         let root_json = std::fs::read(root_path)?;
-        Ok(Self::custom(url, root_json))
+        Ok(Self::custom(url).with_root(root_json))
     }
 
     /// Set the cache directory
@@ -230,30 +236,6 @@ impl TufConfig {
     pub fn offline(mut self) -> Self {
         self.offline = true;
         self
-    }
-
-    /// Get the TUF root.json bytes for this configuration
-    ///
-    /// Returns the custom root if set, otherwise returns the embedded root
-    /// for known URLs (production/staging/GitHub).
-    fn get_root_json(&self) -> Result<&[u8]> {
-        if let Some(ref root) = self.root_json {
-            return Ok(root.as_slice());
-        }
-
-        // Fall back to embedded roots for known URLs
-        if self.url == DEFAULT_TUF_URL || self.url.starts_with(DEFAULT_TUF_URL) {
-            Ok(PRODUCTION_TUF_ROOT)
-        } else if self.url == STAGING_TUF_URL || self.url.starts_with(STAGING_TUF_URL) {
-            Ok(STAGING_TUF_ROOT)
-        } else if self.url == GITHUB_TUF_URL || self.url.starts_with(GITHUB_TUF_URL) {
-            Ok(GITHUB_TUF_ROOT)
-        } else {
-            Err(Error::Tuf(format!(
-                "No root.json provided for custom URL: {}. Use TufConfig::custom() to provide one.",
-                self.url
-            )))
-        }
     }
 }
 
@@ -288,18 +270,19 @@ impl TufClient {
     /// (production, staging, and GitHub).
     fn new(config: TufConfig) -> Self {
         // Determine embedded targets based on URL for offline fallback
+        let normalized_url = config.url.trim_end_matches('/');
         let embedded_targets: &'static [(&'static str, &'static [u8])] =
-            if config.url == DEFAULT_TUF_URL || config.url.starts_with(DEFAULT_TUF_URL) {
+            if normalized_url == DEFAULT_TUF_URL {
                 &[
                     (TRUSTED_ROOT_TARGET, EMBEDDED_PRODUCTION_TRUSTED_ROOT),
                     (SIGNING_CONFIG_TARGET, EMBEDDED_PRODUCTION_SIGNING_CONFIG),
                 ]
-            } else if config.url == STAGING_TUF_URL || config.url.starts_with(STAGING_TUF_URL) {
+            } else if normalized_url == STAGING_TUF_URL {
                 &[
                     (TRUSTED_ROOT_TARGET, EMBEDDED_STAGING_TRUSTED_ROOT),
                     (SIGNING_CONFIG_TARGET, EMBEDDED_STAGING_SIGNING_CONFIG),
                 ]
-            } else if config.url == GITHUB_TUF_URL || config.url.starts_with(GITHUB_TUF_URL) {
+            } else if normalized_url == GITHUB_TUF_URL {
                 &[(TRUSTED_ROOT_TARGET, EMBEDDED_GITHUB_TRUSTED_ROOT)]
             } else {
                 // Custom URLs have no embedded fallback
@@ -352,6 +335,38 @@ impl TufClient {
         Ok(results)
     }
 
+    /// Get the TUF root.json bytes for this configuration
+    fn get_root_json(&self) -> Result<Vec<u8>> {
+        if let Some(ref root) = self.config.root_json {
+            return Ok(root.clone());
+        }
+
+        // Fall back to embedded roots for known URLs
+        let normalized_url = self.config.url.trim_end_matches('/');
+        if normalized_url == DEFAULT_TUF_URL {
+            return Ok(PRODUCTION_TUF_ROOT.to_vec());
+        } else if normalized_url == STAGING_TUF_URL {
+            return Ok(STAGING_TUF_ROOT.to_vec());
+        } else if normalized_url == GITHUB_TUF_URL {
+            return Ok(GITHUB_TUF_ROOT.to_vec());
+        }
+
+        // A TUF root was not provided or embedded: Use a cached one if found
+        if !self.config.disable_cache {
+            if let Ok(cache_dir) = self.get_cache_dir() {
+                let cached_path = cache_dir.join("root.json");
+                if let Ok(bytes) = std::fs::read(&cached_path) {
+                    return Ok(bytes);
+                }
+            }
+        }
+
+        Err(Error::Tuf(format!(
+            "No root.json provided for custom URL: {}. Use .with_root() or initialize trust first.",
+            self.config.url
+        )))
+    }
+
     /// Build a `sigstore-tuf` updater and run the TUF refresh workflow
     /// (root → timestamp → snapshot → targets), verifying all metadata against
     /// the configured bootstrap root.
@@ -361,8 +376,8 @@ impl TufClient {
     /// run can serve them.
     async fn build_updater(&self) -> Result<Updater> {
         let repo = HttpRepository::new(&self.config.url).map_err(|e| Error::Tuf(e.to_string()))?;
-        let root_bytes = self.config.get_root_json()?;
-        let mut updater = Updater::new(repo, root_bytes).map_err(|e| Error::Tuf(e.to_string()))?;
+        let root_bytes = self.get_root_json()?;
+        let mut updater = Updater::new(repo, &root_bytes).map_err(|e| Error::Tuf(e.to_string()))?;
 
         if !self.config.disable_cache {
             let cache_dir = self.get_cache_dir()?;
@@ -688,7 +703,7 @@ mod tests {
     #[test]
     fn test_tuf_config_custom() {
         let root_json = b"test root json";
-        let config = TufConfig::custom("https://custom.tuf/", root_json);
+        let config = TufConfig::custom("https://custom.tuf/").with_root(root_json);
         assert_eq!(config.url, "https://custom.tuf/");
         assert_eq!(config.root_json, Some(root_json.to_vec()));
     }
@@ -707,26 +722,35 @@ mod tests {
     #[test]
     fn test_tuf_config_get_root_json_production() {
         let config = TufConfig::production();
-        assert_eq!(config.get_root_json().unwrap(), PRODUCTION_TUF_ROOT);
+        assert_eq!(
+            TufClient::new(config).get_root_json().unwrap(),
+            PRODUCTION_TUF_ROOT
+        );
     }
 
     #[test]
     fn test_tuf_config_get_root_json_staging() {
         let config = TufConfig::staging();
-        assert_eq!(config.get_root_json().unwrap(), STAGING_TUF_ROOT);
+        assert_eq!(
+            TufClient::new(config).get_root_json().unwrap(),
+            STAGING_TUF_ROOT
+        );
     }
 
     #[test]
     fn test_tuf_config_get_root_json_github() {
         let config = TufConfig::github();
-        assert_eq!(config.get_root_json().unwrap(), GITHUB_TUF_ROOT);
+        assert_eq!(
+            TufClient::new(config).get_root_json().unwrap(),
+            GITHUB_TUF_ROOT
+        );
     }
 
     #[test]
     fn test_tuf_config_get_root_json_custom() {
         let root_json = b"custom root";
-        let config = TufConfig::custom("https://custom.tuf/", root_json);
-        assert_eq!(config.get_root_json().unwrap(), root_json);
+        let config = TufConfig::custom("https://custom.tuf/").with_root(root_json);
+        assert_eq!(TufClient::new(config).get_root_json().unwrap(), root_json);
     }
 
     #[test]
@@ -738,7 +762,7 @@ mod tests {
             offline: false,
             root_json: None,
         };
-        let err = config.get_root_json().unwrap_err();
+        let err = TufClient::new(config).get_root_json().unwrap_err();
         assert!(err
             .to_string()
             .contains("No root.json provided for custom URL"));
@@ -829,7 +853,8 @@ mod tests {
     #[tokio::test]
     async fn test_custom_url_offline_fails_without_cache() {
         // Custom URLs have no embedded fallback
-        let config = TufConfig::custom("https://custom.tuf/", b"root")
+        let config = TufConfig::custom("https://custom.tuf/")
+            .with_root(b"root")
             .offline()
             .without_cache();
         let client = TufClient::new(config);
