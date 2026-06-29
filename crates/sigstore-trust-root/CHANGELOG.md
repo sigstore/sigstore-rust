@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-trust-root-v0.9.0...sigstore-trust-root-v0.10.0) - 2026-06-29
+
+### Added
+
+- *(trust-root)* [**breaking**] support trusting custom Sigstore instances over TUF ([#136](https://github.com/sigstore/sigstore-rust/pull/136))
+
+### Other
+
+- update embedded roots ([#141](https://github.com/sigstore/sigstore-rust/pull/141))
+
 ## [0.9.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-trust-root-v0.8.0...sigstore-trust-root-v0.9.0) - 2026-06-17
 
 ### Other
