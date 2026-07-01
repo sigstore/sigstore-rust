@@ -76,7 +76,7 @@ jobs:
       # sign-off itself. Amend the commit it just pushed to append a
       # `Signed-off-by` trailer matching the commit author, then force-push.
       - name: Add DCO sign-off to release PR commit
-        if: steps.release-plz.outputs.pr != ''
+        if: steps.release-plz.outputs.prs_created == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           PR: ${{ steps.release-plz.outputs.pr }}
