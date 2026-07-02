@@ -8,6 +8,7 @@ use aws_lc_rs::signature::{
     RSA_PKCS1_2048_8192_SHA512, RSA_PSS_2048_8192_SHA256, RSA_PSS_2048_8192_SHA384,
     RSA_PSS_2048_8192_SHA512,
 };
+use aws_lc_rs::unstable::signature::{ML_DSA_44, ML_DSA_65, ML_DSA_87};
 use sigstore_types::{DerPublicKey, SignatureBytes};
 use spki::SubjectPublicKeyInfoRef;
 
@@ -118,6 +119,21 @@ impl VerificationKey {
                 key.verify(data, signature).map_err(|_| {
                     Error::Verification("RSA PKCS#1 SHA-512 signature invalid".to_string())
                 })
+            }
+            SigningScheme::MlDsa44 => {
+                let key = UnparsedPublicKey::new(&ML_DSA_44, &self.bytes);
+                key.verify(data, signature)
+                    .map_err(|_| Error::Verification("ML-DSA-44 signature invalid".to_string()))
+            }
+            SigningScheme::MlDsa65 => {
+                let key = UnparsedPublicKey::new(&ML_DSA_65, &self.bytes);
+                key.verify(data, signature)
+                    .map_err(|_| Error::Verification("ML-DSA-65 signature invalid".to_string()))
+            }
+            SigningScheme::MlDsa87 => {
+                let key = UnparsedPublicKey::new(&ML_DSA_87, &self.bytes);
+                key.verify(data, signature)
+                    .map_err(|_| Error::Verification("ML-DSA-87 signature invalid".to_string()))
             }
         }
     }

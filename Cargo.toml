@@ -34,7 +34,7 @@ base64 = "0.22"
 thiserror = "2.0"
 
 # Cryptography
-aws-lc-rs = "1.17"
+aws-lc-rs = { version = "1.17", features = ["unstable"] }
 sha2 = "0.10"
 digest = "0.10"
 signature = "2.2"

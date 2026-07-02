@@ -96,6 +96,9 @@ impl Key {
             "rsassa-pss-sha256" => SigningScheme::RsaPssSha256,
             "rsassa-pss-sha384" => SigningScheme::RsaPssSha384,
             "rsassa-pss-sha512" => SigningScheme::RsaPssSha512,
+            "ml-dsa-44/1" => SigningScheme::MlDsa44,
+            "ml-dsa-65/1" => SigningScheme::MlDsa65,
+            "ml-dsa-87/1" => SigningScheme::MlDsa87,
             _ => {
                 return Err(Error::UnsupportedScheme {
                     keytype: self.keytype.clone(),
@@ -136,6 +139,34 @@ impl Key {
         };
 
         VerificationKey::from_spki(&der, scheme).map_err(Error::from)
+    }
+
+    /// Verify a signature over `data`.
+    ///
+    /// For ML-DSA schemes, this automatically applies the TUF-specific `tuf\x01`
+    /// domain separator and SHA-512 pre-hash before passing to the underlying
+    /// verifier, as required by the TAP 21 specification.
+    pub fn verify(&self, data: &[u8], signature: &sigstore_types::SignatureBytes) -> Result<()> {
+        let vkey = self.verification_key()?;
+        let scheme = vkey.scheme();
+
+        if matches!(
+            scheme,
+            SigningScheme::MlDsa44 | SigningScheme::MlDsa65 | SigningScheme::MlDsa87
+        ) {
+            use sha2::{Digest, Sha512};
+            let mut hasher = Sha512::new();
+            hasher.update(data);
+            let digest = hasher.finalize();
+
+            let mut payload = Vec::with_capacity(4 + digest.len());
+            payload.extend_from_slice(b"tuf\x01");
+            payload.extend_from_slice(&digest);
+
+            vkey.verify(&payload, signature).map_err(Error::from)
+        } else {
+            vkey.verify(data, signature).map_err(Error::from)
+        }
     }
 }
 
