@@ -83,12 +83,17 @@ jobs:
         run: |
           head_branch="$(echo "$PR" | jq -r .head_branch)"
           git fetch origin "$head_branch"
+          # Remember the commit release-plz just pushed so we can lease against
+          # it below. --force-with-lease with no value relies on a remote-tracking
+          # ref, which git can't resolve when pushing to an explicit URL rather
+          # than the `origin` remote (it rejects with "stale info").
+          base_sha="$(git rev-parse FETCH_HEAD)"
           git checkout -B "$head_branch" FETCH_HEAD
           name="$(git log -1 --format='%an')"
           email="$(git log -1 --format='%ae')"
           # --signoff is a no-op if an identical trailer is already present.
           git -c "user.name=$name" -c "user.email=$email" \
             commit --amend --signoff --no-edit
-          git push --force-with-lease \
+          git push --force-with-lease="$head_branch:$base_sha" \
             "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
             "HEAD:$head_branch"
