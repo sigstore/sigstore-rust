@@ -265,17 +265,11 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             let artifact_digest = Sha256Hash::try_from_slice(&digest_bytes)
                 .map_err(|e| format!("Invalid digest: {}", e))?;
 
-            let result = verify_with_key(artifact_digest, &bundle, &public_key, &trusted_root)?;
-            if !result.success {
-                return Err("Verification failed".into());
-            }
+            verify_with_key(artifact_digest, &bundle, &public_key, &trusted_root)?;
         } else {
             // It's a file path
             let artifact_data = fs::read(&artifact_or_digest)?;
-            let result = verify_with_key(&artifact_data, &bundle, &public_key, &trusted_root)?;
-            if !result.success {
-                return Err("Verification failed".into());
-            }
+            verify_with_key(&artifact_data, &bundle, &public_key, &trusted_root)?;
         }
 
         return Ok(());
@@ -314,11 +308,7 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| format!("Invalid digest: {}", e))?;
 
         // Verify the signature with trusted root using the digest directly
-        let result = verify(artifact_digest, &bundle, &policy, &trusted_root)?;
-
-        if !result.success {
-            return Err("Verification failed".into());
-        }
+        verify(artifact_digest, &bundle, &policy, &trusted_root)?;
 
         Ok(())
     } else {
@@ -326,11 +316,7 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let artifact_data = fs::read(&artifact_or_digest)?;
 
         // Verify with trusted root
-        let result = verify(&artifact_data, &bundle, &policy, &trusted_root)?;
-
-        if !result.success {
-            return Err("Verification failed".into());
-        }
+        verify(&artifact_data, &bundle, &policy, &trusted_root)?;
 
         Ok(())
     }
