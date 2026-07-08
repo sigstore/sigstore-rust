@@ -3,6 +3,7 @@
 //! This module provides the main entry point for verifying Sigstore signatures.
 
 use crate::error::{Error, Result};
+use base64::Engine;
 use sigstore_bundle::validate_bundle_with_options;
 use sigstore_bundle::ValidationOptions;
 use sigstore_crypto::{parse_certificate_info, SigningScheme};
@@ -577,6 +578,29 @@ pub fn verify<'a>(
     verifier.verify(artifact, bundle, policy)
 }
 
+fn verify_public_key_hint(hint: &str, public_key: &sigstore_types::DerPublicKey) -> Result<()> {
+    let expected = sigstore_crypto::sha256(public_key.as_bytes());
+    let hint = hint
+        .strip_prefix("SHA256:")
+        .or_else(|| hint.strip_prefix("sha256:"))
+        .unwrap_or(hint);
+
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(hint)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(hint))
+        .map_err(|_| {
+            Error::Verification("public key hint is not a supported SHA-256 key hint".to_string())
+        })?;
+
+    if decoded != expected.as_bytes() {
+        return Err(Error::Verification(
+            "public key hint does not match supplied public key".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 /// Verify an artifact against a bundle using a provided public key
 ///
 /// This is used for managed key verification where the bundle contains a public key
@@ -613,11 +637,14 @@ pub fn verify_with_key<'a>(
     public_key: &sigstore_types::DerPublicKey,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
-    use sigstore_bundle::{validate_bundle_with_options, ValidationOptions};
-    use sigstore_crypto::{detect_key_type, KeyType, SigningScheme};
-
     let artifact = artifact.into();
     let result = VerificationResult::new();
+
+    if let sigstore_types::bundle::VerificationMaterialContent::PublicKey { hint } =
+        &bundle.verification_material.content
+    {
+        verify_public_key_hint(hint, public_key)?;
+    }
 
     // Validate bundle structure (structural only; the cryptographic checks
     // follow below)
@@ -629,10 +656,10 @@ pub fn verify_with_key<'a>(
         .map_err(|e| Error::Verification(format!("bundle validation failed: {}", e)))?;
 
     // Determine signing scheme from public key
-    let signing_scheme = match detect_key_type(public_key) {
-        KeyType::Ed25519 => SigningScheme::Ed25519,
-        KeyType::EcdsaP256 => SigningScheme::EcdsaP256Sha256,
-        KeyType::Unknown => {
+    let signing_scheme = match sigstore_crypto::detect_key_type(public_key) {
+        sigstore_crypto::KeyType::Ed25519 => SigningScheme::Ed25519,
+        sigstore_crypto::KeyType::EcdsaP256 => SigningScheme::EcdsaP256Sha256,
+        sigstore_crypto::KeyType::Unknown => {
             return Err(Error::Verification(
                 "unsupported or unrecognized public key type".to_string(),
             ));
