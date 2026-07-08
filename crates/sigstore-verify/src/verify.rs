@@ -6,7 +6,9 @@ use crate::error::{Error, Result};
 use base64::Engine;
 use sigstore_bundle::validate_bundle_with_options;
 use sigstore_bundle::ValidationOptions;
-use sigstore_crypto::{parse_certificate_info, SigningScheme};
+use sigstore_crypto::{
+    detect_key_type, parse_certificate_info, KeyAlgorithm, KeyType, SigningScheme,
+};
 use sigstore_trust_root::TrustedRoot;
 
 use sigstore_types::{Artifact, Bundle, HashAlgorithm, SignatureContent, Statement};
@@ -528,18 +530,39 @@ fn verify_signature_over_artifact(
 /// signature would never be cryptographically checked. The signature hash is
 /// resolved from the certificate's key algorithm plus the bundle's declared
 /// `messageDigest.algorithm` (falling back to the key's default scheme).
+fn signing_scheme_for_message_signature(
+    key_algorithm: KeyAlgorithm,
+    msg_sig: &sigstore_types::bundle::MessageSignature,
+) -> Result<SigningScheme> {
+    match &msg_sig.message_digest {
+        Some(digest) => Ok(key_algorithm.resolve_signing_scheme(digest.algorithm)?),
+        None => Ok(key_algorithm.default_signing_scheme()),
+    }
+}
+
+fn signing_scheme_for_content(
+    key_algorithm: KeyAlgorithm,
+    content: &SignatureContent,
+) -> Result<SigningScheme> {
+    match content {
+        SignatureContent::MessageSignature(msg_sig) => {
+            signing_scheme_for_message_signature(key_algorithm, msg_sig)
+        }
+        SignatureContent::DsseEnvelope(_) => Ok(key_algorithm.default_signing_scheme()),
+    }
+}
+
 fn verify_message_signature_crypto(
     cert_info: &sigstore_crypto::CertificateInfo,
     msg_sig: &sigstore_types::bundle::MessageSignature,
     artifact: &Artifact<'_>,
 ) -> Result<()> {
-    let scheme = match &msg_sig.message_digest {
-        Some(digest) => cert_info
-            .key_algorithm
-            .resolve_signing_scheme(digest.algorithm)?,
-        None => cert_info.key_algorithm.default_signing_scheme(),
-    };
-    verify_signature_over_artifact(&cert_info.public_key, scheme, &msg_sig.signature, artifact)
+    verify_signature_over_artifact(
+        &cert_info.public_key,
+        signing_scheme_for_message_signature(cert_info.key_algorithm, msg_sig)?,
+        &msg_sig.signature,
+        artifact,
+    )
 }
 
 /// Convenience function to verify an artifact against a bundle
@@ -576,6 +599,16 @@ pub fn verify<'a>(
 ) -> Result<VerificationResult> {
     let verifier = Verifier::new(trusted_root);
     verifier.verify(artifact, bundle, policy)
+}
+
+fn public_key_algorithm(public_key: &sigstore_types::DerPublicKey) -> Result<KeyAlgorithm> {
+    match detect_key_type(public_key) {
+        KeyType::Ed25519 => Ok(KeyAlgorithm::Ed25519),
+        KeyType::EcdsaP256 => Ok(KeyAlgorithm::EcdsaP256),
+        KeyType::Unknown => Err(Error::Verification(
+            "unsupported or unrecognized public key type".to_string(),
+        )),
+    }
 }
 
 fn verify_public_key_hint(hint: &str, public_key: &sigstore_types::DerPublicKey) -> Result<()> {
@@ -655,16 +688,8 @@ pub fn verify_with_key<'a>(
     validate_bundle_with_options(bundle, &options)
         .map_err(|e| Error::Verification(format!("bundle validation failed: {}", e)))?;
 
-    // Determine signing scheme from public key
-    let signing_scheme = match sigstore_crypto::detect_key_type(public_key) {
-        sigstore_crypto::KeyType::Ed25519 => SigningScheme::Ed25519,
-        sigstore_crypto::KeyType::EcdsaP256 => SigningScheme::EcdsaP256Sha256,
-        sigstore_crypto::KeyType::Unknown => {
-            return Err(Error::Verification(
-                "unsupported or unrecognized public key type".to_string(),
-            ));
-        }
-    };
+    let key_algorithm = public_key_algorithm(public_key)?;
+    let signing_scheme = signing_scheme_for_content(key_algorithm, &bundle.content)?;
 
     // Verify transparency log entries (Merkle inclusion proofs, checkpoints,
     // SETs) without certificate time validation
@@ -772,6 +797,22 @@ mod tests {
         let policy = VerificationPolicy::default().skip_certificate_chain();
 
         assert_eq!(policy.certificate, CertificatePolicy::Skip);
+    }
+
+    #[test]
+    fn test_signing_scheme_follows_message_digest_algorithm() {
+        let msg_sig = sigstore_types::bundle::MessageSignature {
+            message_digest: Some(sigstore_types::bundle::MessageDigest {
+                algorithm: HashAlgorithm::Sha2384,
+                digest: sigstore_types::DigestBytes::from_bytes(vec![0; 48]),
+            }),
+            signature: sigstore_types::SignatureBytes::from_bytes(b"sig"),
+        };
+
+        assert_eq!(
+            signing_scheme_for_message_signature(KeyAlgorithm::EcdsaP256, &msg_sig).unwrap(),
+            SigningScheme::EcdsaP256Sha384
+        );
     }
 
     fn in_toto_envelope(payload: &str) -> sigstore_types::DsseEnvelope {
