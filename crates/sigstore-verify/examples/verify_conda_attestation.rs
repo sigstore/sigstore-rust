@@ -26,7 +26,7 @@
 
 use sigstore_trust_root::TrustedRoot;
 use sigstore_types::{bundle::SignatureContent, Bundle};
-use sigstore_verify::{verify, Keying, VerificationPolicy};
+use sigstore_verify::{verify, VerificationMode, VerificationPolicy};
 
 use std::env;
 use std::fs;
@@ -145,8 +145,7 @@ async fn main() {
     match verify(
         &artifact,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &trusted_root,
     ) {
         Ok(result) => {

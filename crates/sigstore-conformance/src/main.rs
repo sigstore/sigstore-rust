@@ -238,12 +238,14 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     // Handle key-based verification
     if let Some(key_path) = key_path {
         use sigstore_types::DerPublicKey;
-        use sigstore_verify::Keying;
+        use sigstore_verify::VerificationMode;
 
         // Load public key from PEM file
         let key_pem = fs::read_to_string(&key_path)?;
         let public_key = DerPublicKey::from_pem(&key_pem)
             .map_err(|e| format!("Failed to parse public key: {}", e))?;
+
+        let key_policy = sigstore_verify::PublicKeyVerificationPolicy::default();
 
         // Verify using the public key
         if artifact_or_digest.starts_with("sha256:") {
@@ -268,8 +270,10 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             verify(
                 artifact_digest,
                 &bundle,
-                Keying::PublicKey(&public_key),
-                &VerificationPolicy::default(),
+                VerificationMode::PublicKey {
+                    public_key: &public_key,
+                    policy: &key_policy,
+                },
                 &trusted_root,
             )?;
         } else {
@@ -278,8 +282,10 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             verify(
                 &artifact_data,
                 &bundle,
-                Keying::PublicKey(&public_key),
-                &VerificationPolicy::default(),
+                VerificationMode::PublicKey {
+                    public_key: &public_key,
+                    policy: &key_policy,
+                },
                 &trusted_root,
             )?;
         }
@@ -323,8 +329,7 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         verify(
             artifact_digest,
             &bundle,
-            sigstore_verify::Keying::Certificate,
-            &policy,
+            sigstore_verify::VerificationMode::Certificate(&policy),
             &trusted_root,
         )?;
 
@@ -337,8 +342,7 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         verify(
             &artifact_data,
             &bundle,
-            sigstore_verify::Keying::Certificate,
-            &policy,
+            sigstore_verify::VerificationMode::Certificate(&policy),
             &trusted_root,
         )?;
 

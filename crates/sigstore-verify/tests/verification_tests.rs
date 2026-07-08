@@ -6,7 +6,9 @@ use sigstore_trust_root::{SigstoreInstance, TrustedRoot, SIGSTORE_PRODUCTION_TRU
 use sigstore_types::{LogIndex, Sha256Hash};
 use sigstore_verify::bundle::{validate_bundle, validate_bundle_with_options, ValidationOptions};
 use sigstore_verify::types::Bundle;
-use sigstore_verify::{verify, Keying, VerificationPolicy, Verifier};
+use sigstore_verify::{
+    verify, PublicKeyVerificationPolicy, VerificationMode, VerificationPolicy, Verifier,
+};
 use x509_cert::der::Decode;
 
 /// Extract the expected artifact digest from a bundle
@@ -166,8 +168,7 @@ fn test_tampered_inclusion_proof_fails_verification() {
     let err = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     )
     .expect_err("verification must fail with a tampered inclusion proof");
@@ -195,8 +196,7 @@ fn test_tampered_canonicalized_body_fails_verification() {
     let result = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
     assert!(
@@ -222,7 +222,11 @@ fn test_verifier_creation() {
         .skip_certificate_chain()
         .skip_tlog();
 
-    let result = verifier.verify(artifact_digest, &bundle, Keying::Certificate, &policy);
+    let result = verifier.verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+    );
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
 }
 
@@ -240,8 +244,7 @@ fn test_verify_with_policy() {
     let result = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
@@ -263,8 +266,7 @@ fn test_verify_extracts_integrated_time() {
     let result = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     )
     .unwrap();
@@ -293,8 +295,7 @@ fn test_skip_tlog_verification() {
     let result = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
     assert!(result.is_ok());
@@ -312,8 +313,7 @@ fn test_verify_github_bundle_with_explicit_embedded_root() {
     let result = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &root,
     );
 
@@ -397,8 +397,7 @@ fn test_full_verification_flow() {
     let result = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     )
     .unwrap();
@@ -444,8 +443,7 @@ fn test_full_verification_flow_happy_path() {
     let result = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     )
     .unwrap();
@@ -466,8 +464,7 @@ fn test_verification_with_different_bundle_versions() {
     let result = verify(
         artifact_digest,
         &v03_msg,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
     assert!(result.is_ok(), "v0.3 message signature verification failed");
@@ -480,8 +477,7 @@ fn test_verification_with_different_bundle_versions() {
     let result = verify(
         dsse_artifact_digest,
         &v03_dsse,
-        Keying::Certificate,
-        &dsse_policy,
+        VerificationMode::Certificate(&dsse_policy),
         &production_root(),
     );
     assert!(result.is_ok(), "v0.3 DSSE verification failed");
@@ -645,8 +641,7 @@ fn test_dsse_bundle_with_2_signatures_should_fail() {
     let result = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
 
@@ -759,8 +754,7 @@ fn test_bundle_no_cert_v1() {
     let result = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
     assert!(
@@ -826,8 +820,7 @@ fn test_bundle_no_log_entry() {
     let result = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
     assert!(
@@ -877,8 +870,7 @@ fn test_bundle_v3_no_signed_time() {
     let result = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
     // Whether this succeeds or fails depends on implementation
@@ -1014,8 +1006,7 @@ fn test_verify_conda_package_attestation() {
     let result = verify(
         CONDA_PACKAGE,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
     assert!(
@@ -1052,8 +1043,7 @@ fn test_verify_conda_package_wrong_identity() {
     let result = verify(
         CONDA_PACKAGE,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
     assert!(
@@ -1077,8 +1067,7 @@ fn test_verify_conda_package_tampered() {
     let result = verify(
         tampered_package,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
     assert!(
@@ -1143,8 +1132,7 @@ fn test_verify_cosign_v3_blob_bundle() {
     let result = verify(
         artifact,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
@@ -1170,8 +1158,7 @@ fn test_verify_fails_with_unknown_log_entry_kind() {
     let result = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
     assert!(result.is_err());
@@ -1199,8 +1186,7 @@ fn test_verify_fails_with_unknown_log_entry_version() {
     let result = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
     assert!(result.is_err());
@@ -1232,8 +1218,7 @@ fn test_verify_fails_with_mismatched_log_entry_kind() {
     let result = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
     assert!(result.is_err());
@@ -1262,8 +1247,7 @@ fn test_verify_fails_with_mismatched_hashedrekord_version_for_dsse() {
     let result = verify(
         artifact_digest,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
     assert!(result.is_err());
@@ -1289,8 +1273,7 @@ fn test_verify_dsse_with_hashedrekord_v002() {
     let result = verify(
         artifact.as_slice(),
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &staging_root(),
     );
     assert!(
@@ -1312,8 +1295,7 @@ fn test_public_key_bundle_with_certificate_keying_fails_at_top() {
     let result = verify(
         MANAGED_KEY_ARTIFACT,
         &bundle,
-        Keying::Certificate,
-        &policy,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
 
@@ -1329,13 +1311,15 @@ fn test_public_key_bundle_with_certificate_keying_fails_at_top() {
 fn test_certificate_bundle_with_public_key_keying_fails_at_top() {
     let bundle = Bundle::from_json(CONDA_ATTESTATION_BUNDLE).unwrap();
     let public_key = managed_key_public_key();
-    let policy = VerificationPolicy::default();
+    let policy = PublicKeyVerificationPolicy::default();
 
     let result = verify(
         CONDA_PACKAGE,
         &bundle,
-        Keying::PublicKey(&public_key),
-        &policy,
+        VerificationMode::PublicKey {
+            public_key: &public_key,
+            policy: &policy,
+        },
         &production_root(),
     );
 
@@ -1354,13 +1338,15 @@ fn test_verify_public_key_validates_public_key_hint() {
         serde_json::json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
     let bundle = Bundle::from_json(&serde_json::to_string(&json).unwrap()).unwrap();
     let public_key = managed_key_public_key();
-    let policy = VerificationPolicy::default();
+    let policy = PublicKeyVerificationPolicy::default();
 
     let result = verify(
         MANAGED_KEY_ARTIFACT,
         &bundle,
-        Keying::PublicKey(&public_key),
-        &policy,
+        VerificationMode::PublicKey {
+            public_key: &public_key,
+            policy: &policy,
+        },
         &production_root(),
     );
 
@@ -1378,13 +1364,15 @@ fn test_verify_public_key_rejects_non_base64_hint() {
     json["verificationMaterial"]["publicKey"]["hint"] = serde_json::json!("SHA256:not-base64");
     let bundle = Bundle::from_json(&serde_json::to_string(&json).unwrap()).unwrap();
     let public_key = managed_key_public_key();
-    let policy = VerificationPolicy::default();
+    let policy = PublicKeyVerificationPolicy::default();
 
     let result = verify(
         MANAGED_KEY_ARTIFACT,
         &bundle,
-        Keying::PublicKey(&public_key),
-        &policy,
+        VerificationMode::PublicKey {
+            public_key: &public_key,
+            policy: &policy,
+        },
         &production_root(),
     );
 
@@ -1401,13 +1389,15 @@ fn test_verify_public_key_accepts_managed_key_bundle_digest_only() {
     let bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
     let public_key = managed_key_public_key();
     let digest = sigstore_crypto::sha256(MANAGED_KEY_ARTIFACT);
-    let policy = VerificationPolicy::default();
+    let policy = PublicKeyVerificationPolicy::default();
 
     let result = verify(
         digest,
         &bundle,
-        Keying::PublicKey(&public_key),
-        &policy,
+        VerificationMode::PublicKey {
+            public_key: &public_key,
+            policy: &policy,
+        },
         &production_root(),
     );
 
@@ -1422,13 +1412,15 @@ fn test_verify_public_key_accepts_managed_key_bundle_digest_only() {
 fn test_verify_public_key_fails_with_tampered_artifact() {
     let bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
     let public_key = managed_key_public_key();
-    let policy = VerificationPolicy::default();
+    let policy = PublicKeyVerificationPolicy::default();
 
     let result = verify(
         b"this is not the original artifact".as_slice(),
         &bundle,
-        Keying::PublicKey(&public_key),
-        &policy,
+        VerificationMode::PublicKey {
+            public_key: &public_key,
+            policy: &policy,
+        },
         &production_root(),
     );
 
@@ -1442,13 +1434,15 @@ fn test_verify_public_key_fails_with_mismatched_log_entry_kind() {
         serde_json::json!("not-a-known-kind");
     let bundle = Bundle::from_json(&serde_json::to_string(&json_val).unwrap()).unwrap();
     let public_key = managed_key_public_key();
-    let policy = VerificationPolicy::default();
+    let policy = PublicKeyVerificationPolicy::default();
 
     let result = verify(
         MANAGED_KEY_ARTIFACT,
         &bundle,
-        Keying::PublicKey(&public_key),
-        &policy,
+        VerificationMode::PublicKey {
+            public_key: &public_key,
+            policy: &policy,
+        },
         &production_root(),
     );
 

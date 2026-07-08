@@ -17,13 +17,16 @@ use sigstore_types::{Artifact, Bundle, DerPublicKey, HashAlgorithm, SignatureCon
 /// Default clock skew tolerance in seconds (60 seconds = 1 minute)
 pub const DEFAULT_CLOCK_SKEW_SECONDS: i64 = 60;
 
-/// How the signing key is established for verification.
+/// Verification mode and the policy that applies to that mode.
 #[derive(Debug, Clone, Copy)]
-pub enum Keying<'a> {
+pub enum VerificationMode<'a> {
     /// Bundle carries a signing certificate or certificate chain.
-    Certificate,
+    Certificate(&'a VerificationPolicy),
     /// Bundle carries only a public-key hint; caller supplies the key.
-    PublicKey(&'a DerPublicKey),
+    PublicKey {
+        public_key: &'a DerPublicKey,
+        policy: &'a PublicKeyVerificationPolicy,
+    },
 }
 
 /// How the signing certificate is verified.
@@ -47,7 +50,28 @@ pub enum CertificatePolicy {
     },
 }
 
-/// Policy for verifying signatures
+/// Policy for verifying key-based signatures.
+#[derive(Debug, Clone)]
+pub struct PublicKeyVerificationPolicy {
+    /// Verify transparency log inclusion
+    pub verify_tlog: bool,
+}
+
+impl Default for PublicKeyVerificationPolicy {
+    fn default() -> Self {
+        Self { verify_tlog: true }
+    }
+}
+
+impl PublicKeyVerificationPolicy {
+    /// Skip transparency log verification
+    pub fn skip_tlog(mut self) -> Self {
+        self.verify_tlog = false;
+        self
+    }
+}
+
+/// Policy for verifying certificate-based signatures
 #[derive(Debug, Clone)]
 pub struct VerificationPolicy {
     /// Expected identity (email or URI)
@@ -206,7 +230,7 @@ impl Verifier {
     /// # Example
     ///
     /// ```no_run
-    /// use sigstore_verify::{Keying, Verifier, VerificationPolicy};
+    /// use sigstore_verify::{VerificationMode, Verifier, VerificationPolicy};
     /// use sigstore_trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
     /// use sigstore_types::{Artifact, Bundle, Sha256Hash};
     ///
@@ -218,11 +242,11 @@ impl Verifier {
     ///
     /// // Option 1: Verify with raw bytes
     /// let artifact_bytes = b"hello world";
-    /// verifier.verify(artifact_bytes.as_slice(), &bundle, Keying::Certificate, &policy)?;
+    /// verifier.verify(artifact_bytes.as_slice(), &bundle, VerificationMode::Certificate(&policy))?;
     ///
     /// // Option 2: Verify with pre-computed digest (no raw bytes needed!)
     /// let digest = Sha256Hash::from_hex("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9")?;
-    /// verifier.verify(digest, &bundle, Keying::Certificate, &policy)?;
+    /// verifier.verify(digest, &bundle, VerificationMode::Certificate(&policy))?;
     /// # Ok(())
     /// # }
     /// ```
@@ -248,45 +272,46 @@ impl Verifier {
         &self,
         artifact: impl Into<Artifact<'a>>,
         bundle: &Bundle,
-        keying: Keying<'_>,
-        policy: &VerificationPolicy,
+        mode: VerificationMode<'_>,
     ) -> Result<VerificationResult> {
-        verify_with_trusted_root(artifact.into(), bundle, keying, policy, &self.trusted_root)
+        verify_with_trusted_root(artifact.into(), bundle, mode, &self.trusted_root)
     }
 }
 
 fn verify_with_trusted_root(
     artifact: Artifact<'_>,
     bundle: &Bundle,
-    keying: Keying<'_>,
-    policy: &VerificationPolicy,
+    mode: VerificationMode<'_>,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
-    match (&bundle.verification_material.content, keying) {
+    match (&bundle.verification_material.content, mode) {
         (
             VerificationMaterialContent::Certificate(_)
             | VerificationMaterialContent::X509CertificateChain { .. },
-            Keying::Certificate,
+            VerificationMode::Certificate(policy),
         ) => verify_certificate_bundle(artifact, bundle, policy, trusted_root),
-        (VerificationMaterialContent::PublicKey { hint }, Keying::PublicKey(public_key)) => {
+        (
+            VerificationMaterialContent::PublicKey { hint },
+            VerificationMode::PublicKey { public_key, policy },
+        ) => {
             verify_public_key_hint(hint, public_key)?;
             verify_public_key_bundle(artifact, bundle, public_key, policy, trusted_root)
         }
-        (VerificationMaterialContent::PublicKey { .. }, Keying::Certificate) => {
+        (VerificationMaterialContent::PublicKey { .. }, VerificationMode::Certificate(_)) => {
             Err(Error::Verification(
                 "bundle contains a public key but certificate verification was requested"
                     .to_string(),
             ))
         }
-        (_, Keying::PublicKey(_)) => Err(Error::Verification(
+        (_, VerificationMode::PublicKey { .. }) => Err(Error::Verification(
             "bundle contains a certificate but a public key was supplied".to_string(),
         )),
     }
 }
 
-fn validate_bundle_shape(bundle: &Bundle, policy: &VerificationPolicy) -> Result<()> {
+fn validate_bundle_shape(bundle: &Bundle, verify_tlog: bool) -> Result<()> {
     let options = ValidationOptions {
-        require_inclusion_proof: policy.verify_tlog,
+        require_inclusion_proof: verify_tlog,
         require_timestamp: false,
     };
     validate_bundle_with_options(bundle, &options)
@@ -300,7 +325,7 @@ fn verify_certificate_bundle(
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
     let mut result = VerificationResult::new();
-    validate_bundle_shape(bundle, policy)?;
+    validate_bundle_shape(bundle, policy.verify_tlog)?;
 
     let cert =
         crate::verify_impl::helpers::extract_certificate(&bundle.verification_material.content)?;
@@ -360,10 +385,10 @@ fn verify_public_key_bundle(
     artifact: Artifact<'_>,
     bundle: &Bundle,
     public_key: &DerPublicKey,
-    policy: &VerificationPolicy,
+    policy: &PublicKeyVerificationPolicy,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
-    validate_bundle_shape(bundle, policy)?;
+    validate_bundle_shape(bundle, policy.verify_tlog)?;
 
     if policy.verify_tlog {
         for entry in &bundle.verification_material.tlog_entries {
@@ -377,7 +402,9 @@ fn verify_public_key_bundle(
         public_key,
         signing_scheme_for_content(public_key_algorithm(public_key)?, &bundle.content)?,
     )?;
-    verify_tlog_consistency_if_enabled(bundle, &artifact, policy)?;
+    if policy.verify_tlog {
+        crate::verify_impl::verify_tlog_consistency(bundle, &artifact)?;
+    }
 
     Ok(VerificationResult::new())
 }
@@ -608,7 +635,7 @@ fn signing_scheme_for_content(
 /// # Example
 ///
 /// ```no_run
-/// use sigstore_verify::{verify, Keying};
+/// use sigstore_verify::{verify, VerificationMode, VerificationPolicy};
 /// use sigstore_trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
 /// use sigstore_types::{Bundle, Sha256Hash};
 ///
@@ -618,18 +645,18 @@ fn signing_scheme_for_content(
 /// let bundle = Bundle::from_json(&bundle_json)?;
 /// let artifact = std::fs::read("artifact.txt")?;
 ///
-/// verify(&artifact, &bundle, Keying::Certificate, &sigstore_verify::VerificationPolicy::default(), &trusted_root)?;
+/// let policy = VerificationPolicy::default();
+/// verify(&artifact, &bundle, VerificationMode::Certificate(&policy), &trusted_root)?;
 /// # Ok(())
 /// # }
 /// ```
 pub fn verify<'a>(
     artifact: impl Into<Artifact<'a>>,
     bundle: &Bundle,
-    keying: Keying<'_>,
-    policy: &VerificationPolicy,
+    mode: VerificationMode<'_>,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
-    verify_with_trusted_root(artifact.into(), bundle, keying, policy, trusted_root)
+    verify_with_trusted_root(artifact.into(), bundle, mode, trusted_root)
 }
 
 fn public_key_algorithm(public_key: &sigstore_types::DerPublicKey) -> Result<KeyAlgorithm> {
