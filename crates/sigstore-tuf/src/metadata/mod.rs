@@ -196,19 +196,13 @@ impl<T: Role> Metadata<T> {
                 }
             };
 
-            let vkey = match key.verification_key() {
-                Ok(vkey) => vkey,
-                Err(e) => {
-                    tracing::debug!(key_id = %sig.keyid, error = %e, "skipping unusable key");
-                    continue;
+            match key.verify(&self.canonical_signed, &SignatureBytes::new(raw)) {
+                Ok(_) => {
+                    good.insert(sig.keyid.as_str());
                 }
-            };
-
-            if vkey
-                .verify(&self.canonical_signed, &SignatureBytes::new(raw))
-                .is_ok()
-            {
-                good.insert(sig.keyid.as_str());
+                Err(e) => {
+                    tracing::debug!(key_id = %sig.keyid, error = %e, "signature verification failed");
+                }
             }
         }
 
