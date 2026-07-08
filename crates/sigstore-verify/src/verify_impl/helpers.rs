@@ -257,11 +257,17 @@ pub fn validate_certificate_time(validation_time: i64, cert_info: &CertificateIn
 /// This function verifies that the signing certificate chains to a trusted
 /// Fulcio root certificate at the given verification time. It also verifies
 /// that the certificate has the CODE_SIGNING extended key usage.
+///
+/// On success, returns the SubjectPublicKeyInfo of the leaf's direct issuer
+/// taken from the *verified* path. This is the canonical source for the issuer
+/// used by SCT verification: it is the certificate webpki proved signed the
+/// leaf, so it disambiguates Fulcio intermediates that share a subject name but
+/// have different keys (as in Sigstore staging's multi-region deployment).
 pub fn verify_certificate_chain(
     verification_material: &VerificationMaterialContent,
     validation_time: i64,
     trusted_root: &TrustedRoot,
-) -> Result<()> {
+) -> Result<DerPublicKey> {
     // Extract the end-entity certificate and any intermediates from the bundle
     let (ee_cert_der, intermediate_ders) = match verification_material {
         VerificationMaterialContent::Certificate(cert) => {
@@ -335,7 +341,7 @@ pub fn verify_certificate_chain(
     // - Signature verification at each step
     // - Time validity checking
     // - Extended Key Usage validation (CODE_SIGNING)
-    end_entity_cert
+    let path = end_entity_cert
         .verify_for_usage(
             ALL_VERIFICATION_ALGS,
             &trust_anchors,
@@ -349,85 +355,94 @@ pub fn verify_certificate_chain(
 
     tracing::debug!("Certificate chain validated successfully with CODE_SIGNING EKU");
 
-    Ok(())
+    issuer_spki_from_path(&path)
 }
 
-/// Verify the Signed Certificate Timestamp (SCT) embedded in the certificate
+/// Extract the leaf's direct-issuer SubjectPublicKeyInfo (full DER) from a
+/// webpki-verified path.
 ///
-/// SCTs provide proof that the certificate was submitted to a Certificate
-/// Transparency log. This is a key part of Sigstore's security model.
-///
-/// This function uses the x509-cert crate's built-in SCT parsing and tls_codec
-/// for proper RFC 6962 compliant verification.
-pub fn verify_sct(
-    verification_material: &VerificationMaterialContent,
-    trusted_root: &TrustedRoot,
-) -> Result<()> {
-    // Extract certificate for verification
-    let cert = extract_certificate(verification_material)?;
-
-    // Get issuer SPKI for calculating the issuer key hash
-    let issuer_spki = get_issuer_spki(verification_material, &cert, trusted_root)?;
-
-    // Delegate to the new sct module for verification
-    super::sct::verify_sct(cert.as_bytes(), issuer_spki.as_bytes(), trusted_root)
+/// The direct issuer is the leaf-proximal intermediate, or the trust anchor
+/// itself when the leaf was signed directly by an anchor — which is the common
+/// case for Sigstore, since Fulcio intermediates are shipped as trust anchors.
+fn issuer_spki_from_path(path: &webpki::VerifiedPath) -> Result<DerPublicKey> {
+    let der = match path.intermediate_certificates().next() {
+        // `Cert::subject_public_key_info()` already returns the full SPKI SEQUENCE.
+        Some(issuer) => issuer.subject_public_key_info().as_ref().to_vec(),
+        None => {
+            // webpki exposes the anchor SPKI as the SEQUENCE *contents* only, so
+            // wrap it back into a SEQUENCE to get the full SubjectPublicKeyInfo.
+            use x509_cert::der::{Any, Encode, Tag};
+            let spki = path.anchor().subject_public_key_info.as_ref();
+            Any::new(Tag::Sequence, spki)
+                .and_then(|any| any.to_der())
+                .map_err(|e| Error::Verification(format!("failed to encode issuer SPKI: {e}")))?
+        }
+    };
+    Ok(DerPublicKey::new(der))
 }
 
-/// Get the issuer's SubjectPublicKeyInfo DER bytes
-///
-/// This tries to find the issuer certificate in the verification material chain
-/// or in the trusted root, and returns its SPKI for SCT verification.
-fn get_issuer_spki(
-    verification_material: &VerificationMaterialContent,
-    cert: &DerCertificate,
-    trusted_root: &TrustedRoot,
-) -> Result<DerPublicKey> {
-    use x509_cert::der::{Decode, Encode};
-    use x509_cert::Certificate;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sigstore_types::Bundle;
 
-    // 1. Try to get from chain in verification material
-    if let VerificationMaterialContent::X509CertificateChain { certificates } =
-        verification_material
-    {
-        if certificates.len() > 1 {
-            let issuer_der = certificates[1].raw_bytes.as_bytes();
-            let issuer_cert = Certificate::from_der(issuer_der).map_err(|e| {
-                Error::Verification(format!("failed to parse issuer certificate: {}", e))
-            })?;
-            let spki_der = issuer_cert
-                .tbs_certificate
-                .subject_public_key_info
-                .to_der()
-                .map_err(|e| Error::Verification(format!("failed to encode issuer SPKI: {}", e)))?;
-            return Ok(DerPublicKey::new(spki_der));
-        }
+    /// Regression test for the Sigstore staging multi-region rollout (July 2026).
+    ///
+    /// Staging began issuing certificates from a second Fulcio intermediate that
+    /// shares the subject `CN=sigstore-intermediate` with the pre-existing 2022
+    /// intermediate but has a different key. SCT verification used to resolve the
+    /// issuer from the trusted root by subject *name* and picked the first (wrong)
+    /// intermediate, so the reconstructed `issuer_key_hash` was wrong and SCT
+    /// verification failed with a spurious "ECDSA P-256 SHA-256 signature invalid"
+    /// error. Sourcing the issuer from the webpki-verified chain fixes it, because
+    /// the verified path identifies the certificate that actually signed the leaf.
+    ///
+    /// The trusted root and bundle fixtures are the real staging artifacts from
+    /// the failing tuf-on-ci smoke test run.
+    #[test]
+    fn sct_verifies_with_multiple_same_named_intermediates() {
+        // The leaf's SCT timestamp / notBefore; used as the chain validation time.
+        const VALIDATION_TIME: i64 = 1_783_488_311;
+
+        let trusted_root = TrustedRoot::from_json(include_str!(
+            "../../test_data/sct-multi-intermediate/staging_trusted_root.json"
+        ))
+        .expect("failed to load staging trusted root");
+        let bundle = Bundle::from_json(include_str!(
+            "../../test_data/sct-multi-intermediate/staging_bundle.sigstore.json"
+        ))
+        .expect("failed to parse staging bundle");
+        let material = &bundle.verification_material.content;
+
+        // Sanity check: the trusted root really does contain two Fulcio
+        // intermediates that share the same subject name, which is the
+        // condition that triggered the bug.
+        use x509_cert::der::Decode;
+        use x509_cert::Certificate;
+        let same_named_intermediates = trusted_root
+            .fulcio_certs()
+            .unwrap()
+            .iter()
+            .filter_map(|der| Certificate::from_der(der).ok())
+            .filter(|c| {
+                c.tbs_certificate
+                    .subject
+                    .to_string()
+                    .contains("sigstore-intermediate")
+            })
+            .count();
+        assert!(
+            same_named_intermediates >= 2,
+            "fixture must contain multiple sigstore-intermediate CAs to exercise the bug, found {same_named_intermediates}"
+        );
+
+        // The canonical flow: the issuer comes from the verified chain, then SCT
+        // verification uses it. Before the fix, SCT verification returned
+        // Err("SCT signature verification failed: ... signature invalid").
+        let issuer_spki = verify_certificate_chain(material, VALIDATION_TIME, &trusted_root)
+            .expect("certificate chain should verify against the staging root");
+        let cert = extract_certificate(material).unwrap();
+        super::super::sct::verify_sct(cert.as_bytes(), issuer_spki.as_bytes(), &trusted_root)
+            .expect("SCT verification should succeed once the correct issuer is selected");
     }
-
-    // 2. Try to find in trusted root
-    let parsed_cert = Certificate::from_der(cert.as_bytes())
-        .map_err(|e| Error::Verification(format!("failed to parse certificate: {}", e)))?;
-    let issuer_name = parsed_cert.tbs_certificate.issuer;
-
-    let fulcio_certs = trusted_root
-        .fulcio_certs()
-        .map_err(|e| Error::Verification(format!("failed to get Fulcio certs: {}", e)))?;
-
-    for ca_der in fulcio_certs {
-        if let Ok(ca_cert) = Certificate::from_der(&ca_der) {
-            if ca_cert.tbs_certificate.subject == issuer_name {
-                let spki_der = ca_cert
-                    .tbs_certificate
-                    .subject_public_key_info
-                    .to_der()
-                    .map_err(|e| {
-                        Error::Verification(format!("failed to encode issuer SPKI: {}", e))
-                    })?;
-                return Ok(DerPublicKey::new(spki_der));
-            }
-        }
-    }
-
-    Err(Error::Verification(
-        "could not find issuer certificate for SCT verification".to_string(),
-    ))
 }

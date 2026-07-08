@@ -268,12 +268,15 @@ impl Verifier {
 
         // (1): Verify that the signing certificate chains to the root of trust,
         //      is valid at the time of signing, and has CODE_SIGNING EKU.
+        //      The verified path yields the leaf's direct issuer, which SCT
+        //      verification needs to reconstruct the RFC 6962 signed data.
+        let mut issuer_spki = None;
         if policy.verify_certificate {
-            crate::verify_impl::helpers::verify_certificate_chain(
+            issuer_spki = Some(crate::verify_impl::helpers::verify_certificate_chain(
                 &bundle.verification_material.content,
                 validation_time,
                 &self.trusted_root,
-            )?;
+            )?);
 
             // Also verify the certificate is within its validity period
             crate::verify_impl::helpers::validate_certificate_time(validation_time, &cert_info)?;
@@ -281,8 +284,17 @@ impl Verifier {
 
         // (2): Verify the signing certificate's SCT.
         if policy.verify_sct {
-            crate::verify_impl::helpers::verify_sct(
-                &bundle.verification_material.content,
+            // SCT verification depends on the issuer from the verified chain.
+            // `skip_certificate_chain()` disables both, so this is always set
+            // when SCT verification runs.
+            let issuer_spki = issuer_spki.as_ref().ok_or_else(|| {
+                Error::Verification(
+                    "SCT verification requires certificate chain verification".to_string(),
+                )
+            })?;
+            crate::verify_impl::sct::verify_sct(
+                cert.as_bytes(),
+                issuer_spki.as_bytes(),
                 &self.trusted_root,
             )?;
         }
