@@ -274,13 +274,6 @@ jobs:
 
       - name: Install sigstore-python
         run: |
-          # Install into an isolated environment rather than `pip install`.
-          # A bare `pip install` on the runner does a user install: it pulls a
-          # fresh `cryptography` into ~/.local but leaves the system's old
-          # `pyOpenSSL` (in /usr/lib/python3/dist-packages) in place. The stale
-          # pyOpenSSL is ABI-incompatible with new cryptography and crashes on
-          # import with `module 'lib' has no attribute 'GEN_EMAIL'`. uv resolves
-          # every dependency together, so the two stay consistent.
           uv tool install sigstore
           BIN_DIR="$(uv tool dir --bin)"
           echo "$BIN_DIR" >> "$GITHUB_PATH"
