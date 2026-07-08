@@ -25,7 +25,7 @@ pub fn extract_certificate(
             Ok(certificates[0].raw_bytes.clone())
         }
         VerificationMaterialContent::PublicKey { .. } => Err(Error::Verification(
-            "public key verification not yet supported".to_string(),
+            "expected certificate verification material, got public key".to_string(),
         )),
     }
 }
@@ -286,7 +286,7 @@ pub fn verify_certificate_chain(
         }
         VerificationMaterialContent::PublicKey { .. } => {
             return Err(Error::Verification(
-                "public key verification not yet supported".to_string(),
+                "expected certificate verification material, got public key".to_string(),
             ));
         }
     };
