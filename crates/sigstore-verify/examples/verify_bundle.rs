@@ -47,7 +47,7 @@
 use regex::Regex;
 use sigstore_trust_root::TrustedRoot;
 use sigstore_types::{Artifact, Bundle, Sha256Hash};
-use sigstore_verify::{verify, VerificationPolicy};
+use sigstore_verify::{verify, VerificationMode, VerificationPolicy};
 
 use std::env;
 use std::fs;
@@ -223,7 +223,12 @@ async fn main() {
             }
         };
         let artifact = Artifact::from(&digest);
-        verify(artifact, &bundle, &policy, &trusted_root)
+        verify(
+            artifact,
+            &bundle,
+            VerificationMode::Certificate(&policy),
+            &trusted_root,
+        )
     } else {
         // Read artifact file
         let artifact_bytes = match fs::read(artifact_or_digest) {
@@ -233,7 +238,12 @@ async fn main() {
                 process::exit(1);
             }
         };
-        verify(&artifact_bytes, &bundle, &policy, &trusted_root)
+        verify(
+            &artifact_bytes,
+            &bundle,
+            VerificationMode::Certificate(&policy),
+            &trusted_root,
+        )
     };
 
     match result {

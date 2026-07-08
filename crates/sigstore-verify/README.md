@@ -26,7 +26,7 @@ This crate provides high-level APIs for verifying Sigstore signatures. It handle
 ## Usage
 
 ```rust
-use sigstore_verify::{verify, Verifier, VerificationPolicy};
+use sigstore_verify::{verify, VerificationMode, Verifier, VerificationPolicy};
 use sigstore_trust_root::{TrustedRoot, TufConfig};
 use sigstore_types::{Artifact, Bundle, Sha256Hash};
 
@@ -38,15 +38,15 @@ let root = TrustedRoot::from_tuf(TufConfig::production()).await?;
 
 // Verify with raw artifact bytes
 let artifact_bytes = b"hello world";
-let result = verify(artifact_bytes.as_slice(), &bundle, &policy, &root)?;
+let result = verify(artifact_bytes.as_slice(), &bundle, VerificationMode::Certificate(&policy), &root)?;
 
 // Or verify with pre-computed SHA-256 digest (useful for large files)
 let digest = Sha256Hash::from_hex("b94d27b9...")?;
-let result = verify(digest, &bundle, &policy, &root)?;
+let result = verify(digest, &bundle, VerificationMode::Certificate(&policy), &root)?;
 
 // Using the Verifier struct directly
 let verifier = Verifier::new(&root);
-let result = verifier.verify(artifact_bytes.as_slice(), &bundle, &policy)?;
+let result = verifier.verify(artifact_bytes.as_slice(), &bundle, VerificationMode::Certificate(&policy))?;
 ```
 
 For GitHub artifact attestations, choose GitHub's Sigstore instance explicitly
@@ -54,7 +54,7 @@ and use the GitHub verification profile:
 
 ```rust
 use sigstore_trust_root::{SigstoreInstance, TrustedRoot};
-use sigstore_verify::{verify, VerificationPolicy};
+use sigstore_verify::{verify, VerificationMode, VerificationPolicy};
 use sigstore_types::{Bundle, Sha256Hash};
 
 let bundle: Bundle = serde_json::from_str(bundle_json)?;
@@ -66,7 +66,7 @@ let artifact_digest = Sha256Hash::from_hex("...")?;
 let root = TrustedRoot::from_embedded(SigstoreInstance::GitHub)?;
 let policy = VerificationPolicy::default().skip_tlog().skip_sct();
 
-let result = verify(artifact_digest, &bundle, &policy, &root)?;
+let result = verify(artifact_digest, &bundle, VerificationMode::Certificate(&policy), &root)?;
 ```
 
 ## Verification Policies

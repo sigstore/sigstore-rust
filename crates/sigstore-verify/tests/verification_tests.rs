@@ -6,7 +6,9 @@ use sigstore_trust_root::{SigstoreInstance, TrustedRoot, SIGSTORE_PRODUCTION_TRU
 use sigstore_types::{LogIndex, Sha256Hash};
 use sigstore_verify::bundle::{validate_bundle, validate_bundle_with_options, ValidationOptions};
 use sigstore_verify::types::Bundle;
-use sigstore_verify::{verify, VerificationPolicy, Verifier};
+use sigstore_verify::{
+    verify, PublicKeyVerificationPolicy, VerificationMode, VerificationPolicy, Verifier,
+};
 use x509_cert::der::Decode;
 
 /// Extract the expected artifact digest from a bundle
@@ -67,6 +69,9 @@ const CONDA_ATTESTATION_BUNDLE: &str =
     include_str!("../test_data/bundles/conda-attestation.sigstore.json");
 const CONDA_PACKAGE: &[u8] =
     include_bytes!("../test_data/bundles/signed-package-2.1.0-hb0f4dca_0.conda");
+const MANAGED_KEY_BUNDLE: &str = include_str!("../test_data/managed-key/bundle.sigstore.json");
+const MANAGED_KEY_PUBLIC_KEY: &str = include_str!("../test_data/managed-key/key.pub");
+const MANAGED_KEY_ARTIFACT: &[u8] = include_bytes!("../test_data/managed-key/artifact.txt");
 
 // Edge case bundles
 const BUNDLE_NO_CERT_V1: &str = include_str!("../test_data/bundles/bundle_no_cert_v1.txt.sigstore");
@@ -160,8 +165,13 @@ fn test_tampered_inclusion_proof_fails_verification() {
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
     let policy = VerificationPolicy::default();
 
-    let err = verify(artifact_digest, &bundle, &policy, &production_root())
-        .expect_err("verification must fail with a tampered inclusion proof");
+    let err = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    )
+    .expect_err("verification must fail with a tampered inclusion proof");
     assert!(
         err.to_string().contains("inclusion proof"),
         "unexpected error: {}",
@@ -183,7 +193,12 @@ fn test_tampered_canonicalized_body_fails_verification() {
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
     let policy = VerificationPolicy::default();
 
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
     assert!(
         result.is_err(),
         "verification must fail when the canonicalized body does not match the inclusion proof"
@@ -207,7 +222,11 @@ fn test_verifier_creation() {
         .skip_certificate_chain()
         .skip_tlog();
 
-    let result = verifier.verify(artifact_digest, &bundle, &policy);
+    let result = verifier.verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+    );
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
 }
 
@@ -222,7 +241,12 @@ fn test_verify_with_policy() {
     // Test with default policy (requires tlog verification)
     let policy = VerificationPolicy::default();
 
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
 
     let verification = result.unwrap();
@@ -239,7 +263,13 @@ fn test_verify_extracts_integrated_time() {
 
     let policy = VerificationPolicy::default();
 
-    let result = verify(artifact_digest, &bundle, &policy, &production_root()).unwrap();
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    )
+    .unwrap();
 
     assert!(result.integrated_time.is_some());
     let time = result.integrated_time.unwrap();
@@ -262,7 +292,12 @@ fn test_skip_tlog_verification() {
         .skip_tlog()
         .skip_certificate_chain();
 
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
     assert!(result.is_ok());
 }
 
@@ -275,7 +310,12 @@ fn test_verify_github_bundle_with_explicit_embedded_root() {
     let root = TrustedRoot::from_embedded(SigstoreInstance::GitHub).unwrap();
     let policy = VerificationPolicy::default().skip_tlog().skip_sct();
 
-    let result = verify(artifact_digest, &bundle, &policy, &root);
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &root,
+    );
 
     assert!(
         result.is_ok(),
@@ -354,7 +394,13 @@ fn test_full_verification_flow() {
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
     let policy = VerificationPolicy::default();
 
-    let result = verify(artifact_digest, &bundle, &policy, &production_root()).unwrap();
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    )
+    .unwrap();
     assert_eq!(result.integrated_time, Some(1738060096));
 }
 
@@ -394,7 +440,13 @@ fn test_full_verification_flow_happy_path() {
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
     let policy = VerificationPolicy::default();
 
-    let result = verify(artifact_digest, &bundle, &policy, &production_root()).unwrap();
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    )
+    .unwrap();
     assert_eq!(result.integrated_time, Some(1734374576));
 }
 
@@ -409,7 +461,12 @@ fn test_verification_with_different_bundle_versions() {
         .skip_certificate_chain()
         .skip_tlog();
 
-    let result = verify(artifact_digest, &v03_msg, &policy, &production_root());
+    let result = verify(
+        artifact_digest,
+        &v03_msg,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
     assert!(result.is_ok(), "v0.3 message signature verification failed");
 
     // v0.3 bundle with DSSE - this one chains to production
@@ -420,7 +477,7 @@ fn test_verification_with_different_bundle_versions() {
     let result = verify(
         dsse_artifact_digest,
         &v03_dsse,
-        &dsse_policy,
+        VerificationMode::Certificate(&dsse_policy),
         &production_root(),
     );
     assert!(result.is_ok(), "v0.3 DSSE verification failed");
@@ -581,7 +638,12 @@ fn test_dsse_bundle_with_2_signatures_should_fail() {
         extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::from_bytes([0u8; 32]));
     let policy = VerificationPolicy::default();
 
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
 
     // This should fail - multiple signatures are not supported
     // sigstore-go returns ErrDSSEInvalidSignatureCount for this case
@@ -689,7 +751,12 @@ fn test_bundle_no_cert_v1() {
         extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::from_bytes([0u8; 32]));
     let policy = VerificationPolicy::default();
 
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
     assert!(
         result.is_err(),
         "Verification should fail without a certificate"
@@ -750,7 +817,12 @@ fn test_bundle_no_log_entry() {
         extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::from_bytes([0u8; 32]));
     let policy = VerificationPolicy::default();
 
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
     assert!(
         result.is_err(),
         "Verification should fail without transparency log entries"
@@ -795,7 +867,12 @@ fn test_bundle_v3_no_signed_time() {
         extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::from_bytes([0u8; 32]));
     let policy = VerificationPolicy::default();
 
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
     // Whether this succeeds or fails depends on implementation
     // We just verify it handles the case
     let _ = result;
@@ -926,7 +1003,12 @@ fn test_verify_conda_package_attestation() {
         .require_identity("https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main")
         .require_issuer("https://token.actions.githubusercontent.com");
 
-    let result = verify(CONDA_PACKAGE, &bundle, &policy, &production_root());
+    let result = verify(
+        CONDA_PACKAGE,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
     assert!(
         result.is_ok(),
         "Conda package verification should succeed: {:?}",
@@ -958,7 +1040,12 @@ fn test_verify_conda_package_wrong_identity() {
         )
         .require_issuer("https://token.actions.githubusercontent.com");
 
-    let result = verify(CONDA_PACKAGE, &bundle, &policy, &production_root());
+    let result = verify(
+        CONDA_PACKAGE,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
     assert!(
         result.is_err(),
         "Verification should fail with wrong identity"
@@ -977,7 +1064,12 @@ fn test_verify_conda_package_tampered() {
     let policy =
         VerificationPolicy::default().require_issuer("https://token.actions.githubusercontent.com");
 
-    let result = verify(tampered_package, &bundle, &policy, &production_root());
+    let result = verify(
+        tampered_package,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
     assert!(
         result.is_err(),
         "Verification should fail with tampered package"
@@ -1037,7 +1129,12 @@ fn test_verify_cosign_v3_blob_bundle() {
 
     let policy = VerificationPolicy::default().require_issuer("https://github.com/login/oauth");
 
-    let result = verify(artifact, &bundle, &policy, &production_root());
+    let result = verify(
+        artifact,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
 }
 
@@ -1058,7 +1155,12 @@ fn test_verify_fails_with_unknown_log_entry_kind() {
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
     let policy = VerificationPolicy::default();
 
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
     assert!(result.is_err());
     let err_msg = result.err().unwrap().to_string();
     assert!(err_msg.contains("unsupported log entry kind"));
@@ -1081,7 +1183,12 @@ fn test_verify_fails_with_unknown_log_entry_version() {
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
     let policy = VerificationPolicy::default();
 
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
     assert!(result.is_err());
     let err_msg = result.err().unwrap().to_string();
     assert!(
@@ -1108,7 +1215,12 @@ fn test_verify_fails_with_mismatched_log_entry_kind() {
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
     let policy = VerificationPolicy::default();
 
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
     assert!(result.is_err());
     let err_msg = result.err().unwrap().to_string();
     assert!(err_msg.contains("unsupported log entry kind for DSSE envelope"));
@@ -1132,7 +1244,12 @@ fn test_verify_fails_with_mismatched_hashedrekord_version_for_dsse() {
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
     let policy = VerificationPolicy::default();
 
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &production_root(),
+    );
     assert!(result.is_err());
     let err_msg = result.err().unwrap().to_string();
 
@@ -1153,7 +1270,12 @@ fn test_verify_dsse_with_hashedrekord_v002() {
 
     let policy = VerificationPolicy::default();
 
-    let result = verify(artifact.as_slice(), &bundle, &policy, &staging_root());
+    let result = verify(
+        artifact.as_slice(),
+        &bundle,
+        VerificationMode::Certificate(&policy),
+        &staging_root(),
+    );
     assert!(
         result.is_ok(),
         "Verification failed for DSSE with HashedRekordV2: {:?}",
@@ -1161,104 +1283,173 @@ fn test_verify_dsse_with_hashedrekord_v002() {
     );
 }
 
+fn managed_key_public_key() -> sigstore_types::DerPublicKey {
+    sigstore_types::DerPublicKey::from_pem(MANAGED_KEY_PUBLIC_KEY).expect("managed key parses")
+}
+
 #[test]
-fn test_verify_dsse_with_key_fails_with_tampered_artifact() {
-    use sigstore_verify::verify_with_key;
+fn test_public_key_bundle_with_certificate_keying_fails_at_top() {
+    let bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
+    let policy = VerificationPolicy::default();
 
-    let bundle =
-        Bundle::from_json(CONDA_ATTESTATION_BUNDLE).expect("Failed to parse conda attestation");
-
-    // Extract the public key from the signing certificate inside the bundle
-    let cert = bundle
-        .signing_certificate()
-        .expect("Should have a signing certificate");
-    let cert_info = sigstore_crypto::parse_certificate_info(cert.as_bytes())
-        .expect("Failed to parse certificate info");
-    let public_key = cert_info.public_key;
-
-    // Use a completely different/tampered package content
-    let tampered_package = b"this is not the original package content";
-
-    // Verify using key-based verification. This should fail because the tampered package
-    // does not match the subject in the in-toto statement payload of the DSSE envelope.
-    let result = verify_with_key(
-        tampered_package.as_slice(),
+    let result = verify(
+        MANAGED_KEY_ARTIFACT,
         &bundle,
-        &public_key,
+        VerificationMode::Certificate(&policy),
         &production_root(),
     );
 
-    assert!(
-        result.is_err(),
-        "Key-based verification of DSSE envelope must fail when artifact does not match the payload subjects. Result was: {:?}",
-        result
-    );
+    assert!(result.is_err());
+    assert!(result
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("bundle contains a public key but certificate verification was requested"));
 }
 
-/// Key-based verification of an untampered DSSE bundle succeeds, including
-/// the transparency log consistency checks.
 #[test]
-fn test_verify_dsse_with_key_succeeds_with_correct_artifact() {
-    use sigstore_verify::verify_with_key;
+fn test_certificate_bundle_with_public_key_keying_fails_at_top() {
+    let bundle = Bundle::from_json(CONDA_ATTESTATION_BUNDLE).unwrap();
+    let public_key = managed_key_public_key();
+    let policy = PublicKeyVerificationPolicy::default();
 
-    let bundle =
-        Bundle::from_json(CONDA_ATTESTATION_BUNDLE).expect("Failed to parse conda attestation");
-
-    let cert = bundle
-        .signing_certificate()
-        .expect("Should have a signing certificate");
-    let cert_info = sigstore_crypto::parse_certificate_info(cert.as_bytes())
-        .expect("Failed to parse certificate info");
-
-    let result = verify_with_key(
+    let result = verify(
         CONDA_PACKAGE,
         &bundle,
-        &cert_info.public_key,
+        VerificationMode::PublicKey {
+            public_key: &public_key,
+            policy: &policy,
+        },
+        &production_root(),
+    );
+
+    assert!(result.is_err());
+    assert!(result
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("bundle contains a certificate but a public key was supplied"));
+}
+
+#[test]
+fn test_verify_public_key_validates_public_key_hint() {
+    let mut json: serde_json::Value = serde_json::from_str(MANAGED_KEY_BUNDLE).unwrap();
+    json["verificationMaterial"]["publicKey"]["hint"] =
+        serde_json::json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+    let bundle = Bundle::from_json(&serde_json::to_string(&json).unwrap()).unwrap();
+    let public_key = managed_key_public_key();
+    let policy = PublicKeyVerificationPolicy::default();
+
+    let result = verify(
+        MANAGED_KEY_ARTIFACT,
+        &bundle,
+        VerificationMode::PublicKey {
+            public_key: &public_key,
+            policy: &policy,
+        },
+        &production_root(),
+    );
+
+    assert!(result.is_err());
+    assert!(result
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("public key hint does not match supplied public key"));
+}
+
+#[test]
+fn test_verify_public_key_rejects_non_base64_hint() {
+    let mut json: serde_json::Value = serde_json::from_str(MANAGED_KEY_BUNDLE).unwrap();
+    json["verificationMaterial"]["publicKey"]["hint"] = serde_json::json!("SHA256:not-base64");
+    let bundle = Bundle::from_json(&serde_json::to_string(&json).unwrap()).unwrap();
+    let public_key = managed_key_public_key();
+    let policy = PublicKeyVerificationPolicy::default();
+
+    let result = verify(
+        MANAGED_KEY_ARTIFACT,
+        &bundle,
+        VerificationMode::PublicKey {
+            public_key: &public_key,
+            policy: &policy,
+        },
+        &production_root(),
+    );
+
+    assert!(result.is_err());
+    assert!(result
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("public key hint is not base64 SHA-256"));
+}
+
+#[test]
+fn test_verify_public_key_accepts_managed_key_bundle_digest_only() {
+    let bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
+    let public_key = managed_key_public_key();
+    let digest = sigstore_crypto::sha256(MANAGED_KEY_ARTIFACT);
+    let policy = PublicKeyVerificationPolicy::default();
+
+    let result = verify(
+        digest,
+        &bundle,
+        VerificationMode::PublicKey {
+            public_key: &public_key,
+            policy: &policy,
+        },
         &production_root(),
     );
 
     assert!(
         result.is_ok(),
-        "Key-based verification of untampered DSSE bundle should succeed: {:?}",
+        "managed-key digest-only verification failed: {:?}",
         result.err()
     );
 }
 
-/// verify_with_key must reject bundles whose transparency log entry disagrees
-/// with the bundle content (CVE-2022-36056 class), like Verifier::verify does.
 #[test]
-fn test_verify_with_key_fails_with_mismatched_log_entry_kind() {
-    use sigstore_verify::verify_with_key;
+fn test_verify_public_key_fails_with_tampered_artifact() {
+    let bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
+    let public_key = managed_key_public_key();
+    let policy = PublicKeyVerificationPolicy::default();
 
-    let mut json_val: serde_json::Value = serde_json::from_str(CONDA_ATTESTATION_BUNDLE).unwrap();
-    json_val["verificationMaterial"]["tlogEntries"][0]["kindVersion"]["kind"] =
-        serde_json::json!("not-a-known-kind");
-    let corrupted_bundle_json = serde_json::to_string(&json_val).unwrap();
-
-    let bundle =
-        Bundle::from_json(&corrupted_bundle_json).expect("Failed to parse corrupted bundle");
-
-    let cert = bundle
-        .signing_certificate()
-        .expect("Should have a signing certificate");
-    let cert_info = sigstore_crypto::parse_certificate_info(cert.as_bytes())
-        .expect("Failed to parse certificate info");
-
-    let result = verify_with_key(
-        CONDA_PACKAGE,
+    let result = verify(
+        b"this is not the original artifact".as_slice(),
         &bundle,
-        &cert_info.public_key,
+        VerificationMode::PublicKey {
+            public_key: &public_key,
+            policy: &policy,
+        },
         &production_root(),
     );
 
-    assert!(
-        result.is_err(),
-        "Key-based verification must fail when the log entry kind does not match the bundle content"
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_verify_public_key_fails_with_mismatched_log_entry_kind() {
+    let mut json_val: serde_json::Value = serde_json::from_str(MANAGED_KEY_BUNDLE).unwrap();
+    json_val["verificationMaterial"]["tlogEntries"][0]["kindVersion"]["kind"] =
+        serde_json::json!("not-a-known-kind");
+    let bundle = Bundle::from_json(&serde_json::to_string(&json_val).unwrap()).unwrap();
+    let public_key = managed_key_public_key();
+    let policy = PublicKeyVerificationPolicy::default();
+
+    let result = verify(
+        MANAGED_KEY_ARTIFACT,
+        &bundle,
+        VerificationMode::PublicKey {
+            public_key: &public_key,
+            policy: &policy,
+        },
+        &production_root(),
     );
-    let err_msg = result.err().unwrap().to_string();
-    assert!(
-        err_msg.contains("unsupported log entry kind"),
-        "Unexpected error: {}",
-        err_msg
-    );
+
+    assert!(result.is_err());
+    assert!(result
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("unsupported log entry kind"));
 }
