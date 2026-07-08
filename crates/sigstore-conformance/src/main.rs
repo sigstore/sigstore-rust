@@ -238,7 +238,7 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     // Handle key-based verification
     if let Some(key_path) = key_path {
         use sigstore_types::DerPublicKey;
-        use sigstore_verify::verify_with_key;
+        use sigstore_verify::Keying;
 
         // Load public key from PEM file
         let key_pem = fs::read_to_string(&key_path)?;
@@ -265,11 +265,23 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             let artifact_digest = Sha256Hash::try_from_slice(&digest_bytes)
                 .map_err(|e| format!("Invalid digest: {}", e))?;
 
-            verify_with_key(artifact_digest, &bundle, &public_key, &trusted_root)?;
+            verify(
+                artifact_digest,
+                &bundle,
+                Keying::PublicKey(&public_key),
+                &VerificationPolicy::default(),
+                &trusted_root,
+            )?;
         } else {
             // It's a file path
             let artifact_data = fs::read(&artifact_or_digest)?;
-            verify_with_key(&artifact_data, &bundle, &public_key, &trusted_root)?;
+            verify(
+                &artifact_data,
+                &bundle,
+                Keying::PublicKey(&public_key),
+                &VerificationPolicy::default(),
+                &trusted_root,
+            )?;
         }
 
         return Ok(());
@@ -308,7 +320,13 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| format!("Invalid digest: {}", e))?;
 
         // Verify the signature with trusted root using the digest directly
-        verify(artifact_digest, &bundle, &policy, &trusted_root)?;
+        verify(
+            artifact_digest,
+            &bundle,
+            sigstore_verify::Keying::Certificate,
+            &policy,
+            &trusted_root,
+        )?;
 
         Ok(())
     } else {
@@ -316,7 +334,13 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let artifact_data = fs::read(&artifact_or_digest)?;
 
         // Verify with trusted root
-        verify(&artifact_data, &bundle, &policy, &trusted_root)?;
+        verify(
+            &artifact_data,
+            &bundle,
+            sigstore_verify::Keying::Certificate,
+            &policy,
+            &trusted_root,
+        )?;
 
         Ok(())
     }

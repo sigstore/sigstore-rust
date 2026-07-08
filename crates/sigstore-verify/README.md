@@ -38,15 +38,15 @@ let root = TrustedRoot::from_tuf(TufConfig::production()).await?;
 
 // Verify with raw artifact bytes
 let artifact_bytes = b"hello world";
-let result = verify(artifact_bytes.as_slice(), &bundle, &policy, &root)?;
+let result = verify(artifact_bytes.as_slice(), &bundle, Keying::Certificate, &policy, &root)?;
 
 // Or verify with pre-computed SHA-256 digest (useful for large files)
 let digest = Sha256Hash::from_hex("b94d27b9...")?;
-let result = verify(digest, &bundle, &policy, &root)?;
+let result = verify(digest, &bundle, Keying::Certificate, &policy, &root)?;
 
 // Using the Verifier struct directly
 let verifier = Verifier::new(&root);
-let result = verifier.verify(artifact_bytes.as_slice(), &bundle, &policy)?;
+let result = verifier.verify(artifact_bytes.as_slice(), &bundle, Keying::Certificate, &policy)?;
 ```
 
 For GitHub artifact attestations, choose GitHub's Sigstore instance explicitly
@@ -66,7 +66,7 @@ let artifact_digest = Sha256Hash::from_hex("...")?;
 let root = TrustedRoot::from_embedded(SigstoreInstance::GitHub)?;
 let policy = VerificationPolicy::default().skip_tlog().skip_sct();
 
-let result = verify(artifact_digest, &bundle, &policy, &root)?;
+let result = verify(artifact_digest, &bundle, Keying::Certificate, &policy, &root)?;
 ```
 
 ## Verification Policies

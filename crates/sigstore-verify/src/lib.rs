@@ -5,7 +5,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use sigstore_verify::{verify, VerificationPolicy};
+//! use sigstore_verify::{verify, Keying, VerificationPolicy};
 //! use sigstore_trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
 //! use sigstore_types::Bundle;
 //!
@@ -19,7 +19,7 @@
 //!     .require_identity("user@example.com")
 //!     .require_issuer("https://accounts.google.com");
 //!
-//! verify(&artifact, &bundle, &policy, &trusted_root)?;
+//! verify(&artifact, &bundle, Keying::Certificate, &policy, &trusted_root)?;
 //! # Ok(())
 //! # }
 //! ```
@@ -40,6 +40,6 @@ pub use sigstore_types as types;
 
 pub use error::{Error, Result};
 pub use verify::{
-    verify, verify_with_key, CertificatePolicy, VerificationPolicy, VerificationResult, Verifier,
+    verify, CertificatePolicy, Keying, VerificationPolicy, VerificationResult, Verifier,
     DEFAULT_CLOCK_SKEW_SECONDS,
 };
