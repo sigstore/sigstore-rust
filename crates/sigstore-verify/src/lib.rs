@@ -19,8 +19,7 @@
 //!     .require_identity("user@example.com")
 //!     .require_issuer("https://accounts.google.com");
 //!
-//! let result = verify(&artifact, &bundle, &policy, &trusted_root)?;
-//! assert!(result.success);
+//! verify(&artifact, &bundle, &policy, &trusted_root)?;
 //! # Ok(())
 //! # }
 //! ```
@@ -41,6 +40,6 @@ pub use sigstore_types as types;
 
 pub use error::{Error, Result};
 pub use verify::{
-    verify, verify_with_key, VerificationPolicy, VerificationResult, Verifier,
+    verify, verify_with_key, CertificatePolicy, VerificationPolicy, VerificationResult, Verifier,
     DEFAULT_CLOCK_SKEW_SECONDS,
 };

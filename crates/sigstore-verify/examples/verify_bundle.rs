@@ -260,28 +260,23 @@ async fn main() {
                 }
             }
 
-            if result.success {
-                println!("\nVerification: SUCCESS");
-                if let Some(id) = &result.identity {
-                    println!("  Identity: {}", id);
-                }
-                if let Some(iss) = &result.issuer {
-                    println!("  Issuer: {}", iss);
-                }
-                if let Some(time) = result.integrated_time {
-                    use jiff::Timestamp;
-                    if let Ok(dt) = Timestamp::from_second(time) {
-                        println!("  Signed at: {}", dt);
-                    }
-                }
-                for warning in &result.warnings {
-                    println!("  Warning: {}", warning);
-                }
-                process::exit(0);
-            } else {
-                eprintln!("\nVerification: FAILED");
-                process::exit(1);
+            println!("\nVerification: SUCCESS");
+            if let Some(id) = &result.identity {
+                println!("  Identity: {}", id);
             }
+            if let Some(iss) = &result.issuer {
+                println!("  Issuer: {}", iss);
+            }
+            if let Some(time) = result.integrated_time {
+                use jiff::Timestamp;
+                if let Ok(dt) = Timestamp::from_second(time) {
+                    println!("  Signed at: {}", dt);
+                }
+            }
+            for warning in &result.warnings {
+                println!("  Warning: {}", warning);
+            }
+            process::exit(0);
         }
         Err(e) => {
             eprintln!("\nVerification error: {}", e);

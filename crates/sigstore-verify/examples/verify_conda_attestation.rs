@@ -144,31 +144,26 @@ async fn main() {
     println!();
     match verify(&artifact, &bundle, &policy, &trusted_root) {
         Ok(result) => {
-            if result.success {
-                println!("Verification: SUCCESS");
-                println!();
-                println!("Certificate Details:");
-                if let Some(id) = &result.identity {
-                    println!("  Identity (SAN): {}", id);
-                }
-                if let Some(iss) = &result.issuer {
-                    println!("  OIDC Issuer: {}", iss);
-                }
-                if let Some(time) = result.integrated_time {
-                    use jiff::Timestamp;
-                    if let Ok(dt) = Timestamp::from_second(time) {
-                        println!("  Signed at: {}", dt);
-                    }
-                }
-                for warning in &result.warnings {
-                    println!();
-                    println!("Warning: {}", warning);
-                }
-                process::exit(0);
-            } else {
-                eprintln!("Verification: FAILED");
-                process::exit(1);
+            println!("Verification: SUCCESS");
+            println!();
+            println!("Certificate Details:");
+            if let Some(id) = &result.identity {
+                println!("  Identity (SAN): {}", id);
             }
+            if let Some(iss) = &result.issuer {
+                println!("  OIDC Issuer: {}", iss);
+            }
+            if let Some(time) = result.integrated_time {
+                use jiff::Timestamp;
+                if let Ok(dt) = Timestamp::from_second(time) {
+                    println!("  Signed at: {}", dt);
+                }
+            }
+            for warning in &result.warnings {
+                println!();
+                println!("Warning: {}", warning);
+            }
+            process::exit(0);
         }
         Err(e) => {
             eprintln!("Verification error: {}", e);

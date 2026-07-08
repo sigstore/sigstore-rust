@@ -158,7 +158,7 @@ fn test_tampered_inclusion_proof_fails_verification() {
     // ...but the verification path must reject the invalid Merkle proof.
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default().skip_timestamp();
+    let policy = VerificationPolicy::default();
 
     let err = verify(artifact_digest, &bundle, &policy, &production_root())
         .expect_err("verification must fail with a tampered inclusion proof");
@@ -181,7 +181,7 @@ fn test_tampered_canonicalized_body_fails_verification() {
 
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default().skip_timestamp();
+    let policy = VerificationPolicy::default();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     assert!(
@@ -204,7 +204,6 @@ fn test_verifier_creation() {
 
     // V03_BUNDLE is from sigstore-python tests (staging) - skip crypto verifications
     let policy = VerificationPolicy::default()
-        .skip_timestamp()
         .skip_certificate_chain()
         .skip_tlog();
 
@@ -221,13 +220,12 @@ fn test_verify_with_policy() {
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
 
     // Test with default policy (requires tlog verification)
-    let policy = VerificationPolicy::default().skip_timestamp();
+    let policy = VerificationPolicy::default();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
 
     let verification = result.unwrap();
-    assert!(verification.success);
     assert!(verification.integrated_time.is_some());
 }
 
@@ -239,7 +237,7 @@ fn test_verify_extracts_integrated_time() {
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
 
-    let policy = VerificationPolicy::default().skip_timestamp();
+    let policy = VerificationPolicy::default();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root()).unwrap();
 
@@ -262,7 +260,6 @@ fn test_skip_tlog_verification() {
     // V03_BUNDLE is from sigstore-python tests and may not chain to production Fulcio
     let policy = VerificationPolicy::default()
         .skip_tlog()
-        .skip_timestamp()
         .skip_certificate_chain();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
@@ -285,7 +282,6 @@ fn test_verify_github_bundle_with_explicit_embedded_root() {
         "GitHub bundle verification failed: {:?}",
         result.err()
     );
-    assert!(result.unwrap().success);
 }
 
 // ==== Policy Tests ====
@@ -295,8 +291,7 @@ fn test_policy_builder() {
     let policy = VerificationPolicy::default()
         .require_identity("test@example.com")
         .require_issuer("https://accounts.google.com")
-        .skip_tlog()
-        .skip_timestamp();
+        .skip_tlog();
 
     assert_eq!(policy.identity, Some("test@example.com".to_string()));
     assert_eq!(
@@ -304,7 +299,6 @@ fn test_policy_builder() {
         Some("https://accounts.google.com".to_string())
     );
     assert!(!policy.verify_tlog);
-    assert!(!policy.verify_timestamp);
 }
 
 #[test]
@@ -358,10 +352,9 @@ fn test_full_verification_flow() {
     // Run full verification - extract digest from bundle
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default().skip_timestamp();
+    let policy = VerificationPolicy::default();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root()).unwrap();
-    assert!(result.success);
     assert_eq!(result.integrated_time, Some(1738060096));
 }
 
@@ -399,10 +392,9 @@ fn test_full_verification_flow_happy_path() {
     // Run full verification - extract digest from bundle
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default().skip_timestamp();
+    let policy = VerificationPolicy::default();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root()).unwrap();
-    assert!(result.success);
     assert_eq!(result.integrated_time, Some(1734374576));
 }
 
@@ -414,7 +406,6 @@ fn test_verification_with_different_bundle_versions() {
     let artifact_digest =
         extract_artifact_digest(&v03_msg).expect("Bundle should have artifact digest");
     let policy = VerificationPolicy::default()
-        .skip_timestamp()
         .skip_certificate_chain()
         .skip_tlog();
 
@@ -425,7 +416,7 @@ fn test_verification_with_different_bundle_versions() {
     let v03_dsse = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
     let dsse_artifact_digest =
         extract_artifact_digest(&v03_dsse).expect("DSSE bundle should have artifact digest");
-    let dsse_policy = VerificationPolicy::default().skip_timestamp();
+    let dsse_policy = VerificationPolicy::default();
     let result = verify(
         dsse_artifact_digest,
         &v03_dsse,
@@ -588,7 +579,7 @@ fn test_dsse_bundle_with_2_signatures_should_fail() {
     // Use extracted digest or dummy - doesn't matter since validation should fail first
     let artifact_digest =
         extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::from_bytes([0u8; 32]));
-    let policy = VerificationPolicy::default().skip_timestamp();
+    let policy = VerificationPolicy::default();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
 
@@ -696,7 +687,7 @@ fn test_bundle_no_cert_v1() {
     // Use extracted digest or dummy - doesn't matter since validation should fail first
     let artifact_digest =
         extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::from_bytes([0u8; 32]));
-    let policy = VerificationPolicy::default().skip_timestamp();
+    let policy = VerificationPolicy::default();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     assert!(
@@ -757,7 +748,7 @@ fn test_bundle_no_log_entry() {
     // Use extracted digest or dummy - doesn't matter since validation should fail first
     let artifact_digest =
         extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::from_bytes([0u8; 32]));
-    let policy = VerificationPolicy::default().skip_timestamp();
+    let policy = VerificationPolicy::default();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     assert!(
@@ -802,7 +793,7 @@ fn test_bundle_v3_no_signed_time() {
     // Use extracted digest or dummy - we're testing handling of missing signed time
     let artifact_digest =
         extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::from_bytes([0u8; 32]));
-    let policy = VerificationPolicy::default().skip_timestamp();
+    let policy = VerificationPolicy::default();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     // Whether this succeeds or fails depends on implementation
@@ -943,7 +934,6 @@ fn test_verify_conda_package_attestation() {
     );
 
     let verification = result.unwrap();
-    assert!(verification.success);
     assert_eq!(
         verification.identity.as_deref(),
         Some("https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main")
@@ -1066,7 +1056,7 @@ fn test_verify_fails_with_unknown_log_entry_kind() {
         Bundle::from_json(&corrupted_bundle_json).expect("Failed to parse corrupted bundle");
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default().skip_timestamp();
+    let policy = VerificationPolicy::default();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     assert!(result.is_err());
@@ -1089,7 +1079,7 @@ fn test_verify_fails_with_unknown_log_entry_version() {
         Bundle::from_json(&corrupted_bundle_json).expect("Failed to parse corrupted bundle");
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default().skip_timestamp();
+    let policy = VerificationPolicy::default();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     assert!(result.is_err());
@@ -1116,7 +1106,7 @@ fn test_verify_fails_with_mismatched_log_entry_kind() {
         Bundle::from_json(&corrupted_bundle_json).expect("Failed to parse corrupted bundle");
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default().skip_timestamp();
+    let policy = VerificationPolicy::default();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     assert!(result.is_err());
@@ -1140,7 +1130,7 @@ fn test_verify_fails_with_mismatched_hashedrekord_version_for_dsse() {
         Bundle::from_json(&corrupted_bundle_json).expect("Failed to parse corrupted bundle");
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default().skip_timestamp();
+    let policy = VerificationPolicy::default();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     assert!(result.is_err());
@@ -1169,7 +1159,6 @@ fn test_verify_dsse_with_hashedrekord_v002() {
         "Verification failed for DSSE with HashedRekordV2: {:?}",
         result.err()
     );
-    assert!(result.unwrap().success);
 }
 
 #[test]

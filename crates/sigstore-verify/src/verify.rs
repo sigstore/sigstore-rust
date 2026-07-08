@@ -13,6 +13,27 @@ use sigstore_types::{Artifact, Bundle, HashAlgorithm, SignatureContent, Statemen
 /// Default clock skew tolerance in seconds (60 seconds = 1 minute)
 pub const DEFAULT_CLOCK_SKEW_SECONDS: i64 = 60;
 
+/// How the signing certificate is verified.
+///
+/// SCT verification depends on the issuer identified while verifying the
+/// certificate chain, so it cannot be requested independently. Nesting the
+/// `verify_sct` flag inside the [`CertificatePolicy::Verify`] variant makes the
+/// invalid "verify SCT but not the chain" combination unrepresentable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CertificatePolicy {
+    /// Skip certificate chain verification (and, necessarily, SCT verification).
+    ///
+    /// WARNING: This is unsafe for production use. Only use for testing with
+    /// bundles that don't chain to the trusted root.
+    Skip,
+    /// Verify the certificate chains to the trusted root, is valid at the time
+    /// of signing, and has the CODE_SIGNING EKU.
+    Verify {
+        /// Also verify the certificate's embedded Signed Certificate Timestamp.
+        verify_sct: bool,
+    },
+}
+
 /// Policy for verifying signatures
 #[derive(Debug, Clone)]
 pub struct VerificationPolicy {
@@ -22,12 +43,8 @@ pub struct VerificationPolicy {
     pub issuer: Option<String>,
     /// Verify transparency log inclusion
     pub verify_tlog: bool,
-    /// Verify timestamp
-    pub verify_timestamp: bool,
-    /// Verify certificate chain
-    pub verify_certificate: bool,
-    /// Verify the signing certificate's Signed Certificate Timestamp (SCT)
-    pub verify_sct: bool,
+    /// How the signing certificate (and its SCT) is verified
+    pub certificate: CertificatePolicy,
     /// Clock skew tolerance in seconds for time validation
     ///
     /// This allows for a tolerance when checking that integrated times
@@ -41,9 +58,7 @@ impl Default for VerificationPolicy {
             identity: None,
             issuer: None,
             verify_tlog: true,
-            verify_timestamp: true,
-            verify_certificate: true,
-            verify_sct: true,
+            certificate: CertificatePolicy::Verify { verify_sct: true },
             clock_skew_seconds: DEFAULT_CLOCK_SKEW_SECONDS,
         }
     }
@@ -84,19 +99,13 @@ impl VerificationPolicy {
         self
     }
 
-    /// Skip timestamp verification
-    pub fn skip_timestamp(mut self) -> Self {
-        self.verify_timestamp = false;
-        self
-    }
-
     /// Skip certificate chain verification
     ///
     /// WARNING: This is unsafe for production use. Only use for testing
-    /// with bundles that don't chain to the trusted root.
+    /// with bundles that don't chain to the trusted root. This also skips SCT
+    /// verification, which depends on the verified certificate chain.
     pub fn skip_certificate_chain(mut self) -> Self {
-        self.verify_certificate = false;
-        self.verify_sct = false;
+        self.certificate = CertificatePolicy::Skip;
         self
     }
 
@@ -107,7 +116,9 @@ impl VerificationPolicy {
     /// certificate chain is still verified unless `skip_certificate_chain()` is
     /// also used.
     pub fn skip_sct(mut self) -> Self {
-        self.verify_sct = false;
+        if let CertificatePolicy::Verify { verify_sct } = &mut self.certificate {
+            *verify_sct = false;
+        }
         self
     }
 
@@ -122,10 +133,12 @@ impl VerificationPolicy {
 }
 
 /// Result of verification
+///
+/// This is returned only when verification *succeeds* — any failure is reported
+/// as an [`Err`]. It carries metadata extracted during verification (identity,
+/// issuer, integrated time) plus any non-fatal warnings.
 #[derive(Debug)]
 pub struct VerificationResult {
-    /// Whether verification succeeded
-    pub success: bool,
     /// Identity from the certificate
     pub identity: Option<String>,
     /// Issuer from the certificate
@@ -137,26 +150,20 @@ pub struct VerificationResult {
 }
 
 impl VerificationResult {
-    /// Create a successful result
-    pub fn success() -> Self {
+    /// Create an empty result to be populated as verification proceeds.
+    pub fn new() -> Self {
         Self {
-            success: true,
             identity: None,
             issuer: None,
             integrated_time: None,
             warnings: Vec::new(),
         }
     }
+}
 
-    /// Create a failed result
-    pub fn failure() -> Self {
-        Self {
-            success: false,
-            identity: None,
-            issuer: None,
-            integrated_time: None,
-            warnings: Vec::new(),
-        }
+impl Default for VerificationResult {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -231,7 +238,7 @@ impl Verifier {
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
         let artifact = artifact.into();
-        let mut result = VerificationResult::success();
+        let mut result = VerificationResult::new();
 
         // Validate bundle structure first. This is a purely structural
         // (shape/required-fields) check; all cryptographic verification of
@@ -270,33 +277,28 @@ impl Verifier {
         //      is valid at the time of signing, and has CODE_SIGNING EKU.
         //      The verified path yields the leaf's direct issuer, which SCT
         //      verification needs to reconstruct the RFC 6962 signed data.
-        let mut issuer_spki = None;
-        if policy.verify_certificate {
-            issuer_spki = Some(crate::verify_impl::helpers::verify_certificate_chain(
+        //
+        // (2): Verify the signing certificate's SCT. This is nested here because
+        //      it consumes the issuer produced by chain verification; the type
+        //      system therefore guarantees the issuer is available whenever SCT
+        //      verification runs.
+        if let CertificatePolicy::Verify { verify_sct } = policy.certificate {
+            let issuer_spki = crate::verify_impl::helpers::verify_certificate_chain(
                 &bundle.verification_material.content,
                 validation_time,
                 &self.trusted_root,
-            )?);
+            )?;
 
             // Also verify the certificate is within its validity period
             crate::verify_impl::helpers::validate_certificate_time(validation_time, &cert_info)?;
-        }
 
-        // (2): Verify the signing certificate's SCT.
-        if policy.verify_sct {
-            // SCT verification depends on the issuer from the verified chain.
-            // `skip_certificate_chain()` disables both, so this is always set
-            // when SCT verification runs.
-            let issuer_spki = issuer_spki.as_ref().ok_or_else(|| {
-                Error::Verification(
-                    "SCT verification requires certificate chain verification".to_string(),
-                )
-            })?;
-            crate::verify_impl::sct::verify_sct(
-                cert.as_bytes(),
-                issuer_spki.as_bytes(),
-                &self.trusted_root,
-            )?;
+            if verify_sct {
+                crate::verify_impl::sct::verify_sct(
+                    cert.as_bytes(),
+                    issuer_spki.as_bytes(),
+                    &self.trusted_root,
+                )?;
+            }
         }
 
         // (3): Verify against the given `VerificationPolicy`.
@@ -561,8 +563,7 @@ fn verify_message_signature_crypto(
 /// let bundle = Bundle::from_json(&bundle_json)?;
 /// let artifact = std::fs::read("artifact.txt")?;
 ///
-/// let result = verify(&artifact, &bundle, &sigstore_verify::VerificationPolicy::default(), &trusted_root)?;
-/// assert!(result.success);
+/// verify(&artifact, &bundle, &sigstore_verify::VerificationPolicy::default(), &trusted_root)?;
 /// # Ok(())
 /// # }
 /// ```
@@ -602,8 +603,7 @@ pub fn verify<'a>(
 /// let key_pem = std::fs::read_to_string("key.pub")?;
 /// let public_key = DerPublicKey::from_pem(&key_pem)?;
 ///
-/// let result = verify_with_key(&artifact, &bundle, &public_key, &trusted_root)?;
-/// assert!(result.success);
+/// verify_with_key(&artifact, &bundle, &public_key, &trusted_root)?;
 /// # Ok(())
 /// # }
 /// ```
@@ -617,7 +617,7 @@ pub fn verify_with_key<'a>(
     use sigstore_crypto::{detect_key_type, KeyType, SigningScheme};
 
     let artifact = artifact.into();
-    let result = VerificationResult::success();
+    let result = VerificationResult::new();
 
     // Validate bundle structure (structural only; the cryptographic checks
     // follow below)
@@ -709,9 +709,10 @@ mod tests {
     fn test_verification_policy_default() {
         let policy = VerificationPolicy::default();
         assert!(policy.verify_tlog);
-        assert!(policy.verify_timestamp);
-        assert!(policy.verify_certificate);
-        assert!(policy.verify_sct);
+        assert_eq!(
+            policy.certificate,
+            CertificatePolicy::Verify { verify_sct: true }
+        );
     }
 
     #[test]
@@ -733,16 +734,17 @@ mod tests {
     fn test_skip_sct_keeps_certificate_chain_verification() {
         let policy = VerificationPolicy::default().skip_sct();
 
-        assert!(policy.verify_certificate);
-        assert!(!policy.verify_sct);
+        assert_eq!(
+            policy.certificate,
+            CertificatePolicy::Verify { verify_sct: false }
+        );
     }
 
     #[test]
     fn test_skip_certificate_chain_preserves_legacy_sct_skip() {
         let policy = VerificationPolicy::default().skip_certificate_chain();
 
-        assert!(!policy.verify_certificate);
-        assert!(!policy.verify_sct);
+        assert_eq!(policy.certificate, CertificatePolicy::Skip);
     }
 
     fn in_toto_envelope(payload: &str) -> sigstore_types::DsseEnvelope {
