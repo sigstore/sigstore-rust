@@ -67,6 +67,9 @@ const CONDA_ATTESTATION_BUNDLE: &str =
     include_str!("../test_data/bundles/conda-attestation.sigstore.json");
 const CONDA_PACKAGE: &[u8] =
     include_bytes!("../test_data/bundles/signed-package-2.1.0-hb0f4dca_0.conda");
+const MANAGED_KEY_BUNDLE: &str = include_str!("../test_data/managed-key/bundle.sigstore.json");
+const MANAGED_KEY_PUBLIC_KEY: &str = include_str!("../test_data/managed-key/key.pub");
+const MANAGED_KEY_ARTIFACT: &[u8] = include_bytes!("../test_data/managed-key/artifact.txt");
 
 // Edge case bundles
 const BUNDLE_NO_CERT_V1: &str = include_str!("../test_data/bundles/bundle_no_cert_v1.txt.sigstore");
@@ -1157,6 +1160,52 @@ fn test_verify_dsse_with_hashedrekord_v002() {
     assert!(
         result.is_ok(),
         "Verification failed for DSSE with HashedRekordV2: {:?}",
+        result.err()
+    );
+}
+
+fn managed_key_public_key() -> sigstore_types::DerPublicKey {
+    sigstore_types::DerPublicKey::from_pem(MANAGED_KEY_PUBLIC_KEY).expect("managed key parses")
+}
+
+#[test]
+fn test_verify_with_key_validates_public_key_hint() {
+    use sigstore_verify::verify_with_key;
+
+    let mut json: serde_json::Value = serde_json::from_str(MANAGED_KEY_BUNDLE).unwrap();
+    json["verificationMaterial"]["publicKey"]["hint"] =
+        serde_json::json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+    let bundle = Bundle::from_json(&serde_json::to_string(&json).unwrap()).unwrap();
+    let public_key = managed_key_public_key();
+
+    let result = verify_with_key(
+        MANAGED_KEY_ARTIFACT,
+        &bundle,
+        &public_key,
+        &production_root(),
+    );
+
+    assert!(result.is_err());
+    assert!(result
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("public key hint does not match supplied public key"));
+}
+
+#[test]
+fn test_verify_with_key_accepts_managed_key_bundle_digest_only() {
+    use sigstore_verify::verify_with_key;
+
+    let bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
+    let public_key = managed_key_public_key();
+    let digest = sigstore_crypto::sha256(MANAGED_KEY_ARTIFACT);
+
+    let result = verify_with_key(digest, &bundle, &public_key, &production_root());
+
+    assert!(
+        result.is_ok(),
+        "managed-key digest-only verification failed: {:?}",
         result.err()
     );
 }
