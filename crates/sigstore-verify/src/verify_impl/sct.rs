@@ -206,7 +206,7 @@ pub fn verify_sct(
 
     // Get CT log keys from trusted root
     let ct_keys = trusted_root
-        .ctfe_keys_with_ids()
+        .ctfe_keys()
         .map_err(|e| Error::Verification(format!("failed to get CT log keys: {}", e)))?;
 
     if ct_keys.is_empty() {
@@ -215,14 +215,19 @@ pub fn verify_sct(
         ));
     }
 
-    // Find the matching CT log key by log ID
+    // Find the matching CT log key by log ID (the SHA-256 hash of the key,
+    // recomputed from the key material itself)
     let log_id = &sct.log_id.key_id;
-    let (_, public_key) = ct_keys.iter().find(|(id, _)| id == log_id).ok_or_else(|| {
-        Error::Verification(format!(
-            "SCT log ID {:?} not found in trusted root CT logs",
-            hex::encode(log_id)
-        ))
-    })?;
+    let key = ct_keys
+        .iter()
+        .find(|key| key.computed_log_id().as_bytes() == log_id)
+        .ok_or_else(|| {
+            Error::Verification(format!(
+                "SCT log ID {:?} not found in trusted root CT logs",
+                hex::encode(log_id)
+            ))
+        })?;
+    let public_key = &key.public_key;
 
     // Construct the DigitallySigned structure
     let digitally_signed = DigitallySigned::from_embedded_sct(&cert, &sct, issuer_key_hash)?;

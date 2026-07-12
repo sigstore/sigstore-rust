@@ -6,7 +6,7 @@
 use crate::error::{Error, Result};
 use base64::Engine;
 use serde::Serialize;
-use sigstore_crypto::{Checkpoint, VerificationKey};
+use sigstore_crypto::{verify_signature_auto, Checkpoint};
 use sigstore_trust_root::TrustedRoot;
 use sigstore_types::bundle::InclusionProof;
 use sigstore_types::{Bundle, SignatureBytes, TransparencyLogEntry};
@@ -172,27 +172,26 @@ pub fn verify_checkpoint(
         )));
     }
 
-    // Get all Rekor keys with their key hints from trusted root
+    // Get all Rekor keys from the trusted root; checkpoint signatures
+    // identify their key by a 4-byte hint derived from the log ID
     let rekor_keys = trusted_root
-        .rekor_keys_with_hints()
+        .rekor_keys()
         .map_err(|e| Error::Verification(format!("Failed to get Rekor keys: {}", e)))?;
 
     // For each signature in the checkpoint, try to find a matching key and verify
     for sig in &checkpoint.signatures {
         // Find the key with matching key hint
-        for (key_hint, public_key) in &rekor_keys {
-            if &sig.key_id == key_hint {
+        for key in &rekor_keys {
+            let key_hint = key.key_hint().map_err(|e| {
+                Error::Verification(format!("invalid Rekor log ID in trusted root: {}", e))
+            })?;
+            if sig.key_id == key_hint {
                 // Found matching key, verify the signature using automatic key type detection
                 let message = checkpoint.signed_data();
 
-                VerificationKey::from_spki_auto(public_key)?
-                    .verify(message, &sig.signature)
-                    .map_err(|e| {
-                        Error::Verification(format!(
-                            "Checkpoint signature verification failed: {}",
-                            e
-                        ))
-                    })?;
+                verify_signature_auto(&key.public_key, &sig.signature, message).map_err(|e| {
+                    Error::Verification(format!("Checkpoint signature verification failed: {}", e))
+                })?;
 
                 return Ok(());
             }
@@ -270,8 +269,7 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
 
     // Use automatic key type detection from the SPKI structure,
     // rather than hardcoding ECDSA P-256 (matches checkpoint verification behavior)
-    VerificationKey::from_spki_auto(&log_key)?
-        .verify(&canonical_json, &signature)
+    verify_signature_auto(&log_key, &signature, &canonical_json)
         .map_err(|e| Error::Verification(format!("SET verification failed: {}", e)))?;
 
     Ok(())
