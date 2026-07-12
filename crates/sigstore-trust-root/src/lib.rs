@@ -79,6 +79,7 @@
 
 pub mod error;
 pub mod signing_config;
+pub(crate) mod time_range;
 pub mod trusted_root;
 
 #[cfg(feature = "tuf")]
