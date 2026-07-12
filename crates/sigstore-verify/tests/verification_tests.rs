@@ -194,7 +194,9 @@ fn test_tampered_canonicalized_body_fails_verification() {
 
 #[test]
 fn test_verifier_creation() {
-    let root = production_root();
+    // V03_BUNDLE is from sigstore-python tests, so it verifies against the
+    // staging root (whose expired Rekor key authenticates the SET / signed time).
+    let root = staging_root();
     let verifier = Verifier::new(&root);
     let bundle = Bundle::from_json(V03_BUNDLE).unwrap();
 
@@ -202,7 +204,7 @@ fn test_verifier_creation() {
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
 
-    // V03_BUNDLE is from sigstore-python tests (staging) - skip crypto verifications
+    // The bundle's certificate predates the current staging CAs - skip chain checks
     let policy = VerificationPolicy::default()
         .skip_certificate_chain()
         .skip_tlog();
@@ -257,13 +259,36 @@ fn test_skip_tlog_verification() {
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
 
-    // V03_BUNDLE is from sigstore-python tests and may not chain to production Fulcio
+    // V03_BUNDLE is from sigstore-python tests (staging) and may not chain to
+    // the current staging Fulcio; its signed time still authenticates against
+    // the staging root's Rekor key.
     let policy = VerificationPolicy::default()
         .skip_tlog()
         .skip_certificate_chain();
 
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
+    let result = verify(artifact_digest, &bundle, &policy, &staging_root());
     assert!(result.is_ok());
+}
+
+/// A backdated (tampered) `integratedTime` must be rejected even when
+/// transparency log verification is skipped: the SET signature covers
+/// `integratedTime`, and the verifier authenticates it before using it as
+/// the certificate validation time.
+#[test]
+fn test_backdated_integrated_time_rejected_even_when_tlog_skipped() {
+    let mut bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
+    let entry = &mut bundle.verification_material.tlog_entries[0];
+    // Backdate the integrated time; the inclusion promise (SET) stays intact,
+    // so its signature no longer matches the claimed time.
+    entry.integrated_time -= 86_400;
+
+    let artifact_digest =
+        extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
+    let policy = VerificationPolicy::default().skip_tlog();
+
+    let err = verify(artifact_digest, &bundle, &policy, &production_root())
+        .expect_err("backdated integratedTime must fail verification");
+    assert!(err.to_string().contains("SET"), "unexpected error: {}", err);
 }
 
 #[test]
@@ -401,7 +426,8 @@ fn test_full_verification_flow_happy_path() {
 #[test]
 fn test_verification_with_different_bundle_versions() {
     // v0.3 bundle with message signature
-    // V03_BUNDLE is from sigstore-python tests (staging) - skip crypto verifications
+    // V03_BUNDLE is from sigstore-python tests (staging) - verify against the
+    // staging root; the certificate predates the current staging CAs
     let v03_msg = Bundle::from_json(V03_BUNDLE).unwrap();
     let artifact_digest =
         extract_artifact_digest(&v03_msg).expect("Bundle should have artifact digest");
@@ -409,7 +435,7 @@ fn test_verification_with_different_bundle_versions() {
         .skip_certificate_chain()
         .skip_tlog();
 
-    let result = verify(artifact_digest, &v03_msg, &policy, &production_root());
+    let result = verify(artifact_digest, &v03_msg, &policy, &staging_root());
     assert!(result.is_ok(), "v0.3 message signature verification failed");
 
     // v0.3 bundle with DSSE - this one chains to production
