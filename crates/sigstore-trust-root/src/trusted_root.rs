@@ -4,8 +4,9 @@ use crate::{Error, Result};
 use jiff::Timestamp;
 use rustls_pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
-use sigstore_types::{DerCertificate, DerPublicKey, HashAlgorithm, KeyHint, LogId, LogKeyId};
-use std::collections::HashMap;
+use sigstore_types::{
+    DerCertificate, DerPublicKey, HashAlgorithm, KeyHint, LogId, LogKeyId, Sha256Hash,
+};
 
 /// TSA certificate with optional validity period (start, end)
 pub type TsaCertWithValidity = (
@@ -231,6 +232,48 @@ impl ValidityPeriod {
     }
 }
 
+/// A transparency log key (Rekor or CTFE) from the trusted root.
+///
+/// This is the single parsed representation for transparency key material;
+/// identifier forms needed by specific verification flows are derived from it
+/// via [`LogKey::key_hint`] and [`LogKey::computed_log_id`].
+#[derive(Debug, Clone)]
+pub struct LogKey {
+    /// The log's key ID as declared in the trusted root (the base64-encoded
+    /// SHA-256 hash of the DER-encoded public key).
+    pub log_id: LogKeyId,
+    /// The DER (SPKI)-encoded public key.
+    pub public_key: DerPublicKey,
+}
+
+impl LogKey {
+    /// The checkpoint key hint: the first 4 bytes of the decoded log ID.
+    ///
+    /// Checkpoint (signed note) signatures identify their signing key by this
+    /// hint.
+    pub fn key_hint(&self) -> Result<KeyHint> {
+        let bytes = self.log_id.decode()?;
+        if bytes.len() < 4 {
+            return Err(Error::InvalidKey(format!(
+                "log ID {} is shorter than a 4-byte key hint",
+                self.log_id
+            )));
+        }
+        Ok(KeyHint::try_from_slice(&bytes[..4])?)
+    }
+
+    /// The log ID recomputed from the public key: the SHA-256 hash of the
+    /// DER-encoded key.
+    ///
+    /// SCT verification matches a certificate SCT's `LogID` against this
+    /// computed value rather than the declared [`Self::log_id`], so a trusted
+    /// root whose declared ID disagrees with its key material cannot redirect
+    /// the lookup.
+    pub fn computed_log_id(&self) -> Sha256Hash {
+        sigstore_crypto::sha256(self.public_key.as_bytes())
+    }
+}
+
 /// Whether an instance with the given `valid_for` may be used as verification
 /// material at `now`.
 ///
@@ -276,53 +319,22 @@ impl TrustedRoot {
         Ok(certs)
     }
 
-    /// Get all Rekor public keys mapped by key ID
+    /// Get all Rekor transparency log keys
     ///
     /// Keys whose `valid_for` window has not started yet are excluded.
     /// Expired keys are included because they are needed to verify log
     /// entries that were integrated while the key was valid.
-    pub fn rekor_keys(&self) -> Result<HashMap<String, Vec<u8>>> {
-        let now = Timestamp::now();
-        let mut keys = HashMap::new();
-        for tlog in &self.tlogs {
-            if !usable_for_verification(tlog.public_key.valid_for.as_ref(), now)? {
-                continue;
-            }
-            keys.insert(
-                tlog.log_id.key_id.to_string(),
-                tlog.public_key.raw_bytes.as_bytes().to_vec(),
-            );
-        }
-        Ok(keys)
-    }
-
-    /// Get all Rekor public keys with their key hints (4-byte identifiers)
-    ///
-    /// Returns a vector of (key_hint, public_key) tuples where key_hint is
-    /// the first 4 bytes of the keyId from the log_id field.
-    ///
-    /// Keys whose `valid_for` window has not started yet are excluded.
-    /// Expired keys are included because they are needed to verify log
-    /// entries that were integrated while the key was valid.
-    pub fn rekor_keys_with_hints(&self) -> Result<Vec<(KeyHint, DerPublicKey)>> {
+    pub fn rekor_keys(&self) -> Result<Vec<LogKey>> {
         let now = Timestamp::now();
         let mut keys = Vec::new();
         for tlog in &self.tlogs {
             if !usable_for_verification(tlog.public_key.valid_for.as_ref(), now)? {
                 continue;
             }
-            // Decode the key_id to get the key hint (first 4 bytes)
-            let key_id_bytes = tlog.log_id.key_id.decode()?;
-
-            if key_id_bytes.len() >= 4 {
-                let key_hint = KeyHint::new([
-                    key_id_bytes[0],
-                    key_id_bytes[1],
-                    key_id_bytes[2],
-                    key_id_bytes[3],
-                ]);
-                keys.push((key_hint, tlog.public_key.raw_bytes.clone()));
-            }
+            keys.push(LogKey {
+                log_id: tlog.log_id.key_id.clone(),
+                public_key: tlog.public_key.raw_bytes.clone(),
+            });
         }
         Ok(keys)
     }
@@ -366,46 +378,24 @@ impl TrustedRoot {
         Err(Error::KeyNotFound(log_id.to_string()))
     }
 
-    /// Get all Certificate Transparency log public keys mapped by key ID
+    /// Get all Certificate Transparency log keys
     ///
     /// Keys whose `valid_for` window has not started yet are excluded.
     /// Expired keys are included because they are needed to verify SCTs
     /// issued while the key was valid.
-    pub fn ctfe_keys(&self) -> Result<HashMap<LogKeyId, DerPublicKey>> {
+    pub fn ctfe_keys(&self) -> Result<Vec<LogKey>> {
         let now = Timestamp::now();
-        let mut keys = HashMap::new();
+        let mut keys = Vec::new();
         for ctlog in &self.ctlogs {
             if !usable_for_verification(ctlog.public_key.valid_for.as_ref(), now)? {
                 continue;
             }
-            keys.insert(
-                ctlog.log_id.key_id.clone(),
-                ctlog.public_key.raw_bytes.clone(),
-            );
+            keys.push(LogKey {
+                log_id: ctlog.log_id.key_id.clone(),
+                public_key: ctlog.public_key.raw_bytes.clone(),
+            });
         }
         Ok(keys)
-    }
-
-    /// Get all Certificate Transparency log public keys with their SHA-256 log IDs
-    /// Returns a list of (log_id, public_key) pairs where log_id is the SHA-256 hash
-    /// of the public key (used for matching against SCTs)
-    ///
-    /// Keys whose `valid_for` window has not started yet are excluded.
-    /// Expired keys are included because they are needed to verify SCTs
-    /// issued while the key was valid.
-    pub fn ctfe_keys_with_ids(&self) -> Result<Vec<(Vec<u8>, DerPublicKey)>> {
-        let now = Timestamp::now();
-        let mut result = Vec::new();
-        for ctlog in &self.ctlogs {
-            if !usable_for_verification(ctlog.public_key.valid_for.as_ref(), now)? {
-                continue;
-            }
-            let key_bytes = ctlog.public_key.raw_bytes.as_bytes();
-            // Compute SHA-256 hash of the public key to get the log ID
-            let log_id = sigstore_crypto::sha256(key_bytes).as_bytes().to_vec();
-            result.push((log_id, ctlog.public_key.raw_bytes.clone()));
-        }
-        Ok(result)
     }
 
     /// Get all TSA certificates with their validity periods
@@ -493,13 +483,6 @@ impl TrustedRoot {
             }
         }
         Ok(leaves)
-    }
-
-    /// Check if a Rekor key ID exists in the trusted root
-    ///
-    /// Note: this is a pure presence check and does not consider `valid_for`.
-    pub fn has_rekor_key(&self, key_id: &LogKeyId) -> bool {
-        self.tlogs.iter().any(|tlog| &tlog.log_id.key_id == key_id)
     }
 
     /// Check if a timestamp is within any TSA's validity period from the trust root
@@ -616,19 +599,17 @@ mod tests {
         );
     }
 
+    fn has_log(keys: &[LogKey], log_id: &str) -> bool {
+        keys.iter()
+            .any(|key| key.log_id == LogKeyId::new(log_id.to_string()))
+    }
+
     #[test]
     fn test_rekor_keys() {
         let root = TrustedRoot::from_json(SAMPLE_TRUSTED_ROOT).unwrap();
         let keys = root.rekor_keys().unwrap();
         assert_eq!(keys.len(), 1);
-        assert!(keys.contains_key("test-key-id"));
-    }
-
-    #[test]
-    fn test_has_rekor_key() {
-        let root = TrustedRoot::from_json(SAMPLE_TRUSTED_ROOT).unwrap();
-        assert!(root.has_rekor_key(&LogKeyId::new("test-key-id".to_string())));
-        assert!(!root.has_rekor_key(&LogKeyId::new("non-existent".to_string())));
+        assert!(has_log(&keys, "test-key-id"));
     }
 
     #[test]
@@ -706,9 +687,9 @@ mod tests {
 
         let keys = root.rekor_keys().unwrap();
         assert_eq!(keys.len(), 2);
-        assert!(keys.contains_key("expired-key"));
-        assert!(keys.contains_key("current-key"));
-        assert!(!keys.contains_key("future-key"));
+        assert!(has_log(&keys, "expired-key"));
+        assert!(has_log(&keys, "current-key"));
+        assert!(!has_log(&keys, "future-key"));
 
         // rekor_key_for_log honors the same rule
         assert!(root
@@ -751,10 +732,6 @@ mod tests {
 
         assert!(matches!(root.rekor_keys(), Err(Error::TimeParse(_))));
         assert!(matches!(
-            root.rekor_keys_with_hints(),
-            Err(Error::TimeParse(_))
-        ));
-        assert!(matches!(
             root.rekor_key_for_log(&LogKeyId::new("bad-key".to_string())),
             Err(Error::TimeParse(_))
         ));
@@ -793,18 +770,37 @@ mod tests {
 
         let keys = root.ctfe_keys().unwrap();
         assert_eq!(keys.len(), 1);
-        assert!(keys.contains_key(&LogKeyId::new("current-ctlog".to_string())));
-
-        assert_eq!(root.ctfe_keys_with_ids().unwrap().len(), 1);
+        assert!(has_log(&keys, "current-ctlog"));
 
         // Malformed timestamp produces an error
         let bad_json = json.replace("2999-01-01T00:00:00Z", "garbage");
         let bad_root = TrustedRoot::from_json(&bad_json).unwrap();
         assert!(matches!(bad_root.ctfe_keys(), Err(Error::TimeParse(_))));
-        assert!(matches!(
-            bad_root.ctfe_keys_with_ids(),
-            Err(Error::TimeParse(_))
-        ));
+    }
+
+    #[test]
+    fn test_log_key_derived_identifiers() {
+        use base64::Engine;
+
+        // Log ID matching the spec: base64(SHA-256(DER public key))
+        let key_bytes = base64::engine::general_purpose::STANDARD
+            .decode(TEST_KEY)
+            .unwrap();
+        let computed = sigstore_crypto::sha256(&key_bytes);
+        let key = LogKey {
+            log_id: LogKeyId::from_bytes(computed.as_bytes()),
+            public_key: DerPublicKey::new(key_bytes),
+        };
+
+        assert_eq!(key.computed_log_id(), computed);
+        assert_eq!(key.key_hint().unwrap().as_ref(), &computed.as_bytes()[..4]);
+
+        // A log ID too short to yield a key hint is an error
+        let short = LogKey {
+            log_id: LogKeyId::from_bytes(&[1, 2, 3]),
+            public_key: key.public_key.clone(),
+        };
+        assert!(matches!(short.key_hint(), Err(Error::InvalidKey(_))));
     }
 
     #[test]
