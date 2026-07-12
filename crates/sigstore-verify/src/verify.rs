@@ -216,9 +216,9 @@ impl Verifier {
     ///
     /// In order to verify an artifact, we need to achieve the following:
     ///
-    /// 0. Establish a time for the signature.
+    /// 0. Establish the verified times for the signature.
     /// 1. Verify that the signing certificate chains to the root of trust
-    ///    and is valid at the time of signing.
+    ///    and is valid at every verified signing time.
     /// 2. Verify the signing certificate's SCT.
     /// 3. Verify that the signing certificate conforms to the Sigstore
     ///    X.509 profile as well as the passed-in `VerificationPolicy`.
@@ -261,20 +261,23 @@ impl Verifier {
         result.identity = cert_info.identity.clone();
         result.issuer = cert_info.issuer.clone();
 
-        // (0): Establish a time for the signature
+        // (0): Establish the times for the signature
         // First, establish verified times for the signature. This is required to
         // validate the certificate chain, so this step comes first.
         // These include TSA timestamps and (in the case of rekor v1 entries)
         // rekor log integrated time.
         let signature = crate::verify_impl::helpers::extract_signature(&bundle.content)?;
-        let validation_time = crate::verify_impl::helpers::determine_validation_time(
+        let validation_times = crate::verify_impl::helpers::determine_validation_times(
             bundle,
             &signature,
             &self.trusted_root,
         )?;
 
         // (1): Verify that the signing certificate chains to the root of trust,
-        //      is valid at the time of signing, and has CODE_SIGNING EKU.
+        //      is valid at EVERY verified signing time, and has CODE_SIGNING EKU.
+        //      Checking each timestamp (rather than only the earliest) prevents a
+        //      single backdated timestamp - e.g. from one compromised TSA in a
+        //      multi-TSA deployment - from vouching for expired key material.
         //      The verified path yields the leaf's direct issuer, which SCT
         //      verification needs to reconstruct the RFC 6962 signed data.
         //
@@ -283,14 +286,22 @@ impl Verifier {
         //      system therefore guarantees the issuer is available whenever SCT
         //      verification runs.
         if let CertificatePolicy::Verify { verify_sct } = policy.certificate {
-            let issuer_spki = crate::verify_impl::helpers::verify_certificate_chain(
-                &bundle.verification_material.content,
-                validation_time,
-                &self.trusted_root,
-            )?;
+            let mut issuer_spki = None;
+            for &validation_time in &validation_times {
+                issuer_spki = Some(crate::verify_impl::helpers::verify_certificate_chain(
+                    &bundle.verification_material.content,
+                    validation_time,
+                    &self.trusted_root,
+                )?);
 
-            // Also verify the certificate is within its validity period
-            crate::verify_impl::helpers::validate_certificate_time(validation_time, &cert_info)?;
+                // Also verify the certificate is within its validity period
+                crate::verify_impl::helpers::validate_certificate_time(
+                    validation_time,
+                    &cert_info,
+                )?;
+            }
+            let issuer_spki =
+                issuer_spki.expect("determine_validation_times returns at least one timestamp");
 
             if verify_sct {
                 crate::verify_impl::sct::verify_sct(
