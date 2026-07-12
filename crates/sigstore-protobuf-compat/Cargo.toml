@@ -1,0 +1,18 @@
+[package]
+name = "sigstore-protobuf-compat"
+description = "Wire-format compatibility tests against sigstore-protobuf-specs (not published)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+sigstore-types = { workspace = true }
+sigstore-trust-root = { workspace = true, default-features = false }
+sigstore_protobuf_specs = "0.5.1"
+serde = { workspace = true }
+serde_json = { workspace = true }
