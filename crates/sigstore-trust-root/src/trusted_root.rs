@@ -196,24 +196,38 @@ impl ValidityPeriod {
         parse_validity_timestamp(self.end.as_deref(), "end")
     }
 
-    /// Whether `time` falls within this validity window.
+    /// Parsed start of the validity window, which the protobuf-specs
+    /// `TimeRange` message requires to be present.
     ///
-    /// A missing `start` or `end` bound is treated as unbounded on that side.
-    /// Returns an error if a timestamp is present but malformed.
-    pub fn contains(&self, time: Timestamp) -> Result<bool> {
-        let after_start = self.start()?.map_or(true, |s| time >= s);
-        let before_end = self.end()?.map_or(true, |e| time <= e);
-        Ok(after_start && before_end)
+    /// Returns an error if the timestamp is missing or malformed.
+    fn required_start(&self) -> Result<Timestamp> {
+        self.start()?
+            .ok_or_else(|| Error::MissingField("validFor.start".to_string()))
     }
 
-    /// Whether this validity window has started by `time` (i.e. `start` is
-    /// unset or `start <= time`).
+    /// Whether `time` falls within this validity window.
+    ///
+    /// Per the `TimeRange` specification the window is a closed interval
+    /// `[start, end]`; `start` is required and a missing `end` is unbounded.
+    /// Returns an error if `start` is missing or a timestamp is malformed.
+    pub fn contains(&self, time: Timestamp) -> Result<bool> {
+        Ok(crate::time_range::time_range_contains(
+            self.required_start()?,
+            self.end()?,
+            time,
+        ))
+    }
+
+    /// Whether this validity window has started by `time` (i.e. `start <= time`).
     ///
     /// Instances that have started — including ones whose window has since
     /// expired — are still required to verify historical material that was
     /// produced while they were valid.
+    ///
+    /// Returns an error if `start` is missing or malformed; the `TimeRange`
+    /// specification requires a start time.
     pub fn has_started_by(&self, time: Timestamp) -> Result<bool> {
-        Ok(self.start()?.map_or(true, |s| time >= s))
+        Ok(time >= self.required_start()?)
     }
 }
 
@@ -486,34 +500,6 @@ impl TrustedRoot {
     /// Note: this is a pure presence check and does not consider `valid_for`.
     pub fn has_rekor_key(&self, key_id: &LogKeyId) -> bool {
         self.tlogs.iter().any(|tlog| &tlog.log_id.key_id == key_id)
-    }
-
-    /// Get the validity period for a TSA at a given time
-    ///
-    /// Returns an error if a `valid_for` timestamp is present but malformed.
-    pub fn tsa_validity_for_time(
-        &self,
-        timestamp: Timestamp,
-    ) -> Result<Option<(Timestamp, Timestamp)>> {
-        for tsa in &self.timestamp_authorities {
-            if let Some(valid_for) = &tsa.valid_for {
-                let start = valid_for.start()?;
-                let end = valid_for.end()?;
-
-                // Check if timestamp falls within this TSA's validity
-                if let (Some(start_time), Some(end_time)) = (start, end) {
-                    if timestamp >= start_time && timestamp <= end_time {
-                        return Ok(Some((start_time, end_time)));
-                    }
-                } else if let Some(start_time) = start {
-                    // Only start time specified, check if after start
-                    if timestamp >= start_time {
-                        return Ok(start.zip(end));
-                    }
-                }
-            }
-        }
-        Ok(None)
     }
 
     /// Check if a timestamp is within any TSA's validity period from the trust root
@@ -873,10 +859,6 @@ mod tests {
             root.is_timestamp_within_tsa_validity(now),
             Err(Error::TimeParse(_))
         ));
-        assert!(matches!(
-            root.tsa_validity_for_time(now),
-            Err(Error::TimeParse(_))
-        ));
         assert!(matches!(root.tsa_root_certs(), Err(Error::TimeParse(_))));
         assert!(matches!(root.tsa_leaf_certs(), Err(Error::TimeParse(_))));
     }
@@ -894,6 +876,12 @@ mod tests {
         assert!(period.contains(inside).unwrap());
         assert!(!period.contains(before).unwrap());
         assert!(!period.contains(after).unwrap());
+
+        // The window is a closed interval: both bounds are included
+        let start_bound: Timestamp = "2020-01-01T00:00:00Z".parse().unwrap();
+        let end_bound: Timestamp = "2021-01-01T00:00:00Z".parse().unwrap();
+        assert!(period.contains(start_bound).unwrap());
+        assert!(period.contains(end_bound).unwrap());
 
         assert!(period.has_started_by(inside).unwrap());
         assert!(period.has_started_by(after).unwrap());
@@ -913,5 +901,19 @@ mod tests {
         };
         assert!(matches!(bad.contains(inside), Err(Error::TimeParse(_))));
         assert!(matches!(bad.start(), Err(Error::TimeParse(_))));
+
+        // A missing start is an error: the TimeRange spec requires it
+        let no_start = ValidityPeriod {
+            start: None,
+            end: Some("2021-01-01T00:00:00Z".to_string()),
+        };
+        assert!(matches!(
+            no_start.contains(inside),
+            Err(Error::MissingField(_))
+        ));
+        assert!(matches!(
+            no_start.has_started_by(inside),
+            Err(Error::MissingField(_))
+        ));
     }
 }

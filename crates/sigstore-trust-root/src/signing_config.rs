@@ -70,18 +70,18 @@ pub struct ServiceValidityPeriod {
 }
 
 impl ServiceValidityPeriod {
+    /// Whether `time` falls within this validity period.
+    ///
+    /// Per the protobuf-specs `TimeRange` semantics the period is a closed
+    /// interval `[start, end]` (both bounds included); a missing `end` means
+    /// the period has started but has no known end.
+    pub fn contains(&self, time: Timestamp) -> bool {
+        crate::time_range::time_range_contains(self.start, self.end, time)
+    }
+
     /// Check if this period is currently valid
     pub fn is_valid(&self) -> bool {
-        let now = Timestamp::now();
-        if now < self.start {
-            return false;
-        }
-        if let Some(end) = self.end {
-            if now >= end {
-                return false;
-            }
-        }
-        true
+        self.contains(Timestamp::now())
     }
 }
 
@@ -334,5 +334,22 @@ mod tests {
             end: Some("2021-01-01T00:00:00Z".parse().unwrap()),
         };
         assert!(!expired_period.is_valid());
+    }
+
+    #[test]
+    fn test_service_validity_is_a_closed_interval() {
+        let start: Timestamp = "2020-01-01T00:00:00Z".parse().unwrap();
+        let end: Timestamp = "2021-01-01T00:00:00Z".parse().unwrap();
+        let period = ServiceValidityPeriod {
+            start,
+            end: Some(end),
+        };
+
+        // Both bounds are included per the TimeRange spec
+        assert!(period.contains(start));
+        assert!(period.contains(end));
+
+        assert!(!period.contains("2019-12-31T23:59:59Z".parse().unwrap()));
+        assert!(!period.contains("2021-01-01T00:00:01Z".parse().unwrap()));
     }
 }
