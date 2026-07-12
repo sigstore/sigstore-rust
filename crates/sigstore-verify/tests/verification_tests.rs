@@ -207,7 +207,7 @@ fn test_verifier_creation() {
     // The bundle's certificate predates the current staging CAs - skip chain checks
     let policy = VerificationPolicy::default()
         .skip_certificate_chain()
-        .skip_tlog();
+        .skip_tlog_unsafe();
 
     let result = verifier.verify(artifact_digest, &bundle, &policy);
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
@@ -263,7 +263,7 @@ fn test_skip_tlog_verification() {
     // the current staging Fulcio; its signed time still authenticates against
     // the staging root's Rekor key.
     let policy = VerificationPolicy::default()
-        .skip_tlog()
+        .skip_tlog_unsafe()
         .skip_certificate_chain();
 
     let result = verify(artifact_digest, &bundle, &policy, &staging_root());
@@ -284,7 +284,7 @@ fn test_backdated_integrated_time_rejected_even_when_tlog_skipped() {
 
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default().skip_tlog();
+    let policy = VerificationPolicy::default().skip_tlog_unsafe();
 
     let err = verify(artifact_digest, &bundle, &policy, &production_root())
         .expect_err("backdated integratedTime must fail verification");
@@ -298,7 +298,7 @@ fn test_verify_github_bundle_with_explicit_embedded_root() {
         Sha256Hash::from_hex("76f1fe8593bf227cca2c089e3c16dc95014a8d3e89c5dd220530469ca043c428")
             .unwrap();
     let root = TrustedRoot::from_embedded(SigstoreInstance::GitHub).unwrap();
-    let policy = VerificationPolicy::default().skip_tlog().skip_sct();
+    let policy = VerificationPolicy::default().skip_tlog_unsafe().skip_sct();
 
     let result = verify(artifact_digest, &bundle, &policy, &root);
 
@@ -316,7 +316,7 @@ fn test_policy_builder() {
     let policy = VerificationPolicy::default()
         .require_identity("test@example.com")
         .require_issuer("https://accounts.google.com")
-        .skip_tlog();
+        .skip_tlog_unsafe();
 
     assert_eq!(policy.identity, Some("test@example.com".to_string()));
     assert_eq!(
@@ -433,7 +433,7 @@ fn test_verification_with_different_bundle_versions() {
         extract_artifact_digest(&v03_msg).expect("Bundle should have artifact digest");
     let policy = VerificationPolicy::default()
         .skip_certificate_chain()
-        .skip_tlog();
+        .skip_tlog_unsafe();
 
     let result = verify(artifact_digest, &v03_msg, &policy, &staging_root());
     assert!(result.is_ok(), "v0.3 message signature verification failed");

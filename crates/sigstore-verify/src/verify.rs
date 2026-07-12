@@ -42,6 +42,13 @@ pub struct VerificationPolicy {
     /// Expected issuer
     pub issuer: Option<String>,
     /// Verify transparency log inclusion
+    ///
+    /// WARNING: Disabling this is unsafe for production use against the
+    /// Sigstore public-good instance: it accepts bundles whose signature
+    /// event was never logged. Signed timestamps (TSA timestamps and Rekor
+    /// SETs) are authenticated regardless of this flag, but inclusion
+    /// proofs, checkpoints and log-consistency checks are skipped when it
+    /// is disabled. See [`VerificationPolicy::skip_tlog_unsafe`].
     pub verify_tlog: bool,
     /// How the signing certificate (and its SCT) is verified
     pub certificate: CertificatePolicy,
@@ -94,7 +101,19 @@ impl VerificationPolicy {
     }
 
     /// Skip transparency log verification
-    pub fn skip_tlog(mut self) -> Self {
+    ///
+    /// WARNING: This is unsafe for production use against the Sigstore
+    /// public-good instance: bundles are accepted without proof that the
+    /// signature event was ever logged (inclusion proof, checkpoint and
+    /// log-consistency checks are all skipped). Signed timestamps remain
+    /// authenticated - TSA timestamps and Rekor SETs are verified before a
+    /// timestamp is used as the certificate validation time - so a
+    /// backdated `integratedTime` is still rejected.
+    ///
+    /// Only use this for trust domains without an accessible transparency
+    /// log, such as bundles for GitHub's private-repository artifact
+    /// attestations, or for testing.
+    pub fn skip_tlog_unsafe(mut self) -> Self {
         self.verify_tlog = false;
         self
     }
@@ -731,7 +750,7 @@ mod tests {
         let policy = VerificationPolicy::default()
             .require_identity("test@example.com")
             .require_issuer("https://accounts.google.com")
-            .skip_tlog();
+            .skip_tlog_unsafe();
 
         assert_eq!(policy.identity, Some("test@example.com".to_string()));
         assert_eq!(
