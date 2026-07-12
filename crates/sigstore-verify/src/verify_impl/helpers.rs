@@ -159,8 +159,18 @@ pub fn has_v2_tlog_entries(bundle: &Bundle) -> bool {
 /// 2. The entry is a V1 type (hashedrekord/dsse v0.0.1)
 /// 3. The integrated_time is > 0
 ///
-/// Returns the earliest valid integrated time if any are present.
-fn extract_v1_integrated_time_with_promise(bundle: &Bundle) -> Option<i64> {
+/// The SET is verified here, before the integrated time is trusted: the SET
+/// signature covers `integratedTime`, so this is what authenticates the
+/// timestamp. Without it a tampered (e.g. backdated) `integratedTime` would
+/// become the validation time whenever transparency log verification is
+/// disabled or reordered. An entry that qualifies as a timestamp source but
+/// whose SET does not verify is a hard error, not a skipped candidate.
+///
+/// Returns the earliest authenticated integrated time if any are present.
+fn extract_v1_integrated_time_with_promise(
+    bundle: &Bundle,
+    trusted_root: &TrustedRoot,
+) -> Result<Option<i64>> {
     let mut earliest_time: Option<i64> = None;
 
     for entry in &bundle.verification_material.tlog_entries {
@@ -174,6 +184,8 @@ fn extract_v1_integrated_time_with_promise(bundle: &Bundle) -> Option<i64> {
 
         let time = entry.integrated_time;
         if time > 0 {
+            crate::verify_impl::tlog::verify_set(entry, trusted_root)?;
+
             if let Some(earliest) = earliest_time {
                 if time < earliest {
                     earliest_time = Some(time);
@@ -184,7 +196,7 @@ fn extract_v1_integrated_time_with_promise(bundle: &Bundle) -> Option<i64> {
         }
     }
 
-    earliest_time
+    Ok(earliest_time)
 }
 
 /// Determine validation time from timestamps.
@@ -195,6 +207,10 @@ fn extract_v1_integrated_time_with_promise(bundle: &Bundle) -> Option<i64> {
 /// Valid timestamp sources (in priority order):
 /// 1. TSA timestamp (RFC 3161) - most authoritative
 /// 2. Integrated time from V1 tlog entries with inclusion promises
+///
+/// Every returned timestamp is cryptographically verified before use: TSA
+/// timestamps against the trusted root's TSA certificates, integrated times
+/// via their SET.
 ///
 /// Note: There is NO fallback to current time. If no verified timestamp is found,
 /// verification fails.
@@ -210,7 +226,7 @@ pub fn determine_validation_time(
 
     // Try integrated time from V1 tlog entries with inclusion promises
     // Per sigstore-python: integrated_time only counts if accompanied by inclusion_promise
-    if let Some(integrated_time) = extract_v1_integrated_time_with_promise(bundle) {
+    if let Some(integrated_time) = extract_v1_integrated_time_with_promise(bundle, trusted_root)? {
         return Ok(integrated_time);
     }
 
