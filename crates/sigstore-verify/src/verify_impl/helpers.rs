@@ -46,26 +46,17 @@ pub fn extract_signature(content: &SignatureContent) -> Result<SignatureBytes> {
 }
 
 /// Extract and verify TSA RFC 3161 timestamps
-/// Returns the earliest verified timestamp if any are present
-pub fn extract_tsa_timestamp(
+///
+/// Returns every verified timestamp; any timestamp that fails verification
+/// (or falls outside the trust root's TSA validity period) is an error.
+pub fn extract_tsa_timestamps(
     bundle: &Bundle,
     signature_bytes: &[u8],
     trusted_root: &TrustedRoot,
-) -> Result<Option<i64>> {
+) -> Result<Vec<i64>> {
     use sigstore_tsa::{verify_timestamp_response, VerifyOpts as TsaVerifyOpts};
 
-    // Check if bundle has TSA timestamps
-    if bundle
-        .verification_material
-        .timestamp_verification_data
-        .rfc3161_timestamps
-        .is_empty()
-    {
-        return Ok(None);
-    }
-
-    let mut earliest_timestamp: Option<i64> = None;
-    let mut any_timestamp_verified = false;
+    let mut timestamps = Vec::new();
 
     for ts in &bundle
         .verification_material
@@ -114,32 +105,10 @@ pub fn extract_tsa_timestamp(
             )));
         }
 
-        let timestamp = result.time.as_second();
-        any_timestamp_verified = true;
-
-        if let Some(earliest) = earliest_timestamp {
-            if timestamp < earliest {
-                earliest_timestamp = Some(timestamp);
-            }
-        } else {
-            earliest_timestamp = Some(timestamp);
-        }
+        timestamps.push(result.time.as_second());
     }
 
-    // If we have a trusted root and timestamps were present but none verified, that's an error
-    if !any_timestamp_verified
-        && !bundle
-            .verification_material
-            .timestamp_verification_data
-            .rfc3161_timestamps
-            .is_empty()
-    {
-        return Err(Error::Verification(
-            "TSA timestamps present but none could be verified against trusted root".to_string(),
-        ));
-    }
-
-    Ok(earliest_timestamp)
+    Ok(timestamps)
 }
 
 /// Check if bundle contains V2 tlog entries (hashedrekord/dsse v0.0.2)
@@ -159,9 +128,19 @@ pub fn has_v2_tlog_entries(bundle: &Bundle) -> bool {
 /// 2. The entry is a V1 type (hashedrekord/dsse v0.0.1)
 /// 3. The integrated_time is > 0
 ///
-/// Returns the earliest valid integrated time if any are present.
-fn extract_v1_integrated_time_with_promise(bundle: &Bundle) -> Option<i64> {
-    let mut earliest_time: Option<i64> = None;
+/// The SET is verified here, before the integrated time is trusted: the SET
+/// signature covers `integratedTime`, so this is what authenticates the
+/// timestamp. Without it a tampered (e.g. backdated) `integratedTime` would
+/// become the validation time whenever transparency log verification is
+/// disabled or reordered. An entry that qualifies as a timestamp source but
+/// whose SET does not verify is a hard error, not a skipped candidate.
+///
+/// Returns every authenticated integrated time.
+fn extract_v1_integrated_times_with_promise(
+    bundle: &Bundle,
+    trusted_root: &TrustedRoot,
+) -> Result<Vec<i64>> {
+    let mut times = Vec::new();
 
     for entry in &bundle.verification_material.tlog_entries {
         // Only V1 entries (0.0.1) with inclusion promises are valid timestamp sources
@@ -174,44 +153,44 @@ fn extract_v1_integrated_time_with_promise(bundle: &Bundle) -> Option<i64> {
 
         let time = entry.integrated_time;
         if time > 0 {
-            if let Some(earliest) = earliest_time {
-                if time < earliest {
-                    earliest_time = Some(time);
-                }
-            } else {
-                earliest_time = Some(time);
-            }
+            crate::verify_impl::tlog::verify_set(entry, trusted_root)?;
+            times.push(time);
         }
     }
 
-    earliest_time
+    Ok(times)
 }
 
-/// Determine validation time from timestamps.
+/// Collect every verified timestamp for the signature.
 ///
 /// At least one verified timestamp source is REQUIRED. This matches sigstore-python's
 /// behavior which enforces `VERIFIED_TIME_THRESHOLD = 1`.
 ///
-/// Valid timestamp sources (in priority order):
-/// 1. TSA timestamp (RFC 3161) - most authoritative
-/// 2. Integrated time from V1 tlog entries with inclusion promises
+/// Timestamp sources:
+/// - TSA timestamps (RFC 3161), verified against the trusted root's TSA certificates
+/// - Integrated times from V1 tlog entries with inclusion promises, authenticated
+///   via their SET
+///
+/// All verified timestamps are returned (never an empty vector), and the caller
+/// must validate the signing certificate against **each** of them: checking only
+/// one (e.g. the earliest) would let a single backdated-but-verifiable timestamp
+/// mask another timestamp that falls outside the certificate's validity.
 ///
 /// Note: There is NO fallback to current time. If no verified timestamp is found,
 /// verification fails.
-pub fn determine_validation_time(
+pub fn determine_validation_times(
     bundle: &Bundle,
     signature: &SignatureBytes,
     trusted_root: &TrustedRoot,
-) -> Result<i64> {
-    // Try TSA timestamp first (most authoritative)
-    if let Some(tsa_time) = extract_tsa_timestamp(bundle, signature.as_bytes(), trusted_root)? {
-        return Ok(tsa_time);
-    }
+) -> Result<Vec<i64>> {
+    let mut times = extract_tsa_timestamps(bundle, signature.as_bytes(), trusted_root)?;
+    times.extend(extract_v1_integrated_times_with_promise(
+        bundle,
+        trusted_root,
+    )?);
 
-    // Try integrated time from V1 tlog entries with inclusion promises
-    // Per sigstore-python: integrated_time only counts if accompanied by inclusion_promise
-    if let Some(integrated_time) = extract_v1_integrated_time_with_promise(bundle) {
-        return Ok(integrated_time);
+    if !times.is_empty() {
+        return Ok(times);
     }
 
     // No verified timestamp found - fail verification
@@ -385,6 +364,31 @@ fn issuer_spki_from_path(path: &webpki::VerifiedPath) -> Result<DerPublicKey> {
 mod tests {
     use super::*;
     use sigstore_types::Bundle;
+
+    /// The certificate must be validated against *every* verified timestamp
+    /// in the bundle, so the timestamp collector must not collapse multiple
+    /// sources into one. This bundle carries both a TSA timestamp and a
+    /// SET-authenticated v1 integratedTime.
+    #[test]
+    fn determine_validation_times_returns_all_verified_sources() {
+        let trusted_root =
+            TrustedRoot::from_json(sigstore_trust_root::SIGSTORE_PRODUCTION_TRUSTED_ROOT).unwrap();
+        let bundle = Bundle::from_json(include_str!(
+            "../../test_data/bundles/cosign-v3-blob.sigstore.json"
+        ))
+        .unwrap();
+        let signature = extract_signature(&bundle.content).unwrap();
+
+        let times = determine_validation_times(&bundle, &signature, &trusted_root).unwrap();
+
+        assert_eq!(
+            times.len(),
+            2,
+            "expected one TSA timestamp and one integratedTime, got {times:?}"
+        );
+        let integrated_time = bundle.verification_material.tlog_entries[0].integrated_time;
+        assert!(times.contains(&integrated_time));
+    }
 
     /// Regression test for the Sigstore staging multi-region rollout (July 2026).
     ///

@@ -64,7 +64,7 @@ let artifact_digest = Sha256Hash::from_hex("...")?;
 // client), or use the embedded copy below for an offline path.
 // let root = TrustedRoot::from_tuf(sigstore_trust_root::TufConfig::github()).await?;
 let root = TrustedRoot::from_embedded(SigstoreInstance::GitHub)?;
-let policy = VerificationPolicy::default().skip_tlog().skip_sct();
+let policy = VerificationPolicy::default().skip_tlog_unsafe().skip_sct();
 
 let result = verify(artifact_digest, &bundle, &policy, &root)?;
 ```
@@ -84,7 +84,7 @@ let policy = VerificationPolicy::default()
 
 // Skip certain verifications (for testing only)
 let policy = VerificationPolicy::default()
-    .skip_tlog()
+    .skip_tlog_unsafe()
     .skip_certificate_chain();
 ```
 

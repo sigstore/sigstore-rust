@@ -15,6 +15,7 @@ members = [
     "crates/sigstore-verify",
     "crates/sigstore-sign",
     "crates/sigstore-conformance",
+    "crates/sigstore-protobuf-compat",
 ]
 
 [workspace.package]

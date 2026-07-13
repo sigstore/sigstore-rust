@@ -4,8 +4,9 @@ use crate::{Error, Result};
 use jiff::Timestamp;
 use rustls_pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
-use sigstore_types::{DerCertificate, DerPublicKey, HashAlgorithm, KeyHint, LogId, LogKeyId};
-use std::collections::HashMap;
+use sigstore_types::{
+    DerCertificate, DerPublicKey, HashAlgorithm, KeyHint, LogId, LogKeyId, Sha256Hash,
+};
 
 /// TSA certificate with optional validity period (start, end)
 pub type TsaCertWithValidity = (
@@ -196,24 +197,80 @@ impl ValidityPeriod {
         parse_validity_timestamp(self.end.as_deref(), "end")
     }
 
-    /// Whether `time` falls within this validity window.
+    /// Parsed start of the validity window, which the protobuf-specs
+    /// `TimeRange` message requires to be present.
     ///
-    /// A missing `start` or `end` bound is treated as unbounded on that side.
-    /// Returns an error if a timestamp is present but malformed.
-    pub fn contains(&self, time: Timestamp) -> Result<bool> {
-        let after_start = self.start()?.map_or(true, |s| time >= s);
-        let before_end = self.end()?.map_or(true, |e| time <= e);
-        Ok(after_start && before_end)
+    /// Returns an error if the timestamp is missing or malformed.
+    fn required_start(&self) -> Result<Timestamp> {
+        self.start()?
+            .ok_or_else(|| Error::MissingField("validFor.start".to_string()))
     }
 
-    /// Whether this validity window has started by `time` (i.e. `start` is
-    /// unset or `start <= time`).
+    /// Whether `time` falls within this validity window.
+    ///
+    /// Per the `TimeRange` specification the window is a closed interval
+    /// `[start, end]`; `start` is required and a missing `end` is unbounded.
+    /// Returns an error if `start` is missing or a timestamp is malformed.
+    pub fn contains(&self, time: Timestamp) -> Result<bool> {
+        Ok(crate::time_range::time_range_contains(
+            self.required_start()?,
+            self.end()?,
+            time,
+        ))
+    }
+
+    /// Whether this validity window has started by `time` (i.e. `start <= time`).
     ///
     /// Instances that have started — including ones whose window has since
     /// expired — are still required to verify historical material that was
     /// produced while they were valid.
+    ///
+    /// Returns an error if `start` is missing or malformed; the `TimeRange`
+    /// specification requires a start time.
     pub fn has_started_by(&self, time: Timestamp) -> Result<bool> {
-        Ok(self.start()?.map_or(true, |s| time >= s))
+        Ok(time >= self.required_start()?)
+    }
+}
+
+/// A transparency log key (Rekor or CTFE) from the trusted root.
+///
+/// This is the single parsed representation for transparency key material;
+/// identifier forms needed by specific verification flows are derived from it
+/// via [`LogKey::key_hint`] and [`LogKey::computed_log_id`].
+#[derive(Debug, Clone)]
+pub struct LogKey {
+    /// The log's key ID as declared in the trusted root (the base64-encoded
+    /// SHA-256 hash of the DER-encoded public key).
+    pub log_id: LogKeyId,
+    /// The DER (SPKI)-encoded public key.
+    pub public_key: DerPublicKey,
+}
+
+impl LogKey {
+    /// The checkpoint key hint: the first 4 bytes of the decoded log ID.
+    ///
+    /// Checkpoint (signed note) signatures identify their signing key by this
+    /// hint.
+    pub fn key_hint(&self) -> Result<KeyHint> {
+        let bytes = self.log_id.decode()?;
+        if bytes.len() < 4 {
+            return Err(Error::InvalidKey(format!(
+                "log ID {} is shorter than a 4-byte key hint",
+                self.log_id
+            )));
+        }
+        Ok(KeyHint::try_from_slice(&bytes[..4])?)
+    }
+
+    /// The log ID recomputed from the public key: the SHA-256 hash of the
+    /// DER-encoded key.
+    ///
+    /// SCT verification matches a certificate SCT's `LogID` against this
+    /// computed value rather than the declared [`Self::log_id`], so a trusted
+    /// root whose declared ID disagrees with its key material cannot redirect
+    /// the lookup.
+    pub fn computed_log_id(&self) -> Sha256Hash {
+        sigstore_crypto::sha256(self.public_key.as_bytes())
     }
 }
 
@@ -262,53 +319,22 @@ impl TrustedRoot {
         Ok(certs)
     }
 
-    /// Get all Rekor public keys mapped by key ID
+    /// Get all Rekor transparency log keys
     ///
     /// Keys whose `valid_for` window has not started yet are excluded.
     /// Expired keys are included because they are needed to verify log
     /// entries that were integrated while the key was valid.
-    pub fn rekor_keys(&self) -> Result<HashMap<String, Vec<u8>>> {
-        let now = Timestamp::now();
-        let mut keys = HashMap::new();
-        for tlog in &self.tlogs {
-            if !usable_for_verification(tlog.public_key.valid_for.as_ref(), now)? {
-                continue;
-            }
-            keys.insert(
-                tlog.log_id.key_id.to_string(),
-                tlog.public_key.raw_bytes.as_bytes().to_vec(),
-            );
-        }
-        Ok(keys)
-    }
-
-    /// Get all Rekor public keys with their key hints (4-byte identifiers)
-    ///
-    /// Returns a vector of (key_hint, public_key) tuples where key_hint is
-    /// the first 4 bytes of the keyId from the log_id field.
-    ///
-    /// Keys whose `valid_for` window has not started yet are excluded.
-    /// Expired keys are included because they are needed to verify log
-    /// entries that were integrated while the key was valid.
-    pub fn rekor_keys_with_hints(&self) -> Result<Vec<(KeyHint, DerPublicKey)>> {
+    pub fn rekor_keys(&self) -> Result<Vec<LogKey>> {
         let now = Timestamp::now();
         let mut keys = Vec::new();
         for tlog in &self.tlogs {
             if !usable_for_verification(tlog.public_key.valid_for.as_ref(), now)? {
                 continue;
             }
-            // Decode the key_id to get the key hint (first 4 bytes)
-            let key_id_bytes = tlog.log_id.key_id.decode()?;
-
-            if key_id_bytes.len() >= 4 {
-                let key_hint = KeyHint::new([
-                    key_id_bytes[0],
-                    key_id_bytes[1],
-                    key_id_bytes[2],
-                    key_id_bytes[3],
-                ]);
-                keys.push((key_hint, tlog.public_key.raw_bytes.clone()));
-            }
+            keys.push(LogKey {
+                log_id: tlog.log_id.key_id.clone(),
+                public_key: tlog.public_key.raw_bytes.clone(),
+            });
         }
         Ok(keys)
     }
@@ -352,46 +378,24 @@ impl TrustedRoot {
         Err(Error::KeyNotFound(log_id.to_string()))
     }
 
-    /// Get all Certificate Transparency log public keys mapped by key ID
+    /// Get all Certificate Transparency log keys
     ///
     /// Keys whose `valid_for` window has not started yet are excluded.
     /// Expired keys are included because they are needed to verify SCTs
     /// issued while the key was valid.
-    pub fn ctfe_keys(&self) -> Result<HashMap<LogKeyId, DerPublicKey>> {
+    pub fn ctfe_keys(&self) -> Result<Vec<LogKey>> {
         let now = Timestamp::now();
-        let mut keys = HashMap::new();
+        let mut keys = Vec::new();
         for ctlog in &self.ctlogs {
             if !usable_for_verification(ctlog.public_key.valid_for.as_ref(), now)? {
                 continue;
             }
-            keys.insert(
-                ctlog.log_id.key_id.clone(),
-                ctlog.public_key.raw_bytes.clone(),
-            );
+            keys.push(LogKey {
+                log_id: ctlog.log_id.key_id.clone(),
+                public_key: ctlog.public_key.raw_bytes.clone(),
+            });
         }
         Ok(keys)
-    }
-
-    /// Get all Certificate Transparency log public keys with their SHA-256 log IDs
-    /// Returns a list of (log_id, public_key) pairs where log_id is the SHA-256 hash
-    /// of the public key (used for matching against SCTs)
-    ///
-    /// Keys whose `valid_for` window has not started yet are excluded.
-    /// Expired keys are included because they are needed to verify SCTs
-    /// issued while the key was valid.
-    pub fn ctfe_keys_with_ids(&self) -> Result<Vec<(Vec<u8>, DerPublicKey)>> {
-        let now = Timestamp::now();
-        let mut result = Vec::new();
-        for ctlog in &self.ctlogs {
-            if !usable_for_verification(ctlog.public_key.valid_for.as_ref(), now)? {
-                continue;
-            }
-            let key_bytes = ctlog.public_key.raw_bytes.as_bytes();
-            // Compute SHA-256 hash of the public key to get the log ID
-            let log_id = sigstore_crypto::sha256(key_bytes).as_bytes().to_vec();
-            result.push((log_id, ctlog.public_key.raw_bytes.clone()));
-        }
-        Ok(result)
     }
 
     /// Get all TSA certificates with their validity periods
@@ -479,41 +483,6 @@ impl TrustedRoot {
             }
         }
         Ok(leaves)
-    }
-
-    /// Check if a Rekor key ID exists in the trusted root
-    ///
-    /// Note: this is a pure presence check and does not consider `valid_for`.
-    pub fn has_rekor_key(&self, key_id: &LogKeyId) -> bool {
-        self.tlogs.iter().any(|tlog| &tlog.log_id.key_id == key_id)
-    }
-
-    /// Get the validity period for a TSA at a given time
-    ///
-    /// Returns an error if a `valid_for` timestamp is present but malformed.
-    pub fn tsa_validity_for_time(
-        &self,
-        timestamp: Timestamp,
-    ) -> Result<Option<(Timestamp, Timestamp)>> {
-        for tsa in &self.timestamp_authorities {
-            if let Some(valid_for) = &tsa.valid_for {
-                let start = valid_for.start()?;
-                let end = valid_for.end()?;
-
-                // Check if timestamp falls within this TSA's validity
-                if let (Some(start_time), Some(end_time)) = (start, end) {
-                    if timestamp >= start_time && timestamp <= end_time {
-                        return Ok(Some((start_time, end_time)));
-                    }
-                } else if let Some(start_time) = start {
-                    // Only start time specified, check if after start
-                    if timestamp >= start_time {
-                        return Ok(start.zip(end));
-                    }
-                }
-            }
-        }
-        Ok(None)
     }
 
     /// Check if a timestamp is within any TSA's validity period from the trust root
@@ -630,19 +599,17 @@ mod tests {
         );
     }
 
+    fn has_log(keys: &[LogKey], log_id: &str) -> bool {
+        keys.iter()
+            .any(|key| key.log_id == LogKeyId::new(log_id.to_string()))
+    }
+
     #[test]
     fn test_rekor_keys() {
         let root = TrustedRoot::from_json(SAMPLE_TRUSTED_ROOT).unwrap();
         let keys = root.rekor_keys().unwrap();
         assert_eq!(keys.len(), 1);
-        assert!(keys.contains_key("test-key-id"));
-    }
-
-    #[test]
-    fn test_has_rekor_key() {
-        let root = TrustedRoot::from_json(SAMPLE_TRUSTED_ROOT).unwrap();
-        assert!(root.has_rekor_key(&LogKeyId::new("test-key-id".to_string())));
-        assert!(!root.has_rekor_key(&LogKeyId::new("non-existent".to_string())));
+        assert!(has_log(&keys, "test-key-id"));
     }
 
     #[test]
@@ -720,9 +687,9 @@ mod tests {
 
         let keys = root.rekor_keys().unwrap();
         assert_eq!(keys.len(), 2);
-        assert!(keys.contains_key("expired-key"));
-        assert!(keys.contains_key("current-key"));
-        assert!(!keys.contains_key("future-key"));
+        assert!(has_log(&keys, "expired-key"));
+        assert!(has_log(&keys, "current-key"));
+        assert!(!has_log(&keys, "future-key"));
 
         // rekor_key_for_log honors the same rule
         assert!(root
@@ -765,10 +732,6 @@ mod tests {
 
         assert!(matches!(root.rekor_keys(), Err(Error::TimeParse(_))));
         assert!(matches!(
-            root.rekor_keys_with_hints(),
-            Err(Error::TimeParse(_))
-        ));
-        assert!(matches!(
             root.rekor_key_for_log(&LogKeyId::new("bad-key".to_string())),
             Err(Error::TimeParse(_))
         ));
@@ -807,18 +770,37 @@ mod tests {
 
         let keys = root.ctfe_keys().unwrap();
         assert_eq!(keys.len(), 1);
-        assert!(keys.contains_key(&LogKeyId::new("current-ctlog".to_string())));
-
-        assert_eq!(root.ctfe_keys_with_ids().unwrap().len(), 1);
+        assert!(has_log(&keys, "current-ctlog"));
 
         // Malformed timestamp produces an error
         let bad_json = json.replace("2999-01-01T00:00:00Z", "garbage");
         let bad_root = TrustedRoot::from_json(&bad_json).unwrap();
         assert!(matches!(bad_root.ctfe_keys(), Err(Error::TimeParse(_))));
-        assert!(matches!(
-            bad_root.ctfe_keys_with_ids(),
-            Err(Error::TimeParse(_))
-        ));
+    }
+
+    #[test]
+    fn test_log_key_derived_identifiers() {
+        use base64::Engine;
+
+        // Log ID matching the spec: base64(SHA-256(DER public key))
+        let key_bytes = base64::engine::general_purpose::STANDARD
+            .decode(TEST_KEY)
+            .unwrap();
+        let computed = sigstore_crypto::sha256(&key_bytes);
+        let key = LogKey {
+            log_id: LogKeyId::from_bytes(computed.as_bytes()),
+            public_key: DerPublicKey::new(key_bytes),
+        };
+
+        assert_eq!(key.computed_log_id(), computed);
+        assert_eq!(key.key_hint().unwrap().as_ref(), &computed.as_bytes()[..4]);
+
+        // A log ID too short to yield a key hint is an error
+        let short = LogKey {
+            log_id: LogKeyId::from_bytes(&[1, 2, 3]),
+            public_key: key.public_key.clone(),
+        };
+        assert!(matches!(short.key_hint(), Err(Error::InvalidKey(_))));
     }
 
     #[test]
@@ -873,10 +855,6 @@ mod tests {
             root.is_timestamp_within_tsa_validity(now),
             Err(Error::TimeParse(_))
         ));
-        assert!(matches!(
-            root.tsa_validity_for_time(now),
-            Err(Error::TimeParse(_))
-        ));
         assert!(matches!(root.tsa_root_certs(), Err(Error::TimeParse(_))));
         assert!(matches!(root.tsa_leaf_certs(), Err(Error::TimeParse(_))));
     }
@@ -894,6 +872,12 @@ mod tests {
         assert!(period.contains(inside).unwrap());
         assert!(!period.contains(before).unwrap());
         assert!(!period.contains(after).unwrap());
+
+        // The window is a closed interval: both bounds are included
+        let start_bound: Timestamp = "2020-01-01T00:00:00Z".parse().unwrap();
+        let end_bound: Timestamp = "2021-01-01T00:00:00Z".parse().unwrap();
+        assert!(period.contains(start_bound).unwrap());
+        assert!(period.contains(end_bound).unwrap());
 
         assert!(period.has_started_by(inside).unwrap());
         assert!(period.has_started_by(after).unwrap());
@@ -913,5 +897,19 @@ mod tests {
         };
         assert!(matches!(bad.contains(inside), Err(Error::TimeParse(_))));
         assert!(matches!(bad.start(), Err(Error::TimeParse(_))));
+
+        // A missing start is an error: the TimeRange spec requires it
+        let no_start = ValidityPeriod {
+            start: None,
+            end: Some("2021-01-01T00:00:00Z".to_string()),
+        };
+        assert!(matches!(
+            no_start.contains(inside),
+            Err(Error::MissingField(_))
+        ));
+        assert!(matches!(
+            no_start.has_started_by(inside),
+            Err(Error::MissingField(_))
+        ));
     }
 }
