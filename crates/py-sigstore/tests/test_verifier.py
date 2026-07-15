@@ -10,7 +10,7 @@ from sigstore import (
     verify,
 )
 
-from conftest import COSIGN_IDENTITY, COSIGN_ISSUER, CONDA_IDENTITY, CONDA_ISSUER
+from .conftest import COSIGN_IDENTITY, COSIGN_ISSUER, CONDA_IDENTITY, CONDA_ISSUER
 
 
 # ---------------------------------------------------------------------------

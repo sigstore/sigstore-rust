@@ -9,7 +9,7 @@ import pytest
 # Workspace-relative fixture paths
 # ---------------------------------------------------------------------------
 _HERE = pathlib.Path(__file__).parent          # crates/sigstore-python/
-_WORKSPACE = _HERE.parent.parent               # repo root
+_WORKSPACE = _HERE.parent.parent.parent        # repo root
 
 VERIFY_BUNDLES = _WORKSPACE / "crates/sigstore-verify/test_data/bundles"
 VERIFY_TRUSTED_ROOTS = _WORKSPACE / "crates/sigstore-verify/test_data/trusted_roots"
