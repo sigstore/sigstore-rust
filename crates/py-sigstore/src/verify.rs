@@ -264,19 +264,18 @@ pub fn py_verify(
     issuer: Option<&str>,
     trusted_root: Option<&PyTrustedRoot>,
 ) -> PyResult<()> {
-    // Accept Bundle object or JSON string
-    let py_bundle: PyBundle = if let Ok(b) = bundle.extract::<PyRef<PyBundle>>() {
-        PyBundle { inner: b.inner.clone() }
-    } else if let Ok(s) = bundle.extract::<String>() {
-        use sigstore_types::Bundle;
-        Bundle::from_json(&s)
-            .map(|inner| PyBundle { inner })
-            .map_err(|e| BundleError::new_err(e.to_string()))?
-    } else {
-        return Err(pyo3::exceptions::PyTypeError::new_err(
-            "bundle must be a Bundle object or a JSON string",
-        ));
-    };
+    // Accept Bundle object or JSON string.
+    let owned_bundle: sigstore_types::Bundle =
+        if let Ok(b) = bundle.extract::<PyRef<PyBundle>>() {
+            b.inner.clone()
+        } else if let Ok(s) = bundle.extract::<String>() {
+            use sigstore_types::Bundle;
+            Bundle::from_json(&s).map_err(|e| BundleError::new_err(e.to_string()))?
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "bundle must be a Bundle object or a JSON string",
+            ));
+        };
 
     let mut policy = VerificationPolicy::with_identity(identity);
     if let Some(iss) = issuer {
@@ -295,7 +294,7 @@ pub fn py_verify(
     };
 
     let artifact = Artifact::from(input.as_bytes());
-    sigstore_verify::verify(artifact, &py_bundle.inner, &policy, root_ref)
+    sigstore_verify::verify(artifact, &owned_bundle, &policy, root_ref)
         .map(|_| ())
         .map_err(|e| VerificationError::new_err(e.to_string()))
 }

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "py-sigstore"
-version = "0.9.0"
+dynamic = ["version"]
 description = "Python bindings for sigstore-rust — fast Sigstore signing and verification"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
@@ -25,6 +25,11 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+
+[project.urls]
+Repository = "https://github.com/prefix-dev/sigstore-rust"
+Issues = "https://github.com/prefix-dev/sigstore-rust/issues"
+
 [project.optional-dependencies]
 test = ["pytest>=8.0"]
 
@@ -36,6 +41,7 @@ markers = [
 ]
 
 [tool.maturin]
+# Use workspace version from Cargo.toml
 # Mixed layout: Rust extension + pure Python package
 python-source = "python"
 # The compiled extension is named _internal; re-exported by __init__.py

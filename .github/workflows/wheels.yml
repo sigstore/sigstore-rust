@@ -168,9 +168,16 @@ jobs:
           pip install dist/*.whl
           pip install pytest
 
-      - name: Run tests (offline + network, no signing)
+      - name: Run offline tests
         working-directory: crates/py-sigstore
-        run: pytest -m "not ci"
+        run: pytest -m "not ci and not network"
+
+      - name: Run network tests (TUF fetches)
+        working-directory: crates/py-sigstore
+        # Network tests make live requests to Sigstore TUF infrastructure.
+        # They are separated so a transient network failure is clearly identified.
+        run: pytest -m "network"
+        continue-on-error: false
 
   # ──────────────────────────────────────────────────────────────────────────
   # Publish to PyPI — only on `py-v*` tags, after all wheels succeed
