@@ -139,8 +139,8 @@ jobs:
 
       - name: Check for drift
         run: |
-          git diff --exit-code crates/py-sigstore/python/sigstore/_internal.pyi \
-            || (echo "ERROR: _internal.pyi is out of date. Run 'cargo run --bin stub_gen' and commit the result." && exit 1)
+          git diff --exit-code crates/py-sigstore/python/sigstore/_internal/__init__.pyi \
+            || (echo "ERROR: _internal/__init__.pyi is out of date. Run 'cargo run --bin stub_gen' and commit the result." && exit 1)
 
   # ──────────────────────────────────────────────────────────────────────────
   # Python test suite — runs after the Linux x86_64 wheel is built

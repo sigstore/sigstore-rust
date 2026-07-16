@@ -3,7 +3,7 @@
 //! Run with:
 //!   cargo run --bin stub_gen
 //!
-//! This generates `python/sigstore/_internal.pyi` from the
+//! This generates `python/sigstore/_internal/__init__.pyi` from the
 //! `#[gen_stub_*]` annotations throughout the crate.
 //!
 //! The generated file is committed to source control and validated in CI

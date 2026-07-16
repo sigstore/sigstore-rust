@@ -197,7 +197,7 @@ class Signer:
         
         Raises :exc:`IdentityTokenError` if the token is expired.
         """
-    def sign_artifact(self, input: typing.Sequence[builtins.int]) -> Bundle:
+    def sign_artifact(self, input: builtins.bytes) -> Bundle:
         r"""
         Sign raw artifact bytes and return a Sigstore bundle.
         
@@ -213,7 +213,7 @@ class Signer:
         
         Raises :exc:`SigningError` on any failure.
         """
-    def sign_dsse(self, payload: typing.Sequence[builtins.int], payload_type: builtins.str) -> Bundle:
+    def sign_dsse(self, payload: builtins.bytes, payload_type: builtins.str) -> Bundle:
         r"""
         Sign an in-toto DSSE statement and return a Sigstore bundle.
         
@@ -357,7 +357,7 @@ class Verifier:
         Use this when you have already loaded or cached the trusted root and
         want to avoid a repeated network fetch.
         """
-    def verify_artifact(self, input: typing.Sequence[builtins.int], bundle: Bundle, policy: Identity) -> None:
+    def verify_artifact(self, input: builtins.bytes, bundle: Bundle, policy: Identity) -> None:
         r"""
         Verify a raw artifact against a Sigstore bundle.
         
@@ -370,7 +370,7 @@ class Verifier:
             bundle:  The :class:`Bundle` produced during signing.
             policy:  The :class:`Identity` asserting the expected signer.
         """
-    def verify_dsse(self, artifact: typing.Sequence[builtins.int], bundle: Bundle, policy: Identity) -> tuple[builtins.str, builtins.list[builtins.int]]:
+    def verify_dsse(self, artifact: builtins.bytes, bundle: Bundle, policy: Identity) -> tuple[builtins.str, builtins.bytes]:
         r"""
         Verify a DSSE envelope bundle against an artifact and return the payload.
         
@@ -391,7 +391,7 @@ class Verifier:
             A ``(str, bytes)`` tuple of ``(payload_type, payload_bytes)``.
         """
 
-def py_sign(input: typing.Sequence[builtins.int], token: typing.Optional[typing.Any] = None, *, staging: builtins.bool = False) -> Bundle:
+def py_sign(input: builtins.bytes, token: typing.Union[IdentityToken, builtins.str, None] = None, *, staging: builtins.bool = False) -> Bundle:
     r"""
     One-shot artifact signing.
     
@@ -415,7 +415,7 @@ def py_sign(input: typing.Sequence[builtins.int], token: typing.Optional[typing.
                                     detection fails, or if the token is expired.
     """
 
-def py_verify(input: typing.Sequence[builtins.int], bundle: typing.Any, identity: builtins.str, issuer: typing.Optional[builtins.str] = None, *, trusted_root: typing.Optional[TrustedRoot] = None) -> None:
+def py_verify(input: builtins.bytes, bundle: typing.Union[Bundle, builtins.str], identity: builtins.str, issuer: typing.Optional[builtins.str] = None, *, trusted_root: typing.Optional[TrustedRoot] = None) -> None:
     r"""
     One-shot artifact verification.
     
@@ -437,4 +437,3 @@ def py_verify(input: typing.Sequence[builtins.int], bundle: typing.Any, identity
         :exc:`BundleError`:       If ``bundle`` is a string that cannot be parsed.
         :exc:`TrustedRootError`:  If the trusted root cannot be fetched.
     """
-
