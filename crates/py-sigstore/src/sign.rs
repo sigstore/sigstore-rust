@@ -109,11 +109,14 @@ impl PySigner {
     /// Sign an in-toto DSSE statement and return a Sigstore bundle.
     ///
     /// The ``payload`` must be a valid JSON-serialized in-toto statement.
-    /// ``payload_type`` should be ``"application/vnd.in-toto+json"``.
+    /// ``payload_type`` **must** be ``"application/vnd.in-toto+json"`` — this
+    /// is the only value currently supported. Passing any other string raises
+    /// :exc:`ValueError`.
     ///
     /// Args:
     ///     payload:      The raw statement bytes (JSON-encoded in-toto statement).
-    ///     payload_type: The DSSE payload type URI.
+    ///     payload_type: The DSSE payload type URI. Currently only
+    ///                   ``"application/vnd.in-toto+json"`` is accepted.
     ///
     /// Returns:
     ///     A :class:`Bundle` containing the DSSE envelope and verification material.
@@ -130,7 +133,9 @@ impl PySigner {
         // For custom payload types we'd need to build a lower-level API;
         // for now this accepts only "application/vnd.in-toto+json".
         if payload_type != "application/vnd.in-toto+json" {
-            return Err(SigningError::new_err(format!(
+            // Wrong argument value is a programming error, not a signing failure.
+            // Use ValueError rather than SigningError to match Python conventions.
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Unsupported payload_type {payload_type:?}. \
                  Only \"application/vnd.in-toto+json\" is supported in this release."
             )));
