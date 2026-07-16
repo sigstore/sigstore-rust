@@ -97,8 +97,11 @@ impl PySigner {
     ///     A :class:`Bundle` containing the signature and verification material.
     ///
     /// Raises :exc:`SigningError` on any failure.
-    fn sign_artifact(&self, py: Python<'_>, input: Vec<u8>) -> PyResult<PyBundle> {
-        py.detach(|| get_runtime().block_on(self.inner.sign(input.as_slice())))
+    fn sign_artifact(&self, py: Python<'_>, input: &Bound<'_, pyo3::types::PyBytes>) -> PyResult<PyBundle> {
+        // Extract the slice before detach() — Bound<'_, PyBytes> is !Send and
+        // cannot be captured by the Ungil closure.
+        let data = input.as_bytes().to_vec();
+        py.detach(|| get_runtime().block_on(self.inner.sign(&data)))
             .map(|inner| PyBundle { inner })
             .map_err(|e| SigningError::new_err(e.to_string()))
     }
@@ -119,7 +122,7 @@ impl PySigner {
     fn sign_dsse(
         &self,
         py: Python<'_>,
-        payload: Vec<u8>,
+        payload: &Bound<'_, pyo3::types::PyBytes>,
         payload_type: &str,
     ) -> PyResult<PyBundle> {
         // sign_raw_statement validates that it's a valid in-toto statement
@@ -132,7 +135,9 @@ impl PySigner {
                  Only \"application/vnd.in-toto+json\" is supported in this release."
             )));
         }
-        py.detach(|| get_runtime().block_on(self.inner.sign_raw_statement(&payload)))
+        // Extract before detach() — Bound is !Send.
+        let payload_data = payload.as_bytes().to_vec();
+        py.detach(|| get_runtime().block_on(self.inner.sign_raw_statement(&payload_data)))
             .map(|inner| PyBundle { inner })
             .map_err(|e| SigningError::new_err(e.to_string()))
     }
@@ -167,7 +172,7 @@ impl PySigner {
 #[pyo3(signature = (input, token=None, *, staging=false))]
 pub fn py_sign(
     py: Python<'_>,
-    input: Vec<u8>,
+    input: &Bound<'_, pyo3::types::PyBytes>,
     token: Option<&Bound<'_, PyAny>>,
     staging: bool,
 ) -> PyResult<PyBundle> {
@@ -211,7 +216,9 @@ pub fn py_sign(
     };
     let signer = ctx.signer(identity_token);
 
-    py.detach(|| get_runtime().block_on(signer.sign(input.as_slice())))
+    // Extract before detach() — Bound is !Send.
+    let input_data = input.as_bytes().to_vec();
+    py.detach(|| get_runtime().block_on(signer.sign(&input_data)))
         .map(|inner| PyBundle { inner })
         .map_err(|e| SigningError::new_err(e.to_string()))
 }

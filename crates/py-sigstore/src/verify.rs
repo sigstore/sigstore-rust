@@ -173,12 +173,12 @@ impl PyVerifier {
     ///     policy:  The :class:`Identity` asserting the expected signer.
     fn verify_artifact(
         &self,
-        input: Vec<u8>,
+        input: &Bound<'_, pyo3::types::PyBytes>,
         bundle: &PyBundle,
         policy: &PyIdentity,
     ) -> PyResult<()> {
         // Construct Artifact<'_> transiently — lifetime is scoped to this call
-        let artifact = Artifact::from(input.as_slice());
+        let artifact = Artifact::from(input.as_bytes());
         self.inner
             .verify(artifact, &bundle.inner, &policy.inner)
             .map(|_| ())
@@ -202,15 +202,16 @@ impl PyVerifier {
     ///
     /// Returns:
     ///     A ``(str, bytes)`` tuple of ``(payload_type, payload_bytes)``.
-    fn verify_dsse(
+    fn verify_dsse<'py>(
         &self,
-        artifact: Vec<u8>,
+        py: Python<'py>,
+        artifact: &Bound<'_, pyo3::types::PyBytes>,
         bundle: &PyBundle,
         policy: &PyIdentity,
-    ) -> PyResult<(String, Vec<u8>)> {
+    ) -> PyResult<(String, pyo3::Py<pyo3::types::PyBytes>)> {
         use sigstore_types::SignatureContent;
 
-        let art = Artifact::from(artifact.as_slice());
+        let art = Artifact::from(artifact.as_bytes());
         self.inner
             .verify(art, &bundle.inner, &policy.inner)
             .map_err(|e| VerificationError::new_err(e.to_string()))?;
@@ -220,7 +221,7 @@ impl PyVerifier {
             SignatureContent::DsseEnvelope(env) => {
                 let payload_type = env.payload_type.clone();
                 let payload_bytes = env.decode_payload().to_vec();
-                Ok((payload_type, payload_bytes))
+                Ok((payload_type, pyo3::types::PyBytes::new(py, &payload_bytes).into()))
             }
             SignatureContent::MessageSignature(_) => Err(VerificationError::new_err(
                 "verify_dsse called on a MessageSignature bundle; use verify_artifact instead",
@@ -257,7 +258,7 @@ impl PyVerifier {
 #[pyo3(signature = (input, bundle, identity, issuer=None, *, trusted_root=None))]
 pub fn py_verify(
     py: Python<'_>,
-    input: Vec<u8>,
+    input: &Bound<'_, pyo3::types::PyBytes>,
     bundle: &Bound<'_, PyAny>,
     identity: &str,
     issuer: Option<&str>,
@@ -293,7 +294,7 @@ pub fn py_verify(
         &owned_root
     };
 
-    let artifact = Artifact::from(input.as_slice());
+    let artifact = Artifact::from(input.as_bytes());
     sigstore_verify::verify(artifact, &py_bundle.inner, &policy, root_ref)
         .map(|_| ())
         .map_err(|e| VerificationError::new_err(e.to_string()))
