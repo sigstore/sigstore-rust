@@ -1070,6 +1070,55 @@ fn test_verify_cosign_v3_blob_bundle() {
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
 }
 
+/// Replace `bundle`'s tlog entries with the first entry of `donor`.
+fn with_donor_tlog_entry(bundle: &str, donor: &str, keep_own_entries: bool) -> Bundle {
+    let mut b: serde_json::Value = serde_json::from_str(bundle).unwrap();
+    let d: serde_json::Value = serde_json::from_str(donor).unwrap();
+    let donor_entry = d["verificationMaterial"]["tlogEntries"][0].clone();
+
+    let entries = b["verificationMaterial"]["tlogEntries"]
+        .as_array_mut()
+        .unwrap();
+    if !keep_own_entries {
+        entries.clear();
+    }
+    entries.push(donor_entry);
+
+    serde_json::from_str(&serde_json::to_string(&b).unwrap()).unwrap()
+}
+
+/// A log entry belonging to a different signature must not be usable as a
+/// source of verified time, even when transparency log verification is off.
+///
+/// The SET only proves that *some* entry was logged at the claimed time; it
+/// says nothing about which bundle that entry belongs to. Only the entry's
+/// consistency with the rest of the bundle establishes that, so that check
+/// has to run regardless of `verify_tlog`. Otherwise an attacker can borrow
+/// any genuine, contemporaneous Rekor entry to manufacture a verified
+/// signing time for a bundle that was never logged.
+#[test]
+fn test_foreign_tlog_entry_rejected_even_when_tlog_skipped() {
+    // Both are message-signature bundles with a genuine hashedrekord 0.0.1
+    // entry and a genuine SET from production Rekor, so the donor entry
+    // survives SET verification and is rejected only on its content.
+    let bundle = with_donor_tlog_entry(COSIGN_V3_BLOB_BUNDLE, BUNDLE_V3_GITHUB_WHL, false);
+    let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
+
+    // Skip the certificate chain so the foreign entry is rejected on its
+    // contents rather than incidentally on its (much older) timestamp.
+    let policy = VerificationPolicy::default()
+        .skip_tlog_unsafe()
+        .skip_certificate_chain();
+
+    let err = verify(artifact, &bundle, &policy, &production_root())
+        .expect_err("a log entry from an unrelated signature must not verify");
+    assert!(
+        err.to_string().contains("hashedrekord"),
+        "expected the entry to be rejected as inconsistent with the bundle, got: {err}"
+    );
+}
+
+
 #[test]
 fn test_verify_fails_with_unknown_log_entry_kind() {
     let mut json_val: serde_json::Value = serde_json::from_str(HAPPY_PATH_V03_BUNDLE_DSSE).unwrap();

@@ -49,9 +49,10 @@ pub struct VerificationPolicy {
     /// WARNING: Disabling this is unsafe for production use against the
     /// Sigstore public-good instance: it accepts bundles whose signature
     /// event was never logged. Signed timestamps (TSA timestamps and Rekor
-    /// SETs) are authenticated regardless of this flag, but inclusion
-    /// proofs, checkpoints and log-consistency checks are skipped when it
-    /// is disabled. See [`VerificationPolicy::skip_tlog_unsafe`].
+    /// SETs) are authenticated regardless of this flag, as is each log
+    /// entry's consistency with the rest of the bundle, but inclusion
+    /// proofs and checkpoints are skipped when it is disabled.
+    /// See [`VerificationPolicy::skip_tlog_unsafe`].
     pub verify_tlog: bool,
     /// How the signing certificate (and its SCT) is verified
     pub certificate: CertificatePolicy,
@@ -107,11 +108,19 @@ impl VerificationPolicy {
     ///
     /// WARNING: This is unsafe for production use against the Sigstore
     /// public-good instance: bundles are accepted without proof that the
-    /// signature event was ever logged (inclusion proof, checkpoint and
-    /// log-consistency checks are all skipped). Signed timestamps remain
-    /// authenticated - TSA timestamps and Rekor SETs are verified before a
-    /// timestamp is used as the certificate validation time - so a
-    /// backdated `integratedTime` is still rejected.
+    /// signature event was ever logged, because the inclusion proof and
+    /// checkpoint are not checked.
+    ///
+    /// What does still hold: TSA timestamps and Rekor SETs are verified
+    /// before a timestamp is used as the certificate validation time, and
+    /// every log entry is checked for consistency with the bundle it
+    /// travels in. Together these reject a tampered `integratedTime` (the
+    /// SET signature covers it) and an `integratedTime` borrowed from an
+    /// unrelated log entry (its body would not describe this bundle).
+    ///
+    /// What this does NOT give you: any evidence that the entry was
+    /// actually incorporated into the log. A well-formed entry that Rekor
+    /// never accepted is indistinguishable from one it did.
     ///
     /// Only use this for trust domains without an accessible transparency
     /// log, such as bundles for GitHub's private-repository artifact
@@ -448,9 +457,14 @@ impl Verifier {
 
         // (8): Verify the transparency log entry's consistency against the other
         //      materials, to prevent variants of CVE-2022-36056.
-        if policy.verify_tlog {
-            crate::verify_impl::verify_tlog_consistency(bundle, &artifact)?;
-        }
+        //
+        //      This runs regardless of `policy.verify_tlog`. It needs no trusted
+        //      root and performs no log cryptography - it only checks that each
+        //      entry's body describes *this* bundle. Skipping it would let an
+        //      entry belonging to an unrelated signature ride along in the
+        //      bundle, and step (0) would accept that entry's SET-authenticated
+        //      integratedTime as a verified signing time.
+        crate::verify_impl::verify_tlog_consistency(bundle, &artifact)?;
 
         Ok(result)
     }
