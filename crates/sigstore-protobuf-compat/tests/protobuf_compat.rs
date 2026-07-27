@@ -238,3 +238,14 @@ fn bundle_v02_github_whl() {
         include_str!("../../sigstore-verify/test_data/bundles/bundle_v3_github.whl.sigstore"),
     );
 }
+
+/// The only verification material variant the certificate-bearing fixtures
+/// above never exercise: a bare public key identifier (managed/self-managed
+/// signing keys) rather than an embedded certificate or chain.
+#[test]
+fn bundle_v03_public_key_identifier() {
+    check_bundle(
+        "managed-key/bundle.sigstore.json",
+        include_str!("../../sigstore-verify/test_data/managed-key/bundle.sigstore.json"),
+    );
+}
