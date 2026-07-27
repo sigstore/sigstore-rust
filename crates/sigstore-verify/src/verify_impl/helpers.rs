@@ -178,6 +178,16 @@ fn extract_v1_integrated_times_with_promise(
 ///
 /// Note: There is NO fallback to current time. If no verified timestamp is found,
 /// verification fails.
+///
+/// Both sources are always collected; there is no TSA-else-Rekor short circuit.
+/// A timestamp source that is present but does not verify is a hard error, so a
+/// bundle is rejected even when its *other* source would have been sufficient on
+/// its own - an unverifiable SET is fatal despite a valid TSA timestamp, and vice
+/// versa. This is deliberately stricter than sigstore-python, which discards
+/// sources that fail to verify and then applies `VERIFIED_TIME_THRESHOLD = 1`.
+/// It also applies when the caller passed
+/// [`skip_tlog_unsafe`](crate::VerificationPolicy::skip_tlog_unsafe): that flag
+/// skips inclusion proofs and checkpoints, not SET authentication.
 pub fn determine_validation_times(
     bundle: &Bundle,
     signature: &SignatureBytes,
