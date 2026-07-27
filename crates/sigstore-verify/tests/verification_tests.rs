@@ -1118,7 +1118,6 @@ fn test_foreign_tlog_entry_rejected_even_when_tlog_skipped() {
     );
 }
 
-
 #[test]
 fn test_verify_fails_with_unknown_log_entry_kind() {
     let mut json_val: serde_json::Value = serde_json::from_str(HAPPY_PATH_V03_BUNDLE_DSSE).unwrap();
@@ -1384,5 +1383,39 @@ fn test_verify_with_key_fails_with_mismatched_log_entry_kind() {
         err_msg.contains("unsupported log entry kind"),
         "Unexpected error: {}",
         err_msg
+    );
+}
+
+/// The certificate must be validated against *every* verified timestamp, not
+/// just the first one (TOB-SIGSTORE-4).
+///
+/// The bundle keeps its own valid TSA timestamp, which is collected first,
+/// and gains a second SET-authenticated timestamp from an unrelated entry
+/// that falls years outside the certificate's validity window. Checking only
+/// the leading timestamp would accept this.
+#[test]
+fn test_certificate_checked_against_every_verified_timestamp() {
+    let bundle = with_donor_tlog_entry(COSIGN_V3_BLOB_BUNDLE, BUNDLE_V3_GITHUB_WHL, true);
+    let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
+
+    // Sanity: the bundle really does carry two independent timestamp sources.
+    assert_eq!(bundle.verification_material.tlog_entries.len(), 2);
+    assert_eq!(
+        bundle
+            .verification_material
+            .timestamp_verification_data
+            .rfc3161_timestamps
+            .len(),
+        1
+    );
+
+    let policy = VerificationPolicy::default().skip_tlog_unsafe();
+
+    let err = verify(artifact, &bundle, &policy, &production_root())
+        .expect_err("a timestamp outside the certificate's validity must fail verification");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("certificate") || msg.contains("Cert"),
+        "expected a certificate validity failure, got: {msg}"
     );
 }
