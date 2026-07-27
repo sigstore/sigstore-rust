@@ -328,8 +328,14 @@ impl Verifier {
                     &cert_info,
                 )?;
             }
-            let issuer_spki =
-                issuer_spki.expect("determine_validation_times returns at least one timestamp");
+            // determine_validation_times never yields an empty list, but fail
+            // closed rather than panic if that ever stops holding: reaching
+            // here with no issuer means no timestamp was actually checked.
+            let Some(issuer_spki) = issuer_spki else {
+                return Err(Error::Verification(
+                    "no verified timestamp to validate the signing certificate against".to_string(),
+                ));
+            };
 
             if verify_sct {
                 crate::verify_impl::sct::verify_sct(
