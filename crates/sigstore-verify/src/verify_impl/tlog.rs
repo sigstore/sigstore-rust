@@ -173,19 +173,30 @@ pub fn verify_checkpoint(
     }
 
     // Get all Rekor keys from the trusted root; checkpoint signatures
-    // identify their key by a 4-byte hint derived from the log ID
+    // identify their key by a 4-byte hint derived from the log ID.
+    //
+    // The hints are derived up front rather than inside the match loop below.
+    // Deriving them lazily made a malformed log ID in the trusted root fatal
+    // only when it happened to be positioned before the matching key, so the
+    // same trusted root could verify or fail depending on the order of its
+    // `tlogs` array.
     let rekor_keys = trusted_root
         .rekor_keys()
         .map_err(|e| Error::Verification(format!("Failed to get Rekor keys: {}", e)))?;
+    let rekor_keys: Vec<_> = rekor_keys
+        .iter()
+        .map(|key| {
+            key.key_hint().map(|hint| (hint, key)).map_err(|e| {
+                Error::Verification(format!("invalid Rekor log ID in trusted root: {}", e))
+            })
+        })
+        .collect::<Result<_>>()?;
 
     // For each signature in the checkpoint, try to find a matching key and verify
     for sig in &checkpoint.signatures {
         // Find the key with matching key hint
-        for key in &rekor_keys {
-            let key_hint = key.key_hint().map_err(|e| {
-                Error::Verification(format!("invalid Rekor log ID in trusted root: {}", e))
-            })?;
-            if sig.key_id == key_hint {
+        for (key_hint, key) in &rekor_keys {
+            if &sig.key_id == key_hint {
                 // Found matching key, verify the signature using automatic key type detection
                 let message = checkpoint.signed_data();
 
