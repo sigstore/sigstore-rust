@@ -1067,6 +1067,63 @@ fn test_verify_cosign_v3_blob_bundle() {
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
 }
 
+/// Production trusted root with an extra, malformed tlog entry inserted at
+/// `index` (its `keyId` is too short to yield a 4-byte checkpoint key hint).
+fn production_root_with_malformed_tlog_at(index: usize) -> TrustedRoot {
+    let mut root: serde_json::Value =
+        serde_json::from_str(SIGSTORE_PRODUCTION_TRUSTED_ROOT).unwrap();
+    let tlogs = root["tlogs"].as_array_mut().unwrap();
+    let mut bad = tlogs[0].clone();
+    bad["logId"]["keyId"] = serde_json::json!("AQID"); // decodes to 3 bytes
+    tlogs.insert(index, bad);
+    TrustedRoot::from_json(&serde_json::to_string(&root).unwrap()).unwrap()
+}
+
+/// A malformed Rekor log ID in the trusted root must produce the same
+/// outcome wherever it sits in the `tlogs` array.
+///
+/// Checkpoint key hints used to be derived lazily inside the key-matching
+/// loop, so a log ID too short to yield a hint was fatal only when it
+/// preceded the matching key and invisible when it followed it - the same
+/// trusted root could verify or fail purely on array order.
+#[test]
+fn test_malformed_rekor_log_id_fails_regardless_of_position() {
+    let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
+    let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
+    let policy = VerificationPolicy::default();
+
+    let tlog_count = {
+        let root: serde_json::Value =
+            serde_json::from_str(SIGSTORE_PRODUCTION_TRUSTED_ROOT).unwrap();
+        root["tlogs"].as_array().unwrap().len()
+    };
+
+    let first = verify(
+        artifact,
+        &bundle,
+        &policy,
+        &production_root_with_malformed_tlog_at(0),
+    );
+    let last = verify(
+        artifact,
+        &bundle,
+        &policy,
+        &production_root_with_malformed_tlog_at(tlog_count),
+    );
+
+    assert!(
+        first.is_err() && last.is_err(),
+        "malformed trust material must fail closed; got first={:?} last={:?}",
+        first.err(),
+        last.err()
+    );
+    assert_eq!(
+        first.unwrap_err().to_string(),
+        last.unwrap_err().to_string(),
+        "outcome must not depend on the position of the malformed entry"
+    );
+}
+
 /// Replace `bundle`'s tlog entries with the first entry of `donor`.
 fn with_donor_tlog_entry(bundle: &str, donor: &str, keep_own_entries: bool) -> Bundle {
     let mut b: serde_json::Value = serde_json::from_str(bundle).unwrap();
