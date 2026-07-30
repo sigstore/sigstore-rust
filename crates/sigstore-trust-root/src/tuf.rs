@@ -39,7 +39,7 @@
 
 use std::path::{Path, PathBuf};
 
-use sigstore_tuf::{FileStore, HttpRepository, Updater};
+use sigstore_tuf::{FileStore, HttpRepository, StoreRepository, Updater};
 
 use crate::{Error, Result, SigningConfig, SigstoreInstance, TrustedRoot};
 
@@ -96,6 +96,40 @@ fn url_to_dirname(url: &str) -> String {
 
 const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
 
+/// How offline mode responds when the local TUF cache cannot be served.
+///
+/// In offline mode ([`TufConfig::offline`]) no network requests are made and
+/// the local cache is only served after re-running the full TUF verification
+/// workflow against the pinned root of trust (see [`TufConfig::offline`] for
+/// details). This enum decides what happens when that is not possible —
+/// because the cache is absent, or because it fails any verification step
+/// (missing metadata, bad signatures, rollback, hash/length mismatch, or
+/// expired metadata):
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfflineMode {
+    /// Serve the verified cache or fail: any cache that is absent or fails
+    /// verification is an error surfaced to the caller.
+    ///
+    /// The error message states why the cache was rejected (e.g. expired
+    /// metadata vs. a hash mismatch), so the caller can decide whether to
+    /// refresh online or to explicitly fall back to the embedded snapshot via
+    /// [`TrustedRoot::from_embedded`](crate::TrustedRoot::from_embedded).
+    Strict,
+    /// Fall back to the embedded compile-time data whenever the cache is
+    /// absent or fails verification (a `tracing::warn!` records the reason).
+    ///
+    /// Only known Sigstore instances (production, staging, GitHub) have
+    /// embedded data; for custom TUF URLs the fallback itself fails and this
+    /// behaves like [`OfflineMode::Strict`].
+    ///
+    /// Note the embedded snapshot is frozen at compile time of this crate: it
+    /// is authentic but may be *older* than the cache that just failed
+    /// verification (e.g. because it merely expired). Choose
+    /// [`OfflineMode::Strict`] if silently downgrading to older trust
+    /// material is not acceptable.
+    EmbeddedFallback,
+}
+
 /// Configuration for TUF client
 #[derive(Debug, Clone)]
 pub struct TufConfig {
@@ -105,8 +139,9 @@ pub struct TufConfig {
     pub cache_dir: Option<PathBuf>,
     /// Whether to disable local caching
     pub disable_cache: bool,
-    /// Whether to use offline mode (no network, use cached/embedded data)
-    pub offline: bool,
+    /// Offline mode: `Some(mode)` means no network requests are made and the
+    /// (verified) cache is served per `mode`; `None` means online.
+    pub offline: Option<OfflineMode>,
     /// Custom TUF root.json for bootstrapping trust (None = use embedded for known URLs)
     root_json: Option<Vec<u8>>,
 }
@@ -117,7 +152,7 @@ impl Default for TufConfig {
             url: DEFAULT_TUF_URL.to_string(),
             cache_dir: None,
             disable_cache: false,
-            offline: false,
+            offline: None,
             root_json: None,
         }
     }
@@ -172,7 +207,7 @@ impl TufConfig {
             url: url.into(),
             cache_dir: None,
             disable_cache: false,
-            offline: false,
+            offline: None,
             root_json: None,
         }
     }
@@ -224,17 +259,32 @@ impl TufConfig {
         self
     }
 
-    /// Enable offline mode (skip network, use cached or embedded data)
+    /// Enable offline mode (no network; verified cache only, with an explicit
+    /// fallback policy)
     ///
-    /// In offline mode:
-    /// 1. First checks the local TUF cache for previously downloaded targets
-    /// 2. Falls back to embedded data if cache is empty
-    /// 3. No network requests are made
+    /// In offline mode no network requests are made. The local TUF cache is
+    /// served, but **only** after re-running the full TUF verification
+    /// workflow (root → timestamp → snapshot → targets) against the pinned
+    /// root of trust — an explicitly configured [`with_root`](Self::with_root)
+    /// root or the embedded root for known Sigstore instances — and checking
+    /// each target against the length and hashes pinned in the verified
+    /// metadata. The cache directory is writable and therefore untrusted
+    /// input; raw cached bytes are never returned (TOB-SIGSTORE-10).
     ///
-    /// **Warning**: Offline mode uses unverified cached data. The cached data
-    /// was verified when originally downloaded, but freshness is not checked.
-    pub fn offline(mut self) -> Self {
-        self.offline = true;
+    /// TUF metadata expiry is enforced during offline verification: a cache
+    /// whose `timestamp.json` has expired (for Sigstore production this
+    /// happens within days of the last online refresh) fails verification.
+    /// This is the fail-secure choice — stale cached key material is not kept
+    /// alive indefinitely. Run without `offline()` periodically to keep the
+    /// cache fresh.
+    ///
+    /// `mode` decides what happens when the cache is absent or fails any
+    /// verification step: [`OfflineMode::Strict`] surfaces an error saying
+    /// why, [`OfflineMode::EmbeddedFallback`] serves the embedded
+    /// compile-time data for known Sigstore instances (which may be *older*
+    /// than the rejected cache).
+    pub fn offline(mut self, mode: OfflineMode) -> Self {
+        self.offline = Some(mode);
         self
     }
 }
@@ -298,10 +348,12 @@ impl TufClient {
     /// Fetch a target file from the TUF repository
     ///
     /// In online mode: fetches via TUF protocol with verification
-    /// In offline mode: returns cached data, falling back to embedded data
+    /// In offline mode: serves the cache after re-verifying it via the TUF
+    /// protocol, per the configured [`OfflineMode`]
     async fn fetch_target(&self, target_name: &str) -> Result<Vec<u8>> {
-        if self.config.offline {
-            return self.fetch_target_offline(target_name).await;
+        if let Some(mode) = self.config.offline {
+            let mut results = self.fetch_targets_offline(&[target_name], mode).await?;
+            return Ok(results.remove(0));
         }
         let mut updater = self.build_updater().await?;
         updater
@@ -315,12 +367,8 @@ impl TufClient {
     /// This avoids the overhead of re-fetching and re-verifying TUF metadata
     /// for each target (root.json, timestamp.json, snapshot.json, targets.json).
     async fn fetch_targets(&self, target_names: &[&str]) -> Result<Vec<Vec<u8>>> {
-        if self.config.offline {
-            let mut results = Vec::with_capacity(target_names.len());
-            for name in target_names {
-                results.push(self.fetch_target_offline(name).await?);
-            }
-            return Ok(results);
+        if let Some(mode) = self.config.offline {
+            return self.fetch_targets_offline(target_names, mode).await;
         }
         let mut updater = self.build_updater().await?;
         let now = jiff::Timestamp::now();
@@ -335,20 +383,36 @@ impl TufClient {
         Ok(results)
     }
 
-    /// Get the TUF root.json bytes for this configuration
-    fn get_root_json(&self) -> Result<Vec<u8>> {
+    /// Get the *pinned* TUF root.json for this configuration: an explicitly
+    /// configured root ([`TufConfig::with_root`]) or the embedded root for a
+    /// known Sigstore URL.
+    ///
+    /// Unlike [`Self::get_root_json`], this never reads from the cache
+    /// directory, so the result is trustworthy even when the cache is
+    /// attacker-writable — it is the only acceptable trust anchor for offline
+    /// verification of cached metadata.
+    fn pinned_root_json(&self) -> Option<Vec<u8>> {
         if let Some(ref root) = self.config.root_json {
-            return Ok(root.clone());
+            return Some(root.clone());
         }
 
         // Fall back to embedded roots for known URLs
         let normalized_url = self.config.url.trim_end_matches('/');
         if normalized_url == DEFAULT_TUF_URL {
-            return Ok(PRODUCTION_TUF_ROOT.to_vec());
+            Some(PRODUCTION_TUF_ROOT.to_vec())
         } else if normalized_url == STAGING_TUF_URL {
-            return Ok(STAGING_TUF_ROOT.to_vec());
+            Some(STAGING_TUF_ROOT.to_vec())
         } else if normalized_url == GITHUB_TUF_URL {
-            return Ok(GITHUB_TUF_ROOT.to_vec());
+            Some(GITHUB_TUF_ROOT.to_vec())
+        } else {
+            None
+        }
+    }
+
+    /// Get the TUF root.json bytes for this configuration
+    fn get_root_json(&self) -> Result<Vec<u8>> {
+        if let Some(root) = self.pinned_root_json() {
+            return Ok(root);
         }
 
         // A TUF root was not provided or embedded: Use a cached one if found
@@ -394,38 +458,157 @@ impl TufClient {
         Ok(updater)
     }
 
-    /// Fetch target in offline mode (no network)
+    /// Build an updater that re-runs the full TUF verification workflow
+    /// (root → timestamp → snapshot → targets) entirely from the local cache,
+    /// with no network access, anchored to the pinned root of trust.
     ///
-    /// Priority:
-    /// 1. Local TUF cache (from a previous online fetch, verified at download time)
-    /// 2. Embedded data (compile-time snapshot)
+    /// The cache is treated as untrusted input: every cached metadata file is
+    /// re-verified against the pinned root — signature thresholds, version
+    /// anti-rollback, and expiry — and targets served through the returned
+    /// updater are checked against the length and hashes pinned in the
+    /// verified targets metadata.
+    async fn build_offline_updater(&self) -> Result<Updater> {
+        let root_bytes = self.pinned_root_json().ok_or_else(|| {
+            Error::Tuf(format!(
+                "no pinned TUF root for {}; refusing to verify the cache against \
+                 a root taken from the (writable) cache itself",
+                self.config.url
+            ))
+        })?;
+        let cache_dir = self.get_cache_dir()?;
+        let store = FileStore::new(&cache_dir);
+        let mut updater = Updater::new(StoreRepository::new(store.clone()), &root_bytes)
+            .map_err(|e| Error::Tuf(e.to_string()))?
+            .with_store(store);
+        updater
+            .refresh(jiff::Timestamp::now())
+            .await
+            .map_err(|e| Error::Tuf(format!("offline verification of cached metadata: {e}")))?;
+        Ok(updater)
+    }
+
+    /// Look up a target in the embedded compile-time data.
+    fn embedded_target(&self, target_name: &str) -> Option<&'static [u8]> {
+        self.embedded_targets
+            .iter()
+            .find(|(name, _)| *name == target_name)
+            .map(|(_, data)| *data)
+    }
+
+    /// Fetch targets in offline mode (no network)
     ///
-    /// Cached data is preferred over embedded because it is at least as fresh as
-    /// the embedded snapshot. Freshness of the underlying TUF metadata is *not*
-    /// re-verified here — if the caller needs current key material, they should
-    /// run without `offline()` so the TUF client can fetch fresh metadata.
-    async fn fetch_target_offline(&self, target_name: &str) -> Result<Vec<u8>> {
+    /// The local TUF cache is only served after the full TUF verification
+    /// workflow has been re-run from it against the pinned root (signatures,
+    /// versions, expiry) and each target matched its pinned length and
+    /// hashes. Raw cache bytes are never returned: the cache directory is
+    /// writable and therefore untrusted — a shared CI cache or
+    /// attacker-supplied directory could otherwise swap in different service
+    /// URLs or keys (TOB-SIGSTORE-10).
+    ///
+    /// When the cache is absent or fails verification, `mode` decides between
+    /// erroring ([`OfflineMode::Strict`]) and serving the embedded
+    /// compile-time snapshot ([`OfflineMode::EmbeddedFallback`]).
+    async fn fetch_targets_offline(
+        &self,
+        target_names: &[&str],
+        mode: OfflineMode,
+    ) -> Result<Vec<Vec<u8>>> {
+        match mode {
+            OfflineMode::Strict => self.fetch_targets_offline_strict(target_names).await,
+            OfflineMode::EmbeddedFallback => {
+                self.fetch_targets_offline_with_fallback(target_names).await
+            }
+        }
+    }
+
+    /// [`OfflineMode::Strict`]: verified cache or error — every failure
+    /// (absent cache, caching disabled, or any verification step) is
+    /// surfaced to the caller with the reason.
+    async fn fetch_targets_offline_strict(&self, target_names: &[&str]) -> Result<Vec<Vec<u8>>> {
+        if self.config.disable_cache {
+            return Err(Error::Tuf(
+                "offline strict mode needs the local TUF cache, but caching is disabled; \
+                 enable caching or use OfflineMode::EmbeddedFallback"
+                    .into(),
+            ));
+        }
+        let mut updater = self.build_offline_updater().await?;
+        let now = jiff::Timestamp::now();
+        let mut results = Vec::with_capacity(target_names.len());
+        for name in target_names {
+            let bytes = updater.get_target(name, now).await.map_err(|e| {
+                Error::Tuf(format!(
+                    "offline verification of cached target '{name}': {e}"
+                ))
+            })?;
+            results.push(bytes);
+        }
+        Ok(results)
+    }
+
+    /// [`OfflineMode::EmbeddedFallback`]: prefer the verified cache, fall
+    /// back to the embedded compile-time snapshot (known Sigstore instances
+    /// only) whenever the cache is absent or fails verification.
+    async fn fetch_targets_offline_with_fallback(
+        &self,
+        target_names: &[&str],
+    ) -> Result<Vec<Vec<u8>>> {
         if !self.config.disable_cache {
-            if let Ok(cache_dir) = self.get_cache_dir() {
-                // `sigstore-tuf`'s `FileStore` writes downloaded targets under a
-                // `targets/` subdirectory of the cache root.
-                let cached_path = cache_dir.join("targets").join(target_name);
-                if let Ok(bytes) = tokio::fs::read(&cached_path).await {
-                    return Ok(bytes);
+            // Only attempt cache verification when cached metadata exists at
+            // all, so a first offline run doesn't warn about an empty cache.
+            let has_cached_metadata = self
+                .get_cache_dir()
+                .map(|dir| dir.join("timestamp.json").is_file())
+                .unwrap_or(false);
+            if has_cached_metadata {
+                match self.build_offline_updater().await {
+                    Ok(mut updater) => {
+                        let now = jiff::Timestamp::now();
+                        let mut results = Vec::with_capacity(target_names.len());
+                        for name in target_names {
+                            match updater.get_target(name, now).await {
+                                Ok(bytes) => results.push(bytes),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        target = %name,
+                                        error = %e,
+                                        "offline mode: cached target failed verification; \
+                                         falling back to the embedded target set"
+                                    );
+                                    results.clear();
+                                    break;
+                                }
+                            }
+                        }
+                        if results.len() == target_names.len() {
+                            return Ok(results);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "offline mode: cached TUF metadata failed verification; \
+                             falling back to embedded targets"
+                        );
+                    }
                 }
+            } else {
+                tracing::debug!("offline mode: no cached TUF metadata; using embedded targets");
             }
         }
 
-        for (name, data) in self.embedded_targets {
-            if *name == target_name {
-                return Ok(data.to_vec());
-            }
-        }
-
-        Err(Error::Tuf(format!(
-            "Target '{}' not found in cache or embedded data (offline mode)",
-            target_name
-        )))
+        target_names
+            .iter()
+            .map(|name| {
+                self.embedded_target(name)
+                    .map(<[u8]>::to_vec)
+                    .ok_or_else(|| {
+                        Error::Tuf(format!(
+                            "Target '{name}' not found in verified cache or embedded data (offline mode)"
+                        ))
+                    })
+            })
+            .collect()
     }
 
     /// Get the cache directory path
@@ -511,11 +694,13 @@ impl TrustedRoot {
     /// # Example: Offline Mode
     ///
     /// ```no_run
-    /// use sigstore_trust_root::{TrustedRoot, TufConfig};
+    /// use sigstore_trust_root::{OfflineMode, TrustedRoot, TufConfig};
     ///
     /// # async fn example() -> Result<(), sigstore_trust_root::Error> {
-    /// // Use cached/embedded data only (no network)
-    /// let config = TufConfig::production().offline();
+    /// // No network: serve the verified local cache, or error explaining why
+    /// // it could not be verified (use OfflineMode::EmbeddedFallback to fall
+    /// // back to the embedded compile-time data instead).
+    /// let config = TufConfig::production().offline(OfflineMode::Strict);
     /// let root = TrustedRoot::from_tuf(config).await?;
     /// # Ok(())
     /// # }
@@ -597,11 +782,11 @@ impl SigningConfig {
     /// # Example
     ///
     /// ```no_run
-    /// use sigstore_trust_root::{SigningConfig, TufConfig};
+    /// use sigstore_trust_root::{OfflineMode, SigningConfig, TufConfig};
     ///
     /// # async fn example() -> Result<(), sigstore_trust_root::Error> {
-    /// // Use offline mode with cached data
-    /// let config = TufConfig::production().offline();
+    /// // Use offline mode: verified cache only, error otherwise
+    /// let config = TufConfig::production().offline(OfflineMode::Strict);
     /// let signing_config = SigningConfig::from_tuf(config).await?;
     /// # Ok(())
     /// # }
@@ -684,7 +869,7 @@ mod tests {
         assert_eq!(config.url, DEFAULT_TUF_URL);
         assert!(config.cache_dir.is_none());
         assert!(!config.disable_cache);
-        assert!(!config.offline);
+        assert!(config.offline.is_none());
         assert!(config.root_json.is_none());
     }
 
@@ -713,9 +898,9 @@ mod tests {
         let config = TufConfig::production()
             .with_cache_dir(PathBuf::from("/tmp/test"))
             .without_cache()
-            .offline();
+            .offline(OfflineMode::Strict);
         assert!(config.disable_cache);
-        assert!(config.offline);
+        assert_eq!(config.offline, Some(OfflineMode::Strict));
         assert_eq!(config.cache_dir, Some(PathBuf::from("/tmp/test")));
     }
 
@@ -759,7 +944,7 @@ mod tests {
             url: "https://unknown.tuf/".to_string(),
             cache_dir: None,
             disable_cache: false,
-            offline: false,
+            offline: None,
             root_json: None,
         };
         let err = TufClient::new(config).get_root_json().unwrap_err();
@@ -801,7 +986,9 @@ mod tests {
     #[tokio::test]
     async fn test_offline_mode_uses_embedded_data() {
         // Use offline mode with cache disabled - should fall back to embedded data
-        let config = TufConfig::production().offline().without_cache();
+        let config = TufConfig::production()
+            .offline(OfflineMode::EmbeddedFallback)
+            .without_cache();
         let client = TufClient::new(config);
 
         // Should successfully return embedded trusted root
@@ -817,7 +1004,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_offline_mode_fails_for_unknown_target() {
-        let config = TufConfig::production().offline().without_cache();
+        let config = TufConfig::production()
+            .offline(OfflineMode::EmbeddedFallback)
+            .without_cache();
         let client = TufClient::new(config);
 
         // Should fail for unknown target
@@ -837,7 +1026,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_github_offline_mode_uses_embedded_data() {
-        let config = TufConfig::github().offline().without_cache();
+        let config = TufConfig::github()
+            .offline(OfflineMode::EmbeddedFallback)
+            .without_cache();
         let client = TufClient::new(config);
 
         let bytes = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap();
@@ -855,7 +1046,7 @@ mod tests {
         // Custom URLs have no embedded fallback
         let config = TufConfig::custom("https://custom.tuf/")
             .with_root(b"root")
-            .offline()
+            .offline(OfflineMode::EmbeddedFallback)
             .without_cache();
         let client = TufClient::new(config);
 
@@ -864,23 +1055,311 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// Helpers to write a fully signed, single-key TUF repository into a
+    /// directory using the same layout as `FileStore`, so offline-mode tests
+    /// can exercise a cache that passes full TUF verification — and tampered
+    /// or expired variants of it.
+    mod signed_cache {
+        use std::path::Path;
+
+        use serde_json::{json, Value};
+        use sha2::{Digest, Sha256};
+        use sigstore_crypto::KeyPair;
+
+        pub const FAR_FUTURE: &str = "2999-01-01T00:00:00Z";
+        pub const IN_THE_PAST: &str = "2001-01-01T00:00:00Z";
+
+        fn signature(signed: &Value, keyid: &str, kp: &KeyPair) -> Value {
+            let canonical = sigstore_tuf::canonical_json::to_canonical_bytes(signed).unwrap();
+            let sig = kp.sign(&canonical).unwrap();
+            json!({ "keyid": keyid, "sig": hex::encode(sig.as_bytes()) })
+        }
+
+        fn envelope(signed: Value, sigs: Vec<Value>) -> Vec<u8> {
+            serde_json::to_vec(&json!({ "signed": signed, "signatures": sigs })).unwrap()
+        }
+
+        /// A `meta` entry pinning length + sha256 + version of a metadata file.
+        fn metafile(bytes: &[u8], version: u64) -> Value {
+            json!({
+                "version": version,
+                "length": bytes.len(),
+                "hashes": { "sha256": hex::encode(Sha256::digest(bytes)) },
+            })
+        }
+
+        /// Write signed TUF metadata pinning `target_content` as
+        /// `trusted_root.json` into `cache_dir`, returning the matching
+        /// root.json to pin as the bootstrap root of trust.
+        pub fn write(cache_dir: &Path, target_content: &[u8], timestamp_expires: &str) -> Vec<u8> {
+            let kp = KeyPair::generate_ecdsa_p256().unwrap();
+            let pem = kp.public_key_der().unwrap().to_pem();
+            let key_obj = json!({
+                "keytype": "ecdsa",
+                "scheme": "ecdsa-sha2-nistp256",
+                "keyval": { "public": pem },
+            });
+            let key: sigstore_tuf::Key = serde_json::from_value(key_obj.clone()).unwrap();
+            let kid = key.key_id().unwrap();
+
+            let target_path = super::TRUSTED_ROOT_TARGET;
+            let targets_signed = json!({
+                "_type": "targets",
+                "spec_version": "1.0.0",
+                "version": 1,
+                "expires": FAR_FUTURE,
+                "targets": {
+                    target_path: {
+                        "length": target_content.len(),
+                        "hashes": { "sha256": hex::encode(Sha256::digest(target_content)) },
+                    }
+                },
+            });
+            let targets_bytes = envelope(
+                targets_signed.clone(),
+                vec![signature(&targets_signed, &kid, &kp)],
+            );
+
+            let snapshot_signed = json!({
+                "_type": "snapshot",
+                "spec_version": "1.0.0",
+                "version": 1,
+                "expires": FAR_FUTURE,
+                "meta": { "targets.json": metafile(&targets_bytes, 1) },
+            });
+            let snapshot_bytes = envelope(
+                snapshot_signed.clone(),
+                vec![signature(&snapshot_signed, &kid, &kp)],
+            );
+
+            let timestamp_signed = json!({
+                "_type": "timestamp",
+                "spec_version": "1.0.0",
+                "version": 1,
+                "expires": timestamp_expires,
+                "meta": { "snapshot.json": metafile(&snapshot_bytes, 1) },
+            });
+            let timestamp_bytes = envelope(
+                timestamp_signed.clone(),
+                vec![signature(&timestamp_signed, &kid, &kp)],
+            );
+
+            let role = json!({ "keyids": [kid.clone()], "threshold": 1 });
+            let root_signed = json!({
+                "_type": "root",
+                "spec_version": "1.0.0",
+                "version": 1,
+                "expires": FAR_FUTURE,
+                "consistent_snapshot": false,
+                "keys": { kid.clone(): key_obj },
+                "roles": {
+                    "root": role, "timestamp": role,
+                    "snapshot": role, "targets": role,
+                },
+            });
+            let root_bytes = envelope(
+                root_signed.clone(),
+                vec![signature(&root_signed, &kid, &kp)],
+            );
+
+            std::fs::create_dir_all(cache_dir.join("targets")).unwrap();
+            std::fs::write(cache_dir.join("timestamp.json"), &timestamp_bytes).unwrap();
+            std::fs::write(cache_dir.join("snapshot.json"), &snapshot_bytes).unwrap();
+            std::fs::write(cache_dir.join("targets.json"), &targets_bytes).unwrap();
+            std::fs::write(cache_dir.join("targets").join(target_path), target_content).unwrap();
+
+            root_bytes
+        }
+    }
+
     #[tokio::test]
-    async fn test_offline_mode_uses_cache_when_present() {
-        // Cached data should be preferred over embedded in offline mode.
+    async fn test_offline_mode_serves_fully_verified_cache() {
+        // A cache whose metadata chain verifies against the pinned root and
+        // whose target matches the pinned hash/length is served offline —
+        // in strict mode, so success proves the bytes came from the verified
+        // cache with no fallback involved.
         let tmp = tempfile::tempdir().unwrap();
-        let cache_dir = tmp.path().to_path_buf();
+        let content = b"verified offline target content";
+        let root = signed_cache::write(tmp.path(), content, signed_cache::FAR_FUTURE);
 
-        let targets_dir = cache_dir.join("sigstore-rust");
-        tokio::fs::create_dir_all(&targets_dir).await.unwrap();
-        let cached_content = EMBEDDED_PRODUCTION_TRUSTED_ROOT;
-        tokio::fs::write(targets_dir.join(TRUSTED_ROOT_TARGET), cached_content)
-            .await
-            .unwrap();
-
-        let config = TufConfig::production().offline().with_cache_dir(cache_dir);
+        let config = TufConfig::custom("https://offline.example/")
+            .with_root(&root)
+            .offline(OfflineMode::Strict)
+            .with_cache_dir(tmp.path().to_path_buf());
         let client = TufClient::new(config);
 
         let bytes = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap();
-        assert_eq!(bytes, cached_content);
+        assert_eq!(bytes, content);
+    }
+
+    #[tokio::test]
+    async fn test_offline_mode_rejects_tampered_cached_target() {
+        // Valid signed metadata, but the cached target bytes were swapped
+        // after the fact: the hash check must reject them, and strict mode
+        // must surface the failure — the attacker bytes are never returned.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = signed_cache::write(tmp.path(), b"legitimate", signed_cache::FAR_FUTURE);
+        std::fs::write(
+            tmp.path().join("targets").join(TRUSTED_ROOT_TARGET),
+            b"attacker-controlled bytes",
+        )
+        .unwrap();
+
+        let config = TufConfig::custom("https://offline.example/")
+            .with_root(&root)
+            .offline(OfflineMode::Strict)
+            .with_cache_dir(tmp.path().to_path_buf());
+        let client = TufClient::new(config);
+
+        let err = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("offline verification of cached target"));
+    }
+
+    #[tokio::test]
+    async fn test_offline_mode_rejects_expired_cached_metadata() {
+        // Expired timestamp metadata must fail offline verification
+        // (fail-secure): strict mode errors — with a reason naming the
+        // expiry — instead of serving a cache whose freshness can no longer
+        // be established.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = signed_cache::write(tmp.path(), b"stale", signed_cache::IN_THE_PAST);
+
+        let config = TufConfig::custom("https://offline.example/")
+            .with_root(&root)
+            .offline(OfflineMode::Strict)
+            .with_cache_dir(tmp.path().to_path_buf());
+        let client = TufClient::new(config);
+
+        let err = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("offline verification of cached metadata"));
+        assert!(msg.contains("expired"));
+    }
+
+    #[tokio::test]
+    async fn test_offline_mode_ignores_bare_cached_target_without_metadata() {
+        // A bare file dropped into `targets/` without any signed metadata
+        // must not be served; offline mode falls back to the embedded data.
+        let tmp = tempfile::tempdir().unwrap();
+        let targets_dir = tmp.path().join("targets");
+        tokio::fs::create_dir_all(&targets_dir).await.unwrap();
+        tokio::fs::write(targets_dir.join(TRUSTED_ROOT_TARGET), b"unauthenticated")
+            .await
+            .unwrap();
+
+        let config = TufConfig::production()
+            .offline(OfflineMode::EmbeddedFallback)
+            .with_cache_dir(tmp.path().to_path_buf());
+        let client = TufClient::new(config);
+
+        let bytes = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap();
+        assert_eq!(bytes, EMBEDDED_PRODUCTION_TRUSTED_ROOT);
+    }
+
+    #[tokio::test]
+    async fn test_offline_strict_mode_errors_without_cache() {
+        // Strict mode never falls back: an absent cache is an error the
+        // caller must handle, even for known instances with embedded data.
+        let tmp = tempfile::tempdir().unwrap();
+        let config = TufConfig::production()
+            .offline(OfflineMode::Strict)
+            .with_cache_dir(tmp.path().to_path_buf());
+        let client = TufClient::new(config);
+
+        let err = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("offline verification of cached metadata"));
+    }
+
+    #[tokio::test]
+    async fn test_offline_strict_mode_errors_when_caching_disabled() {
+        let config = TufConfig::production()
+            .offline(OfflineMode::Strict)
+            .without_cache();
+        let client = TufClient::new(config);
+
+        let err = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap_err();
+        assert!(err.to_string().contains("caching is disabled"));
+    }
+
+    #[tokio::test]
+    async fn test_offline_embedded_fallback_on_unverifiable_cache() {
+        // A cache whose metadata does not verify against the pinned
+        // production root (here: signed by an unrelated test key) is
+        // rejected, and EmbeddedFallback serves the embedded snapshot.
+        let tmp = tempfile::tempdir().unwrap();
+        let _unrelated_root = signed_cache::write(tmp.path(), b"evil", signed_cache::FAR_FUTURE);
+
+        let config = TufConfig::production()
+            .offline(OfflineMode::EmbeddedFallback)
+            .with_cache_dir(tmp.path().to_path_buf());
+        let client = TufClient::new(config);
+
+        let bytes = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap();
+        assert_eq!(bytes, EMBEDDED_PRODUCTION_TRUSTED_ROOT);
+    }
+
+    #[tokio::test]
+    async fn test_offline_fallback_does_not_mix_cached_and_embedded_target_sets() {
+        // The cache is valid but only contains trusted_root.json. Falling back
+        // per target would combine that cached root with the older embedded
+        // signing config, breaking TUF snapshot consistency. One failed target
+        // must discard the entire cached set.
+        let tmp = tempfile::tempdir().unwrap();
+        let cached_root = b"verified but deliberately different root target";
+        let root = signed_cache::write(tmp.path(), cached_root, signed_cache::FAR_FUTURE);
+
+        let config = TufConfig::production()
+            .with_root(&root)
+            .offline(OfflineMode::EmbeddedFallback)
+            .with_cache_dir(tmp.path().to_path_buf());
+        let client = TufClient::new(config);
+
+        let targets = client
+            .fetch_targets(&[TRUSTED_ROOT_TARGET, SIGNING_CONFIG_TARGET])
+            .await
+            .unwrap();
+        assert_eq!(targets[0], EMBEDDED_PRODUCTION_TRUSTED_ROOT);
+        assert_eq!(targets[1], EMBEDDED_PRODUCTION_SIGNING_CONFIG);
+        assert_ne!(targets[0], cached_root);
+    }
+
+    #[tokio::test]
+    async fn test_offline_mode_does_not_trust_unauthenticated_cache_tob_sigstore_10() {
+        // Regression test for TOB-SIGSTORE-10: an attacker who can write to
+        // the cache directory (shared CI cache, restored cache artifact)
+        // swaps the Rekor URL in `targets/trusted_root.json`. Offline mode
+        // must not hand that data to `TrustedRoot::from_tuf`.
+        let tmp = tempfile::tempdir().unwrap();
+        let targets_dir = tmp.path().join("targets");
+        tokio::fs::create_dir_all(&targets_dir).await.unwrap();
+
+        let mut doctored: serde_json::Value =
+            serde_json::from_slice(EMBEDDED_PRODUCTION_TRUSTED_ROOT).unwrap();
+        doctored["tlogs"][0]["baseUrl"] = "https://attacker.invalid/rekor".into();
+        tokio::fs::write(
+            targets_dir.join(TRUSTED_ROOT_TARGET),
+            serde_json::to_vec(&doctored).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let config = TufConfig::production()
+            .offline(OfflineMode::EmbeddedFallback)
+            .with_cache_dir(tmp.path().to_path_buf());
+        let root = crate::TrustedRoot::from_tuf(config).await.unwrap();
+
+        assert!(
+            root.tlogs
+                .iter()
+                .all(|t| !t.base_url.contains("attacker.invalid")),
+            "attacker-controlled cache content must never be served in offline mode"
+        );
+        let embedded: crate::TrustedRoot =
+            serde_json::from_slice(EMBEDDED_PRODUCTION_TRUSTED_ROOT).unwrap();
+        assert_eq!(root.tlogs[0].base_url, embedded.tlogs[0].base_url);
     }
 }

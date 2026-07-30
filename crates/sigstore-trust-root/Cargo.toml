@@ -57,5 +57,7 @@ required-features = ["tuf"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# For building signed TUF fixtures in offline-cache tests
+sha2 = { workspace = true }
 # For testing
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
