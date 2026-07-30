@@ -62,16 +62,15 @@
 //!
 //! # Example (Custom TUF Repository)
 //!
-//! Fetch from a custom TUF repository (e.g., for testing):
+//! Fetch from a custom TUF repository (e.g., for testing). An explicit
+//! root of trust is required — it is never discovered from the local cache:
 //!
 //! ```ignore
 //! use sigstore_trust_root::{TrustedRoot, TufConfig};
 //!
 //! # async fn example() -> Result<(), sigstore_trust_root::Error> {
-//! let config = TufConfig::custom(
-//!     "https://sigstore.github.io/root-signing/",
-//!     include_bytes!("path/to/root.json"),
-//! );
+//! let config = TufConfig::custom("https://sigstore.github.io/root-signing/")
+//!     .with_root(include_bytes!("path/to/root.json"));
 //! let root = TrustedRoot::from_tuf(config).await?;
 //! # Ok(())
 //! # }

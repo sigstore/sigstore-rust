@@ -22,16 +22,14 @@
 //! # }
 //! ```
 //!
-//! For custom TUF repositories:
+//! For custom TUF repositories (an explicit root of trust is required):
 //!
 //! ```ignore
 //! use sigstore_trust_root::{TrustedRoot, TufConfig};
 //!
 //! # async fn example() -> Result<(), sigstore_trust_root::Error> {
-//! let config = TufConfig::custom(
-//!     "https://sigstore.github.io/root-signing/",
-//!     include_bytes!("path/to/root.json"),
-//! );
+//! let config = TufConfig::custom("https://sigstore.github.io/root-signing/")
+//!     .with_root(include_bytes!("path/to/root.json"));
 //! let root = TrustedRoot::from_tuf(config).await?;
 //! # Ok(())
 //! # }
@@ -182,10 +180,15 @@ impl TufConfig {
 
     /// Create configuration for a custom TUF repository
     ///
+    /// A custom repository **requires** an explicit root of trust: chain a
+    /// [`with_root`](Self::with_root) call (or use
+    /// [`custom_from_file`](Self::custom_from_file)) or every fetch will
+    /// fail. The root is never discovered from the local cache directory —
+    /// the cache is writable and therefore not a trust anchor.
+    ///
     /// # Arguments
     ///
     /// * `url` - Base URL of the TUF repository
-    /// * `root_json` - Contents of root.json for bootstrapping trust
     ///
     /// # Example
     ///
@@ -194,10 +197,8 @@ impl TufConfig {
     ///
     /// # async fn example() -> Result<(), sigstore_trust_root::Error> {
     /// // For the root-signing test repository
-    /// let config = TufConfig::custom(
-    ///     "https://sigstore.github.io/root-signing/",
-    ///     include_bytes!("path/to/root.json"),
-    /// );
+    /// let config = TufConfig::custom("https://sigstore.github.io/root-signing/")
+    ///     .with_root(include_bytes!("path/to/root.json"));
     /// let root = TrustedRoot::from_tuf(config).await?;
     /// # Ok(())
     /// # }
@@ -387,10 +388,12 @@ impl TufClient {
     /// configured root ([`TufConfig::with_root`]) or the embedded root for a
     /// known Sigstore URL.
     ///
-    /// Unlike [`Self::get_root_json`], this never reads from the cache
-    /// directory, so the result is trustworthy even when the cache is
-    /// attacker-writable — it is the only acceptable trust anchor for offline
-    /// verification of cached metadata.
+    /// This never reads from the cache directory, so the result is
+    /// trustworthy even when the cache is attacker-writable — it is the only
+    /// acceptable trust anchor, online and offline. In particular, a
+    /// `root.json` found in the cache must never bootstrap trust: whoever can
+    /// write the cache could plant a self-signed root and anchor all
+    /// subsequent "verification" to keys they control.
     fn pinned_root_json(&self) -> Option<Vec<u8>> {
         if let Some(ref root) = self.config.root_json {
             return Some(root.clone());
@@ -409,26 +412,23 @@ impl TufClient {
         }
     }
 
-    /// Get the TUF root.json bytes for this configuration
+    /// Get the pinned TUF root.json for this configuration, or error for a
+    /// custom URL without an explicit root.
+    ///
+    /// The root of trust is always an explicit input ([`TufConfig::with_root`]
+    /// / [`TufConfig::custom_from_file`]) or an embedded compile-time root —
+    /// never state discovered in the writable cache directory. (Resuming from
+    /// a newer *rotated* root is still supported: the updater fast-forwards
+    /// through cached `root_history/` entries, verifying every hop against
+    /// this pinned root.)
     fn get_root_json(&self) -> Result<Vec<u8>> {
-        if let Some(root) = self.pinned_root_json() {
-            return Ok(root);
-        }
-
-        // A TUF root was not provided or embedded: Use a cached one if found
-        if !self.config.disable_cache {
-            if let Ok(cache_dir) = self.get_cache_dir() {
-                let cached_path = cache_dir.join("root.json");
-                if let Ok(bytes) = std::fs::read(&cached_path) {
-                    return Ok(bytes);
-                }
-            }
-        }
-
-        Err(Error::Tuf(format!(
-            "No root.json provided for custom URL: {}. Use .with_root() or initialize trust first.",
-            self.config.url
-        )))
+        self.pinned_root_json().ok_or_else(|| {
+            Error::Tuf(format!(
+                "No root.json provided for custom URL: {}. Pass one explicitly \
+                 with .with_root() or TufConfig::custom_from_file().",
+                self.config.url
+            ))
+        })
     }
 
     /// Build a `sigstore-tuf` updater and run the TUF refresh workflow
@@ -681,11 +681,9 @@ impl TrustedRoot {
     /// use sigstore_trust_root::{TrustedRoot, TufConfig};
     ///
     /// # async fn example() -> Result<(), sigstore_trust_root::Error> {
-    /// // For the root-signing test repository
-    /// let config = TufConfig::custom(
-    ///     "https://sigstore.github.io/root-signing/",
-    ///     include_bytes!("path/to/root.json"),
-    /// );
+    /// // For the root-signing test repository (explicit root required)
+    /// let config = TufConfig::custom("https://sigstore.github.io/root-signing/")
+    ///     .with_root(include_bytes!("path/to/root.json"));
     /// let root = TrustedRoot::from_tuf(config).await?;
     /// # Ok(())
     /// # }
@@ -948,6 +946,24 @@ mod tests {
             root_json: None,
         };
         let err = TufClient::new(config).get_root_json().unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("No root.json provided for custom URL"));
+        assert!(msg.contains("with_root"));
+    }
+
+    #[test]
+    fn test_get_root_json_never_bootstraps_from_cache() {
+        // Regression test for the online TOFU-by-cache follow-up to
+        // TOB-SIGSTORE-10: a root.json planted in the writable cache
+        // directory must never become the trust anchor for a custom URL
+        // without an explicit with_root(). Whoever can write the cache could
+        // otherwise anchor all "verification" to a self-signed root.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("root.json"), b"attacker planted root").unwrap();
+
+        let config =
+            TufConfig::custom("https://custom.tuf/").with_cache_dir(tmp.path().to_path_buf());
+        let err = TufClient::new(config).get_root_json().unwrap_err();
         assert!(err
             .to_string()
             .contains("No root.json provided for custom URL"));
@@ -1088,11 +1104,7 @@ mod tests {
             })
         }
 
-        /// Write signed TUF metadata pinning `target_content` as
-        /// `trusted_root.json` into `cache_dir`, returning the matching
-        /// root.json to pin as the bootstrap root of trust.
-        pub fn write(cache_dir: &Path, target_content: &[u8], timestamp_expires: &str) -> Vec<u8> {
-            let kp = KeyPair::generate_ecdsa_p256().unwrap();
+        fn key_entry(kp: &KeyPair) -> (String, Value) {
             let pem = kp.public_key_der().unwrap().to_pem();
             let key_obj = json!({
                 "keytype": "ecdsa",
@@ -1100,7 +1112,47 @@ mod tests {
                 "keyval": { "public": pem },
             });
             let key: sigstore_tuf::Key = serde_json::from_value(key_obj.clone()).unwrap();
-            let kid = key.key_id().unwrap();
+            (key.key_id().unwrap(), key_obj)
+        }
+
+        /// Write signed TUF metadata pinning `target_content` as
+        /// `trusted_root.json` into `cache_dir`, returning the matching
+        /// root.json to pin as the bootstrap root of trust.
+        pub fn write(cache_dir: &Path, target_content: &[u8], timestamp_expires: &str) -> Vec<u8> {
+            write_impl(cache_dir, target_content, timestamp_expires, false)
+        }
+
+        /// Like [`write`], but the repository has rotated: a version-2 root
+        /// (signed by v1's root key) sits under `root_history/`, and the
+        /// lower roles are **re-keyed** in v2 — timestamp/snapshot/targets
+        /// metadata is signed with the new key. The returned v1 root can
+        /// therefore only serve the cache after the verified fast-forward
+        /// through `root_history/` adopts v2; under v1 alone, verification
+        /// fails.
+        pub fn write_with_rotated_root(cache_dir: &Path, target_content: &[u8]) -> Vec<u8> {
+            write_impl(cache_dir, target_content, FAR_FUTURE, true)
+        }
+
+        fn write_impl(
+            cache_dir: &Path,
+            target_content: &[u8],
+            timestamp_expires: &str,
+            rotate_root: bool,
+        ) -> Vec<u8> {
+            let root_kp = KeyPair::generate_ecdsa_p256().unwrap();
+            let (root_kid, root_key_obj) = key_entry(&root_kp);
+
+            // The key the lower roles' metadata is signed with: the root key
+            // itself, or — when rotating — a new key that only root v2
+            // authorizes.
+            let rotated_kp;
+            let (meta_kp, meta_kid, meta_key_obj) = if rotate_root {
+                rotated_kp = KeyPair::generate_ecdsa_p256().unwrap();
+                let (kid, obj) = key_entry(&rotated_kp);
+                (&rotated_kp, kid, obj)
+            } else {
+                (&root_kp, root_kid.clone(), root_key_obj.clone())
+            };
 
             let target_path = super::TRUSTED_ROOT_TARGET;
             let targets_signed = json!({
@@ -1117,7 +1169,7 @@ mod tests {
             });
             let targets_bytes = envelope(
                 targets_signed.clone(),
-                vec![signature(&targets_signed, &kid, &kp)],
+                vec![signature(&targets_signed, &meta_kid, meta_kp)],
             );
 
             let snapshot_signed = json!({
@@ -1129,7 +1181,7 @@ mod tests {
             });
             let snapshot_bytes = envelope(
                 snapshot_signed.clone(),
-                vec![signature(&snapshot_signed, &kid, &kp)],
+                vec![signature(&snapshot_signed, &meta_kid, meta_kp)],
             );
 
             let timestamp_signed = json!({
@@ -1141,26 +1193,55 @@ mod tests {
             });
             let timestamp_bytes = envelope(
                 timestamp_signed.clone(),
-                vec![signature(&timestamp_signed, &kid, &kp)],
+                vec![signature(&timestamp_signed, &meta_kid, meta_kp)],
             );
 
-            let role = json!({ "keyids": [kid.clone()], "threshold": 1 });
+            // Root v1 authorizes only the root key, for every role.
+            let root_role = json!({ "keyids": [root_kid.clone()], "threshold": 1 });
             let root_signed = json!({
                 "_type": "root",
                 "spec_version": "1.0.0",
                 "version": 1,
                 "expires": FAR_FUTURE,
                 "consistent_snapshot": false,
-                "keys": { kid.clone(): key_obj },
+                "keys": { root_kid.clone(): root_key_obj.clone() },
                 "roles": {
-                    "root": role, "timestamp": role,
-                    "snapshot": role, "targets": role,
+                    "root": root_role, "timestamp": root_role,
+                    "snapshot": root_role, "targets": root_role,
                 },
             });
             let root_bytes = envelope(
                 root_signed.clone(),
-                vec![signature(&root_signed, &kid, &kp)],
+                vec![signature(&root_signed, &root_kid, &root_kp)],
             );
+
+            if rotate_root {
+                // Root v2: still rooted in the v1 key (so the fast-forward
+                // hop verifies), but the lower roles now point at the new
+                // key that actually signed the metadata above.
+                let meta_role = json!({ "keyids": [meta_kid.clone()], "threshold": 1 });
+                let root2_signed = json!({
+                    "_type": "root",
+                    "spec_version": "1.0.0",
+                    "version": 2,
+                    "expires": FAR_FUTURE,
+                    "consistent_snapshot": false,
+                    "keys": {
+                        root_kid.clone(): root_key_obj,
+                        meta_kid.clone(): meta_key_obj,
+                    },
+                    "roles": {
+                        "root": root_role, "timestamp": meta_role,
+                        "snapshot": meta_role, "targets": meta_role,
+                    },
+                });
+                let root2_bytes = envelope(
+                    root2_signed.clone(),
+                    vec![signature(&root2_signed, &root_kid, &root_kp)],
+                );
+                std::fs::create_dir_all(cache_dir.join("root_history")).unwrap();
+                std::fs::write(cache_dir.join("root_history/2.root.json"), &root2_bytes).unwrap();
+            }
 
             std::fs::create_dir_all(cache_dir.join("targets")).unwrap();
             std::fs::write(cache_dir.join("timestamp.json"), &timestamp_bytes).unwrap();
@@ -1190,6 +1271,40 @@ mod tests {
 
         let bytes = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap();
         assert_eq!(bytes, content);
+    }
+
+    #[tokio::test]
+    async fn test_pinned_root_fast_forwards_through_verified_root_history() {
+        // Resuming from a newer *rotated* root must keep working without the
+        // (deleted) unauthenticated cache_dir/root.json bootstrap: the
+        // updater fast-forwards through cached root_history/ entries,
+        // verifying each hop against the pinned root. The fixture re-keys
+        // the lower roles in root v2, so this only succeeds if v2 was
+        // actually adopted via that verified chain — under the pinned v1
+        // root alone, the metadata does not verify.
+        let tmp = tempfile::tempdir().unwrap();
+        let content = b"served under rotated root";
+        let root_v1 = signed_cache::write_with_rotated_root(tmp.path(), content);
+
+        let config = TufConfig::custom("https://offline.example/")
+            .with_root(&root_v1)
+            .offline(OfflineMode::Strict)
+            .with_cache_dir(tmp.path().to_path_buf());
+        let client = TufClient::new(config);
+
+        let bytes = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap();
+        assert_eq!(bytes, content);
+
+        // Sanity check for the fixture: without the root_history entry the
+        // same cache must NOT verify under the pinned v1 root.
+        std::fs::remove_dir_all(tmp.path().join("root_history")).unwrap();
+        std::fs::remove_file(tmp.path().join("root.json")).unwrap();
+        let config = TufConfig::custom("https://offline.example/")
+            .with_root(&root_v1)
+            .offline(OfflineMode::Strict)
+            .with_cache_dir(tmp.path().to_path_buf());
+        let client = TufClient::new(config);
+        assert!(client.fetch_target(TRUSTED_ROOT_TARGET).await.is_err());
     }
 
     #[tokio::test]
