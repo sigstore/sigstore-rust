@@ -205,9 +205,7 @@ pub fn verify_sct(
     let (sct, issuer_key_hash) = extract_sct(&cert, issuer_spki_der)?;
 
     // Get CT log keys from trusted root
-    let ct_keys = trusted_root
-        .ctfe_keys()
-        .map_err(|e| Error::Verification(format!("failed to get CT log keys: {}", e)))?;
+    let ct_keys = trusted_root.ctfe_keys();
 
     if ct_keys.is_empty() {
         return Err(Error::Verification(

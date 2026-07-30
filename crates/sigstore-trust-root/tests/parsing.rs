@@ -64,19 +64,11 @@ fn test_trusted_root_api() {
     let trusted_root = TrustedRoot::from_file(&test_file).expect("Failed to parse trusted root");
 
     // Test API methods
-    let fulcio_certs = trusted_root
-        .fulcio_certs()
-        .expect("Failed to get Fulcio certs");
-    println!("Fulcio certificates: {}", fulcio_certs.len());
-
-    let rekor_keys = trusted_root.rekor_keys().expect("Failed to get Rekor keys");
-    println!("Rekor keys: {}", rekor_keys.len());
-
-    let ctfe_keys = trusted_root.ctfe_keys().expect("Failed to get CTFE keys");
-    println!("CTFE keys: {}", ctfe_keys.len());
-
-    let tsa_certs = trusted_root
-        .tsa_certs_with_validity()
-        .expect("Failed to get TSA certs");
-    println!("TSA certificates: {}", tsa_certs.len());
+    println!("Fulcio certificates: {}", trusted_root.fulcio_certs().len());
+    println!("Rekor keys: {}", trusted_root.rekor_keys().len());
+    println!("CTFE keys: {}", trusted_root.ctfe_keys().len());
+    println!(
+        "TSA certificates: {}",
+        trusted_root.tsa_certs_with_validity().len()
+    );
 }

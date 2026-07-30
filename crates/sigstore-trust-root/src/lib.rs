@@ -79,7 +79,7 @@
 
 pub mod error;
 pub mod signing_config;
-pub(crate) mod time_range;
+pub mod time_range;
 pub mod trusted_root;
 
 #[cfg(feature = "tuf")]
@@ -91,6 +91,7 @@ pub use signing_config::{
     SIGNING_CONFIG_MEDIA_TYPE, SIGSTORE_PRODUCTION_SIGNING_CONFIG, SIGSTORE_STAGING_SIGNING_CONFIG,
     SUPPORTED_FULCIO_VERSIONS, SUPPORTED_REKOR_VERSIONS, SUPPORTED_TSA_VERSIONS,
 };
+pub use time_range::TimeRange;
 pub use trusted_root::{
     CertificateAuthority, CertificateTransparencyLog, LogKey, SigstoreInstance, TimestampAuthority,
     TransparencyLog, TrustedRoot, ValidityPeriod, SIGSTORE_GITHUB_TRUSTED_ROOT,
