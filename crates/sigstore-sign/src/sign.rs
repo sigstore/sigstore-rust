@@ -4,7 +4,7 @@
 
 use crate::error::{Error, Result};
 use sigstore_bundle::{BundleV03, TlogEntryBuilder};
-use sigstore_crypto::{KeyPair, SigningScheme};
+use sigstore_crypto::{KeyPair, Sha256Hasher, SigningScheme};
 use sigstore_fulcio::FulcioClient;
 use sigstore_oidc::IdentityToken;
 use sigstore_rekor::{DsseEntry, HashedRekord, HashedRekordV2, RekorApiVersion, RekorClient};
@@ -17,6 +17,97 @@ use sigstore_types::{
     Artifact, Bundle, DerCertificate, DsseEnvelope, DsseSignature, KeyId, PayloadBytes, Sha256Hash,
     SignatureBytes, Statement, Subject, TimestampToken,
 };
+
+/// Number of bytes hashed between yields to the async executor.
+const HASH_YIELD_CHUNK_SIZE: usize = 64 * 1024;
+
+/// Yield control back to the async executor once.
+///
+/// Runtime-agnostic equivalent of `tokio::task::yield_now()`: the future
+/// wakes its own waker and returns `Pending` on the first poll, then `Ready`.
+fn yield_now() -> impl std::future::Future<Output = ()> {
+    struct YieldNow {
+        yielded: bool,
+    }
+
+    impl std::future::Future for YieldNow {
+        type Output = ();
+
+        fn poll(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<()> {
+            if self.yielded {
+                std::task::Poll::Ready(())
+            } else {
+                self.yielded = true;
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            }
+        }
+    }
+
+    YieldNow { yielded: false }
+}
+
+async fn update_sha256_yielding(hasher: &mut Sha256Hasher, data: &[u8]) {
+    for chunk in data.chunks(HASH_YIELD_CHUNK_SIZE) {
+        hasher.update(chunk);
+        yield_now().await;
+    }
+}
+
+/// Compute a SHA-256 digest over `data` in chunks, yielding to the async
+/// executor between chunks.
+///
+/// Hashing is CPU-bound: doing it in one shot over unbounded caller input
+/// would occupy the executor thread for the whole duration and starve other
+/// tasks (TOB-SIGSTORE-8). Hashing in [`HASH_YIELD_CHUNK_SIZE`] chunks keeps
+/// each non-yielding stretch short so other tasks can make progress.
+///
+/// Returns the hasher so callers can either [`Sha256Hasher::finalize`] it or
+/// sign the digest directly via [`KeyPair::sign_prehashed`].
+async fn sha256_yielding(data: &[u8]) -> Sha256Hasher {
+    let mut hasher = Sha256Hasher::new();
+    update_sha256_yielding(&mut hasher, data).await;
+    hasher
+}
+
+/// Start hashing a DSSE PAE without materializing the PAE in memory.
+fn dsse_pae_hasher(payload_type: &str, payload_len: usize) -> Sha256Hasher {
+    let mut hasher = Sha256Hasher::new();
+    hasher.update(b"DSSEv1 ");
+    hasher.update(payload_type.len().to_string().as_bytes());
+    hasher.update(b" ");
+    hasher.update(payload_type.as_bytes());
+    hasher.update(b" ");
+    hasher.update(payload_len.to_string().as_bytes());
+    hasher.update(b" ");
+    hasher
+}
+
+/// Hash a DSSE PAE in chunks without first allocating a full PAE copy.
+async fn sha256_pae_yielding(payload_type: &str, payload: &[u8]) -> Sha256Hasher {
+    let mut hasher = dsse_pae_hasher(payload_type, payload.len());
+    update_sha256_yielding(&mut hasher, payload).await;
+    hasher
+}
+
+/// Copy a DSSE payload into its owned envelope representation while hashing
+/// its PAE in the same yielding pass.
+async fn prepare_dsse_payload_yielding(
+    payload_type: &str,
+    data: &[u8],
+) -> (PayloadBytes, Sha256Hasher) {
+    let mut payload = Vec::with_capacity(data.len());
+    let mut hasher = dsse_pae_hasher(payload_type, data.len());
+    for chunk in data.chunks(HASH_YIELD_CHUNK_SIZE) {
+        payload.extend_from_slice(chunk);
+        hasher.update(chunk);
+        yield_now().await;
+    }
+    (PayloadBytes::new(payload), hasher)
+}
 
 /// Configuration for signing operations
 #[derive(Debug, Clone)]
@@ -206,6 +297,16 @@ impl Signer {
     /// raw bytes, use [`sign_attestation`](Self::sign_attestation) instead to create a
     /// DSSE/in-toto attestation bundle.
     ///
+    /// # Executor behavior
+    ///
+    /// Hashing the artifact is CPU-bound work that runs on the current task.
+    /// To keep a large artifact from monopolizing the async executor thread,
+    /// the SHA-256 digest is computed incrementally in 64 KiB chunks with a
+    /// yield to the executor between chunks. The ECDSA signature is then
+    /// produced over the precomputed digest and verifies identically to a
+    /// signature over the raw artifact, so signing cost does not scale with
+    /// the artifact size.
+    ///
     /// # Example
     ///
     /// ```no_run
@@ -243,11 +344,12 @@ impl Signer {
         // 2. Get signing certificate from Fulcio
         let leaf_cert_der = self.request_certificate(&key_pair).await?;
 
-        // 3. Sign the artifact
-        let signature = key_pair.sign(bytes)?;
-
-        // 4. Compute artifact hash
-        let artifact_hash = sigstore_crypto::sha256(bytes);
+        // 3. + 4. Hash the artifact cooperatively (yielding to the executor
+        // between chunks so unbounded input cannot starve other tasks) and
+        // sign the digest. Signing the precomputed digest is equivalent to
+        // ECDSA-SHA256 over the raw bytes but is O(1) in the artifact size.
+        let hasher = sha256_yielding(bytes).await;
+        let (artifact_hash, signature) = key_pair.sign_prehashed(hasher)?;
 
         // 5. Create Rekor entry (with certificate, not just public key)
         let tlog_entry = self
@@ -393,6 +495,15 @@ impl Signer {
     /// This creates a DSSE bundle with the given statement bytes.
     /// The given bytes are used as-is as the in-toto statement: caller is responsible
     /// for the content of the statement.
+    ///
+    /// # Executor behavior
+    ///
+    /// The DSSE pre-authentication encoding (PAE) of the statement is hashed
+    /// incrementally with yields to the executor between chunks, and the
+    /// signature is produced over the precomputed digest, as in
+    /// [`sign`](Self::sign). Validating the statement JSON still runs
+    /// synchronously on the current task; statements are expected to be small
+    /// (metadata, not artifact contents).
     pub async fn sign_raw_statement(&self, statement_bytes: &[u8]) -> Result<Bundle> {
         // Generate ephemeral key, get a signing certificate for it
         let key_pair = self.generate_ephemeral_keypair()?;
@@ -405,11 +516,11 @@ impl Signer {
             ));
         }
 
-        // Calculate PAE and sign it, create the DSSE envelope
+        // Copy the payload and hash its PAE in one cooperative pass, without
+        // allocating a second, full-size PAE buffer.
         let payload_type = "application/vnd.in-toto+json".to_string();
-        let payload = PayloadBytes::from_bytes(statement_bytes);
-        let pae = sigstore_types::pae(&payload_type, statement_bytes);
-        let signature = key_pair.sign(&pae)?;
+        let (payload, hasher) = prepare_dsse_payload_yielding(&payload_type, statement_bytes).await;
+        let (_pae_hash, signature) = key_pair.sign_prehashed(hasher)?;
 
         let dsse_envelope = DsseEnvelope::new(
             payload_type,
@@ -462,7 +573,9 @@ impl Signer {
                 (entry, "dsse", "0.0.1")
             }
             RekorApiVersion::V2 => {
-                let hash = sigstore_crypto::sha256(&envelope.pae());
+                let hash = sha256_pae_yielding(&envelope.payload_type, envelope.payload.as_bytes())
+                    .await
+                    .finalize();
 
                 let signature = &envelope.signature.sig;
 
@@ -598,5 +711,35 @@ mod tests {
         let _context = SigningContext::new();
         let _prod = SigningContext::production();
         let _staging = SigningContext::staging();
+    }
+
+    #[tokio::test]
+    async fn test_sha256_yielding_matches_one_shot() {
+        for size in [
+            0,
+            1,
+            HASH_YIELD_CHUNK_SIZE - 1,
+            HASH_YIELD_CHUNK_SIZE,
+            HASH_YIELD_CHUNK_SIZE + 1,
+            3 * HASH_YIELD_CHUNK_SIZE + 17,
+        ] {
+            let data: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+            let chunked = sha256_yielding(&data).await.finalize();
+            assert_eq!(chunked, sigstore_crypto::sha256(&data), "size {size}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dsse_pae_yielding_matches_materialized_pae() {
+        let payload_type = "application/vnd.in-toto+json";
+        for size in [0, 1, HASH_YIELD_CHUNK_SIZE, HASH_YIELD_CHUNK_SIZE + 1] {
+            let data: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+            let (payload, hasher) = prepare_dsse_payload_yielding(payload_type, &data).await;
+            assert_eq!(payload.as_bytes(), data);
+            assert_eq!(
+                hasher.finalize(),
+                sigstore_crypto::sha256(&sigstore_types::pae(payload_type, &data))
+            );
+        }
     }
 }

@@ -1,13 +1,14 @@
 //! Key generation and signing using aws-lc-rs
 
 use crate::error::{Error, Result};
+use crate::hash::Sha256Hasher;
 use aws_lc_rs::{
     rand::SystemRandom,
     signature::{EcdsaKeyPair, KeyPair as AwsKeyPair, ECDSA_P256_SHA256_ASN1_SIGNING},
 };
 use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, SECP_256_R_1};
 use der::{asn1::BitString, Encode as _};
-use sigstore_types::{DerPublicKey, SignatureBytes};
+use sigstore_types::{DerPublicKey, Sha256Hash, SignatureBytes};
 use spki::{AlgorithmIdentifier, SubjectPublicKeyInfo};
 
 /// Supported signing schemes
@@ -169,6 +170,31 @@ impl KeyPair {
         }
     }
 
+    /// Sign a message from its incrementally computed SHA-256 digest.
+    ///
+    /// This produces a signature that verifies identically to [`KeyPair::sign`]
+    /// over the full message (ECDSA P-256 hashes the message with SHA-256 before signing),
+    /// but operates on the already-computed digest, so the signing cost is
+    /// independent of the message size. This lets callers hash large inputs
+    /// incrementally — and, in async contexts, yield to the executor between
+    /// chunks — without re-hashing the whole message during signing.
+    ///
+    /// Returns the message digest along with the signature.
+    pub fn sign_prehashed(&self, hasher: Sha256Hasher) -> Result<(Sha256Hash, SignatureBytes)> {
+        let digest = hasher.finish_digest();
+        match self {
+            KeyPair::EcdsaP256(kp) => {
+                let sig = kp.sign_digest(&digest)?;
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(digest.as_ref());
+                Ok((
+                    Sha256Hash::from_bytes(hash),
+                    SignatureBytes::new(sig.as_ref().to_vec()),
+                ))
+            }
+        }
+    }
+
     /// Get the signing scheme for this key pair
     pub fn default_scheme(&self) -> SigningScheme {
         match self {
@@ -222,6 +248,30 @@ mod tests {
         let data = b"test data to sign";
         let sig = kp.sign(data).unwrap();
         assert!(!sig.is_empty());
+    }
+
+    #[test]
+    fn test_sign_prehashed_verifies_as_signature_over_message() {
+        use crate::verification::VerificationKey;
+
+        let kp = KeyPair::generate_ecdsa_p256().unwrap();
+        let message = b"prehashed signing test message";
+
+        let mut hasher = Sha256Hasher::new();
+        hasher.update(&message[..10]);
+        hasher.update(&message[10..]);
+        let (digest, sig) = kp.sign_prehashed(hasher).unwrap();
+
+        // The returned digest matches one-shot hashing.
+        assert_eq!(digest, crate::hash::sha256(message));
+
+        // The signature verifies as ECDSA-SHA256 over the full message.
+        let key = VerificationKey::from_spki(
+            &kp.public_key_der().unwrap(),
+            SigningScheme::EcdsaP256Sha256,
+        )
+        .unwrap();
+        key.verify(message.as_slice(), &sig).unwrap();
     }
 
     #[test]

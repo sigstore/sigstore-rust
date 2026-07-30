@@ -44,10 +44,18 @@ impl Sha256Hasher {
 
     /// Finalize and get the digest as a typed hash
     pub fn finalize(self) -> Sha256Hash {
-        let digest = self.context.finish();
+        let digest = self.finish_digest();
         let mut result = [0u8; 32];
         result.copy_from_slice(digest.as_ref());
         Sha256Hash::from_bytes(result)
+    }
+
+    /// Finalize and return the raw aws-lc-rs digest.
+    ///
+    /// Crate-internal so that [`crate::KeyPair::sign_prehashed`] can sign the
+    /// digest directly without leaking aws-lc-rs types into the public API.
+    pub(crate) fn finish_digest(self) -> digest::Digest {
+        self.context.finish()
     }
 }
 
