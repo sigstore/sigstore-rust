@@ -6,9 +6,9 @@
 
 use crate::error::{Error, Result};
 use const_oid::db::rfc6962::CT_PRECERT_SCTS;
-use sigstore_crypto::{verify_signature, SigningScheme};
+use sigstore_crypto::{Keyring, SigningScheme, VerificationKey};
 use sigstore_trust_root::TrustedRoot;
-use sigstore_types::{DerPublicKey, SignatureBytes};
+use sigstore_types::{Sha256Hash, SignatureBytes};
 use tls_codec::{SerializeBytes, TlsByteVecU16, TlsByteVecU24, TlsSerializeBytes, TlsSize};
 use x509_cert::{
     der::{Decode, Encode},
@@ -112,35 +112,31 @@ impl DigitallySigned {
         })
     }
 
-    /// Verify this DigitallySigned against a public key from the CT log and SCT signature
-    pub fn verify(
-        &self,
-        public_key: &DerPublicKey,
-        sig_alg: u16,
-        signature: &SignatureBytes,
-    ) -> Result<()> {
-        // Serialize the signed data according to RFC 6962
-        let signed_data = self
-            .tls_serialize()
-            .map_err(|e| Error::Verification(format!("failed to serialize SCT data: {}", e)))?;
+    /// The bytes the CT log signed, serialized according to RFC 6962
+    pub fn signed_data(&self) -> Result<Vec<u8>> {
+        self.tls_serialize()
+            .map_err(|e| Error::Verification(format!("failed to serialize SCT data: {}", e)))
+    }
 
-        // Map the signature algorithm to a SigningScheme
-        let scheme = match sig_alg {
-            ECDSA_SHA256 => SigningScheme::EcdsaP256Sha256,
-            ECDSA_SHA384 => SigningScheme::EcdsaP384Sha384,
-            RSA_PKCS1_SHA256 => SigningScheme::RsaPkcs1Sha256,
-            RSA_PKCS1_SHA384 => SigningScheme::RsaPkcs1Sha384,
-            RSA_PKCS1_SHA512 => SigningScheme::RsaPkcs1Sha512,
-            _ => {
-                return Err(Error::Verification(format!(
-                    "unsupported SCT signature algorithm: 0x{:04x}",
-                    sig_alg
-                )))
-            }
-        };
+    /// The log ID this SCT claims to come from: RFC 6962 §3.2's key ID, i.e.
+    /// the SHA-256 hash of the log's public key.
+    pub fn log_id(&self) -> Sha256Hash {
+        Sha256Hash::from_bytes(self.log_id)
+    }
+}
 
-        verify_signature(public_key, &signed_data, signature, scheme)
-            .map_err(|e| Error::Verification(format!("SCT signature verification failed: {}", e)))
+/// Map an RFC 5246 `SignatureAndHashAlgorithm` to a [`SigningScheme`]
+fn sct_signing_scheme(sig_alg: u16) -> Result<SigningScheme> {
+    match sig_alg {
+        ECDSA_SHA256 => Ok(SigningScheme::EcdsaP256Sha256),
+        ECDSA_SHA384 => Ok(SigningScheme::EcdsaP384Sha384),
+        RSA_PKCS1_SHA256 => Ok(SigningScheme::RsaPkcs1Sha256),
+        RSA_PKCS1_SHA384 => Ok(SigningScheme::RsaPkcs1Sha384),
+        RSA_PKCS1_SHA512 => Ok(SigningScheme::RsaPkcs1Sha512),
+        _ => Err(Error::Verification(format!(
+            "unsupported SCT signature algorithm: 0x{:04x}",
+            sig_alg
+        ))),
     }
 }
 
@@ -213,33 +209,53 @@ pub fn verify_sct(
         ));
     }
 
-    // Find the matching CT log key by log ID (the SHA-256 hash of the key,
-    // recomputed from the key material itself)
-    let log_id = &sct.log_id.key_id;
-    let key = ct_keys
-        .iter()
-        .find(|key| key.computed_log_id().as_bytes() == log_id)
-        .ok_or_else(|| {
-            Error::Verification(format!(
-                "SCT log ID {:?} not found in trusted root CT logs",
-                hex::encode(log_id)
-            ))
-        })?;
-    let public_key = &key.public_key;
-
-    // Construct the DigitallySigned structure
-    let digitally_signed = DigitallySigned::from_embedded_sct(&cert, &sct, issuer_key_hash)?;
-
     // Extract signature algorithm and signature bytes for verification
     // Convert the SignatureAndHashAlgorithm to u16
     let sig_alg_bytes = sct.signature.algorithm.tls_serialize().map_err(|e| {
         Error::Verification(format!("failed to serialize signature algorithm: {}", e))
     })?;
     let sig_alg = u16::from_be_bytes([sig_alg_bytes[0], sig_alg_bytes[1]]);
+    let scheme = sct_signing_scheme(sig_alg)?;
     let signature = SignatureBytes::new(sct.signature.signature.clone().into_vec());
 
-    // Verify the signature
-    digitally_signed.verify(public_key, sig_alg, &signature)?;
+    // Build a keyring of the trusted CT log keys, indexed by their RFC 6962 log
+    // ID. The index is recomputed from the key material rather than taken from
+    // the trusted root's declared `logId`, so a trusted root whose declared ID
+    // disagrees with its key cannot redirect the lookup.
+    //
+    // Trusted roots legitimately carry CT keys this implementation cannot use
+    // (e.g. staging's raw PKCS#1 RSA key, which is not an SPKI structure). Such
+    // a key could never verify an SCT, so it is left out of the keyring instead
+    // of failing every SCT verification; only an SCT that asks for it fails.
+    let mut keyring = Keyring::new();
+    let mut unusable = Vec::new();
+    for key in &ct_keys {
+        match VerificationKey::from_spki(&key.public_key, scheme) {
+            Ok(verification_key) => keyring.add_key(key.computed_log_id(), verification_key),
+            Err(e) => unusable.push((key.computed_log_id(), e)),
+        }
+    }
 
-    Ok(())
+    // Construct the DigitallySigned structure
+    let digitally_signed = DigitallySigned::from_embedded_sct(&cert, &sct, issuer_key_hash)?;
+    let log_id = digitally_signed.log_id();
+
+    if keyring.get_key(&log_id).is_none() {
+        return Err(match unusable.iter().find(|(id, _)| *id == log_id) {
+            Some((_, e)) => Error::Verification(format!(
+                "trusted root CT log key {:?} cannot verify this SCT: {}",
+                log_id.to_hex(),
+                e
+            )),
+            None => Error::Verification(format!(
+                "SCT log ID {:?} not found in trusted root CT logs",
+                log_id.to_hex()
+            )),
+        });
+    }
+
+    // Verify the signature
+    keyring
+        .verify_with_key_id(&log_id, &digitally_signed.signed_data()?, &signature)
+        .map_err(|e| Error::Verification(format!("SCT signature verification failed: {}", e)))
 }
