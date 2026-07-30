@@ -611,21 +611,37 @@ fn public_key_algorithm(public_key: &sigstore_types::DerPublicKey) -> Result<Key
     }
 }
 
+/// Decode a base64 blob in any of the encodings protojson accepts: standard or
+/// URL-safe, with or without padding.
+fn decode_base64_any(value: &str) -> Option<Vec<u8>> {
+    use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
+
+    STANDARD
+        .decode(value)
+        .or_else(|_| STANDARD_NO_PAD.decode(value))
+        .or_else(|_| URL_SAFE.decode(value))
+        .or_else(|_| URL_SAFE_NO_PAD.decode(value))
+        .ok()
+}
+
+/// Check a bundle's `publicKey.hint` against the public key supplied by the
+/// caller.
+///
+/// The protobuf specs deliberately leave the hint's encoding up to the
+/// implementation ("the format of the hint must be agreed upon out of band by
+/// the Verifier and the Pre-distributed keys"), so only the one format Sigstore
+/// implementations actually emit is checked: the base64-encoded SHA-256 hash of
+/// the DER-encoded key, as written by `sigstore-go` and `cosign`. A hint in that
+/// format must match the supplied key — otherwise the bundle was made for a
+/// different key. Any other hint is an opaque out-of-band identifier this
+/// implementation cannot interpret and is ignored; the hint is unauthenticated
+/// either way, and the signature check below is what establishes the key.
 fn verify_public_key_hint(hint: &str, public_key: &sigstore_types::DerPublicKey) -> Result<()> {
-    let expected = sigstore_crypto::sha256(public_key.as_bytes());
-    let hint = hint
-        .strip_prefix("SHA256:")
-        .or_else(|| hint.strip_prefix("sha256:"))
-        .unwrap_or(hint);
+    let Some(decoded) = decode_base64_any(hint).filter(|bytes| bytes.len() == 32) else {
+        return Ok(());
+    };
 
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(hint)
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(hint))
-        .map_err(|_| {
-            Error::Verification("public key hint is not a supported SHA-256 key hint".to_string())
-        })?;
-
-    if decoded != expected.as_bytes() {
+    if decoded != sigstore_crypto::sha256(public_key.as_bytes()).as_bytes() {
         return Err(Error::Verification(
             "public key hint does not match supplied public key".to_string(),
         ));

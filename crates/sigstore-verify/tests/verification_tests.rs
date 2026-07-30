@@ -6,7 +6,7 @@ use sigstore_trust_root::{SigstoreInstance, TrustedRoot, SIGSTORE_PRODUCTION_TRU
 use sigstore_types::{LogIndex, Sha256Hash};
 use sigstore_verify::bundle::{validate_bundle, validate_bundle_with_options, ValidationOptions};
 use sigstore_verify::types::Bundle;
-use sigstore_verify::{verify, VerificationPolicy, Verifier};
+use sigstore_verify::{verify, VerificationPolicy, VerificationResult, Verifier};
 use x509_cert::der::Decode;
 
 /// Extract the expected artifact digest from a bundle
@@ -1221,22 +1221,26 @@ fn managed_key_public_key() -> sigstore_types::DerPublicKey {
     sigstore_types::DerPublicKey::from_pem(MANAGED_KEY_PUBLIC_KEY).expect("managed key parses")
 }
 
-#[test]
-fn test_verify_with_key_validates_public_key_hint() {
+/// Verify the managed-key bundle with `publicKey.hint` replaced by `hint`.
+fn verify_managed_key_bundle_with_hint(hint: &str) -> sigstore_verify::Result<VerificationResult> {
     use sigstore_verify::verify_with_key;
 
     let mut json: serde_json::Value = serde_json::from_str(MANAGED_KEY_BUNDLE).unwrap();
-    json["verificationMaterial"]["publicKey"]["hint"] =
-        serde_json::json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+    json["verificationMaterial"]["publicKey"]["hint"] = serde_json::json!(hint);
     let bundle = Bundle::from_json(&serde_json::to_string(&json).unwrap()).unwrap();
-    let public_key = managed_key_public_key();
 
-    let result = verify_with_key(
+    verify_with_key(
         MANAGED_KEY_ARTIFACT,
         &bundle,
-        &public_key,
+        &managed_key_public_key(),
         &production_root(),
-    );
+    )
+}
+
+#[test]
+fn test_verify_with_key_validates_public_key_hint() {
+    let result =
+        verify_managed_key_bundle_with_hint("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
 
     assert!(result.is_err());
     assert!(result
@@ -1244,6 +1248,45 @@ fn test_verify_with_key_validates_public_key_hint() {
         .unwrap()
         .to_string()
         .contains("public key hint does not match supplied public key"));
+}
+
+/// The hint is a base64-encoded SHA-256 digest of the DER key. protojson accepts
+/// standard or URL-safe base64, padded or not, so all four spellings of the
+/// correct digest must be recognized (and accepted).
+#[test]
+fn test_verify_with_key_accepts_every_base64_hint_encoding() {
+    use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
+    use base64::Engine;
+
+    let digest = sigstore_crypto::sha256(managed_key_public_key().as_bytes());
+    for hint in [
+        STANDARD.encode(digest.as_bytes()),
+        STANDARD_NO_PAD.encode(digest.as_bytes()),
+        URL_SAFE.encode(digest.as_bytes()),
+        URL_SAFE_NO_PAD.encode(digest.as_bytes()),
+    ] {
+        let result = verify_managed_key_bundle_with_hint(&hint);
+        assert!(
+            result.is_ok(),
+            "hint {hint} should be accepted: {:?}",
+            result.err()
+        );
+    }
+}
+
+/// The specs leave the hint format to the implementation, so a hint that is not
+/// a SHA-256 digest is an opaque out-of-band identifier and must not be treated
+/// as a mismatch.
+#[test]
+fn test_verify_with_key_ignores_opaque_public_key_hint() {
+    for hint in ["", "my-signing-key", "sha256:not-base64-at-all"] {
+        let result = verify_managed_key_bundle_with_hint(hint);
+        assert!(
+            result.is_ok(),
+            "opaque hint {hint:?} should be ignored: {:?}",
+            result.err()
+        );
+    }
 }
 
 #[test]
