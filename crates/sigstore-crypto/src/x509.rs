@@ -25,10 +25,10 @@ pub struct CertificateInfo {
     pub identity: Option<String>,
     /// Issuer from certificate (OIDC issuer URL from Fulcio extension)
     pub issuer: Option<String>,
-    /// Not valid before (Unix timestamp)
-    pub not_before: i64,
-    /// Not valid after (Unix timestamp)
-    pub not_after: i64,
+    /// Not valid before
+    pub not_before: jiff::Timestamp,
+    /// Not valid after
+    pub not_after: jiff::Timestamp,
     /// Public key in DER-encoded SPKI format
     pub public_key: DerPublicKey,
     /// Key algorithm derived from the public key algorithm
@@ -41,18 +41,12 @@ pub fn parse_certificate_info(cert_der: &[u8]) -> Result<CertificateInfo> {
         .map_err(|e| Error::InvalidCertificate(format!("failed to parse certificate: {}", e)))?;
 
     // Extract validity times
-    let not_before = cert
-        .tbs_certificate
-        .validity
-        .not_before
-        .to_unix_duration()
-        .as_secs() as i64;
-    let not_after = cert
-        .tbs_certificate
-        .validity
-        .not_after
-        .to_unix_duration()
-        .as_secs() as i64;
+    let not_before =
+        jiff::Timestamp::try_from(cert.tbs_certificate.validity.not_before.to_system_time())
+            .map_err(|e| Error::InvalidCertificate(format!("invalid notBefore time: {}", e)))?;
+    let not_after =
+        jiff::Timestamp::try_from(cert.tbs_certificate.validity.not_after.to_system_time())
+            .map_err(|e| Error::InvalidCertificate(format!("invalid notAfter time: {}", e)))?;
 
     // Extract public key in SPKI (SubjectPublicKeyInfo) DER format
     // This is required by aws-lc-rs UnparsedPublicKey, which expects the full SPKI,

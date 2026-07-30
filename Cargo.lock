@@ -1854,6 +1854,7 @@ version = "0.11.0"
 dependencies = [
  "base64",
  "hex",
+ "jiff",
  "serde",
  "serde_json",
  "sigstore-crypto",
@@ -1907,6 +1908,7 @@ dependencies = [
  "der",
  "digest",
  "hex",
+ "jiff",
  "pem",
  "rand_core 0.9.5",
  "sha2",
@@ -1974,6 +1976,7 @@ version = "0.11.0"
 dependencies = [
  "base64",
  "hex",
+ "jiff",
  "reqwest",
  "serde",
  "serde_json",
@@ -2081,6 +2084,7 @@ version = "0.11.0"
 dependencies = [
  "base64",
  "hex",
+ "jiff",
  "pem",
  "serde",
  "serde_json",

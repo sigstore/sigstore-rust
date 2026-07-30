@@ -74,7 +74,10 @@ fn test_parse_v3_bundle() {
     assert_eq!(bundle.verification_material.tlog_entries.len(), 1);
     let entry = &bundle.verification_material.tlog_entries[0];
     assert_eq!(entry.log_index, LogIndex::new(25915956));
-    assert_eq!(entry.integrated_time, 1712085549);
+    assert_eq!(
+        entry.integrated_time,
+        Some(jiff::Timestamp::from_second(1712085549).unwrap())
+    );
     assert_eq!(entry.kind_version.kind, "hashedrekord");
     assert_eq!(entry.kind_version.version, "0.0.1");
 

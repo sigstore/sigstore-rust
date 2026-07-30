@@ -246,12 +246,11 @@ fn test_verify_extracts_integrated_time() {
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root()).unwrap();
 
-    assert!(result.integrated_time.is_some());
-    let time = result.integrated_time.unwrap();
-    assert!(time > 0, "Integrated time should be positive");
-
     // The integrated time in the bundle is 1738060096 (2025-01-28)
-    assert_eq!(time, 1738060096);
+    assert_eq!(
+        result.integrated_time,
+        Some(jiff::Timestamp::from_second(1738060096).unwrap())
+    );
 }
 
 #[test]
@@ -283,7 +282,9 @@ fn test_backdated_integrated_time_rejected_even_when_tlog_skipped() {
     let entry = &mut bundle.verification_material.tlog_entries[0];
     // Backdate the integrated time; the inclusion promise (SET) stays intact,
     // so its signature no longer matches the claimed time.
-    entry.integrated_time -= 86_400;
+    entry.integrated_time = entry
+        .integrated_time
+        .map(|t| t - jiff::SignedDuration::from_hours(24));
 
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
@@ -383,7 +384,10 @@ fn test_full_verification_flow() {
     let policy = VerificationPolicy::default();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root()).unwrap();
-    assert_eq!(result.integrated_time, Some(1738060096));
+    assert_eq!(
+        result.integrated_time,
+        Some(jiff::Timestamp::from_second(1738060096).unwrap())
+    );
 }
 
 #[test]
@@ -423,7 +427,10 @@ fn test_full_verification_flow_happy_path() {
     let policy = VerificationPolicy::default();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root()).unwrap();
-    assert_eq!(result.integrated_time, Some(1734374576));
+    assert_eq!(
+        result.integrated_time,
+        Some(jiff::Timestamp::from_second(1734374576).unwrap())
+    );
 }
 
 #[test]
@@ -1052,7 +1059,10 @@ fn test_parse_cosign_v3_blob_bundle() {
     );
 
     // Check integrated time is present
-    assert!(entry.integrated_time > 0, "Expected integrated time > 0");
+    assert!(
+        entry.integrated_time.is_some(),
+        "Expected an integrated time"
+    );
 }
 
 /// Test full verification of cosign-produced bundle

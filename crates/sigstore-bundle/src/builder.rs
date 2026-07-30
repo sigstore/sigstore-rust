@@ -137,7 +137,7 @@ pub struct TlogEntryBuilder {
     log_id: String,
     kind: String,
     kind_version: String,
-    integrated_time: i64,
+    integrated_time: Option<jiff::Timestamp>,
     canonicalized_body: Vec<u8>,
     inclusion_promise: Option<InclusionPromise>,
     inclusion_proof: Option<InclusionProof>,
@@ -151,7 +151,7 @@ impl TlogEntryBuilder {
             log_id: String::new(),
             kind: "hashedrekord".to_string(),
             kind_version: "0.0.1".to_string(),
-            integrated_time: 0,
+            integrated_time: None,
             canonicalized_body: Vec::new(),
             inclusion_promise: None,
             inclusion_proof: None,
@@ -227,9 +227,9 @@ impl TlogEntryBuilder {
         self
     }
 
-    /// Set the integrated time (Unix timestamp).
-    pub fn integrated_time(mut self, time: i64) -> Self {
-        self.integrated_time = time;
+    /// Set the integrated time.
+    pub fn integrated_time(mut self, time: jiff::Timestamp) -> Self {
+        self.integrated_time = Some(time);
         self
     }
 

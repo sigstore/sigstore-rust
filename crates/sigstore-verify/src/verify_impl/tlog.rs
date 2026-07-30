@@ -32,20 +32,18 @@ use sigstore_types::{Bundle, SignatureBytes, TransparencyLogEntry};
 pub fn verify_tlog_entries(
     bundle: &Bundle,
     trusted_root: &TrustedRoot,
-    not_before: i64,
-    not_after: i64,
-) -> Result<Option<i64>> {
-    let mut integrated_time_result: Option<i64> = None;
+    not_before: jiff::Timestamp,
+    not_after: jiff::Timestamp,
+) -> Result<Option<jiff::Timestamp>> {
+    let mut integrated_time_result: Option<jiff::Timestamp> = None;
 
     for entry in &bundle.verification_material.tlog_entries {
         // Verify Merkle inclusion proof, checkpoint signature and SET
         verify_entry_inclusion(entry, trusted_root)?;
 
-        // Validate integrated time (0 indicates missing/invalid time in v2 entries)
-        let time = entry.integrated_time;
-        if time > 0 {
-            let now = jiff::Timestamp::now().as_second();
-            validate_integrated_time(time, now, not_before, not_after)?;
+        // Validate integrated time (absent in v2 entries, which use RFC 3161)
+        if let Some(time) = entry.integrated_time {
+            validate_integrated_time(time, jiff::Timestamp::now(), not_before, not_after)?;
             integrated_time_result = Some(time);
         }
     }
@@ -55,7 +53,12 @@ pub fn verify_tlog_entries(
 
 /// Validate an entry's integrated time: it must not be in the future and
 /// must fall within the certificate validity window.
-fn validate_integrated_time(time: i64, now: i64, not_before: i64, not_after: i64) -> Result<()> {
+fn validate_integrated_time(
+    time: jiff::Timestamp,
+    now: jiff::Timestamp,
+    not_before: jiff::Timestamp,
+    not_after: jiff::Timestamp,
+) -> Result<()> {
     // Check that integrated time is not in the future
     if time > now {
         return Err(Error::Verification(format!(
@@ -214,18 +217,10 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
         .as_ref()
         .ok_or(Error::Verification("Missing inclusion promise".into()))?;
 
-    let integrated_time = entry.integrated_time;
-
-    // Find the key for the log ID. When the entry carries a real integrated
+    // Find the key for the log ID. When the entry carries an integrated
     // time, require the log key's validity window to cover it: an entry must
     // have been integrated while the log key was valid.
-    let log_key = if integrated_time > 0 {
-        let integrated_ts = jiff::Timestamp::from_second(integrated_time).map_err(|e| {
-            Error::Verification(format!(
-                "Invalid integrated time {}: {}",
-                integrated_time, e
-            ))
-        })?;
+    let log_key = if let Some(integrated_ts) = entry.integrated_time {
         trusted_root
             .rekor_key_for_log_at(&entry.log_id.key_id, integrated_ts)
             .map_err(|e| {
@@ -255,7 +250,9 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
 
     let payload = RekorPayload {
         body,
-        integrated_time,
+        // The SET payload is wire-format Rekor V1 JSON, where "absent" is
+        // the proto3 default of 0.
+        integrated_time: entry.integrated_time.map_or(0, |ts| ts.as_second()),
         log_index,
         log_id: log_id_hex,
     };
@@ -278,19 +275,22 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
 mod tests {
     use super::*;
 
+    fn ts(seconds: i64) -> jiff::Timestamp {
+        jiff::Timestamp::from_second(seconds).unwrap()
+    }
+
     const NOW: i64 = 1_700_000_000;
-    const NOT_BEFORE: i64 = NOW - 600;
-    const NOT_AFTER: i64 = NOW + 600;
 
     #[test]
     fn test_integrated_time_in_future_rejected() {
         // Even one second in the future must be rejected.
-        let err = validate_integrated_time(NOW + 1, NOW, NOT_BEFORE, NOT_AFTER).unwrap_err();
+        let err = validate_integrated_time(ts(NOW + 1), ts(NOW), ts(NOW - 600), ts(NOW + 600))
+            .unwrap_err();
         assert!(err.to_string().contains("is in the future"));
     }
 
     #[test]
     fn test_integrated_time_at_now_accepted() {
-        assert!(validate_integrated_time(NOW, NOW, NOT_BEFORE, NOT_AFTER).is_ok());
+        assert!(validate_integrated_time(ts(NOW), ts(NOW), ts(NOW - 600), ts(NOW + 600)).is_ok());
     }
 }

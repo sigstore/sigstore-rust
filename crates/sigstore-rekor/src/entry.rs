@@ -48,8 +48,14 @@ pub struct LogEntry {
     pub uuid: EntryUuid,
     /// Body of the entry (base64 encoded canonicalized body)
     pub body: CanonicalizedBody,
-    /// Integrated time (Unix timestamp)
-    pub integrated_time: i64,
+    /// Integrated time. Always present in Rekor V1 API responses; `None` for
+    /// entries converted from the V2 API, which has no integrated time.
+    #[serde(
+        default,
+        with = "jiff::fmt::serde::timestamp::second::optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub integrated_time: Option<jiff::Timestamp>,
     /// Log ID (hex-encoded SHA-256 of the log's public key)
     #[serde(rename = "logID")]
     pub log_id: HexLogId,

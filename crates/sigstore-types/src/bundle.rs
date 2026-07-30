@@ -7,8 +7,8 @@
 use crate::checkpoint::Checkpoint;
 use crate::dsse::DsseEnvelope;
 use crate::encoding::{
-    string_i64, CanonicalizedBody, DerCertificate, DigestBytes, LogIndex, LogKeyId, Sha256Hash,
-    SignatureBytes, SignedTimestamp, TimestampToken,
+    string_i64, string_timestamp_opt, CanonicalizedBody, DerCertificate, DigestBytes, LogIndex,
+    LogKeyId, Sha256Hash, SignatureBytes, SignedTimestamp, TimestampToken,
 };
 use crate::error::{Error, Result};
 use crate::hash::HashAlgorithm;
@@ -23,11 +23,6 @@ where
 {
     let opt = Option::deserialize(deserializer)?;
     Ok(opt.unwrap_or_default())
-}
-
-/// Helper for skip_serializing_if to check if i64 is zero
-fn is_zero(value: &i64) -> bool {
-    *value == 0
 }
 
 /// Sigstore bundle media types
@@ -239,10 +234,15 @@ pub struct TransparencyLogEntry {
     pub log_id: LogId,
     /// Kind and version of the entry
     pub kind_version: KindVersion,
-    /// Integrated time (Unix timestamp)
-    /// For Rekor V2 entries, this field may be omitted (defaults to 0)
-    #[serde(default, with = "string_i64", skip_serializing_if = "is_zero")]
-    pub integrated_time: i64,
+    /// Integrated time. `None` for Rekor V2 entries, which omit the field
+    /// (or set it to 0, indistinguishable from absent per proto3) and use
+    /// RFC 3161 timestamps instead.
+    #[serde(
+        default,
+        with = "string_timestamp_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub integrated_time: Option<jiff::Timestamp>,
     /// Inclusion promise (Signed Entry Timestamp)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inclusion_promise: Option<InclusionPromise>,

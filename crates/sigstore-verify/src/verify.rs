@@ -157,7 +157,7 @@ pub struct VerificationResult {
     /// Issuer from the certificate
     pub issuer: Option<String>,
     /// Integrated time from transparency log
-    pub integrated_time: Option<i64>,
+    pub integrated_time: Option<jiff::Timestamp>,
     /// Any warnings during verification
     pub warnings: Vec<String>,
 }

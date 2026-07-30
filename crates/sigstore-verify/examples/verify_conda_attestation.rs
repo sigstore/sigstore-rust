@@ -154,10 +154,7 @@ async fn main() {
                 println!("  OIDC Issuer: {}", iss);
             }
             if let Some(time) = result.integrated_time {
-                use jiff::Timestamp;
-                if let Ok(dt) = Timestamp::from_second(time) {
-                    println!("  Signed at: {}", dt);
-                }
+                println!("  Signed at: {}", time);
             }
             for warning in &result.warnings {
                 println!();

@@ -114,6 +114,41 @@ pub mod string_i64 {
     }
 }
 
+/// Serde helper for optional timestamps serialized as string-encoded Unix
+/// seconds (protobuf JSON `int64`).
+///
+/// Proto3 semantics make `0` and "absent" indistinguishable, so both map to
+/// `None`. Any other value must be representable as a `jiff::Timestamp`, or
+/// deserialization fails: an unrepresentable timestamp is rejected at parse
+/// time instead of being carried around as a raw integer.
+pub mod string_timestamp_opt {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &Option<jiff::Timestamp>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let seconds = value.map_or(0, |ts| ts.as_second());
+        serializer.serialize_str(&seconds.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<jiff::Timestamp>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let seconds = s
+            .parse::<i64>()
+            .map_err(|_| serde::de::Error::custom(format!("invalid integer: {}", s)))?;
+        if seconds == 0 {
+            return Ok(None);
+        }
+        jiff::Timestamp::from_second(seconds)
+            .map(Some)
+            .map_err(|e| serde::de::Error::custom(format!("invalid timestamp {}: {}", seconds, e)))
+    }
+}
+
 // ============================================================================
 // Macro for creating base64-encoded newtype wrappers
 // ============================================================================

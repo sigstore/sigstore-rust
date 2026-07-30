@@ -218,14 +218,9 @@ async fn main() {
             entry.kind_version.kind, entry.kind_version.version
         );
         println!("  Log Index: {}", entry.log_index);
-        let ts = entry.integrated_time;
-        if ts == 0 {
-            println!("  Integrated Time: (uses RFC3161 timestamps)");
-        } else {
-            use jiff::Timestamp;
-            if let Ok(dt) = Timestamp::from_second(ts) {
-                println!("  Integrated Time: {}", dt);
-            }
+        match entry.integrated_time {
+            Some(dt) => println!("  Integrated Time: {}", dt),
+            None => println!("  Integrated Time: (uses RFC3161 timestamps)"),
         }
     }
 

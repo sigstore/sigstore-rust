@@ -232,7 +232,13 @@ impl RekorClient {
 
         // Convert V2 entry to LogEntry
         let log_index = entry_v2.log_index.parse::<i64>().unwrap_or_default();
-        let integrated_time = entry_v2.integrated_time.parse::<i64>().unwrap_or_default();
+        // Rekor V2 entries have no integrated time; the field is "0" when absent.
+        let integrated_time = entry_v2
+            .integrated_time
+            .parse::<i64>()
+            .ok()
+            .filter(|&t| t != 0)
+            .and_then(|t| jiff::Timestamp::from_second(t).ok());
 
         let verification = Some(crate::entry::Verification {
             inclusion_proof: entry_v2
@@ -322,7 +328,13 @@ impl RekorClient {
 
         // Convert V2 entry to LogEntry
         let log_index = entry_v2.log_index.parse::<i64>().unwrap_or_default();
-        let integrated_time = entry_v2.integrated_time.parse::<i64>().unwrap_or_default();
+        // Rekor V2 entries have no integrated time; the field is "0" when absent.
+        let integrated_time = entry_v2
+            .integrated_time
+            .parse::<i64>()
+            .ok()
+            .filter(|&t| t != 0)
+            .and_then(|t| jiff::Timestamp::from_second(t).ok());
 
         let verification = Some(crate::entry::Verification {
             inclusion_proof: entry_v2

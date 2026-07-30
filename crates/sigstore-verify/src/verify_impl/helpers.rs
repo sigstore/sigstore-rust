@@ -53,7 +53,7 @@ pub fn extract_tsa_timestamps(
     bundle: &Bundle,
     signature_bytes: &[u8],
     trusted_root: &TrustedRoot,
-) -> Result<Vec<i64>> {
+) -> Result<Vec<jiff::Timestamp>> {
     use sigstore_tsa::{verify_timestamp_response, VerifyOpts as TsaVerifyOpts};
 
     let mut timestamps = Vec::new();
@@ -105,14 +105,14 @@ pub fn extract_tsa_timestamps(
             )));
         }
 
-        timestamps.push(result.time.as_second());
+        timestamps.push(result.time);
     }
 
     Ok(timestamps)
 }
 
 /// Check if bundle contains V2 tlog entries (hashedrekord/dsse v0.0.2)
-/// V2 entries have integrated_time=0 and require RFC3161 timestamps
+/// V2 entries have no integrated time and require RFC3161 timestamps
 pub fn has_v2_tlog_entries(bundle: &Bundle) -> bool {
     bundle
         .verification_material
@@ -126,7 +126,7 @@ pub fn has_v2_tlog_entries(bundle: &Bundle) -> bool {
 /// Per sigstore-python, integrated_time is only valid as a timestamp source when:
 /// 1. The entry has an inclusion_promise (SET) that cryptographically binds it
 /// 2. The entry is a V1 type (hashedrekord/dsse v0.0.1)
-/// 3. The integrated_time is > 0
+/// 3. The entry carries an integrated time
 ///
 /// The SET is verified here, before the integrated time is trusted: the SET
 /// signature covers `integratedTime`, so this is what authenticates the
@@ -139,7 +139,7 @@ pub fn has_v2_tlog_entries(bundle: &Bundle) -> bool {
 fn extract_v1_integrated_times_with_promise(
     bundle: &Bundle,
     trusted_root: &TrustedRoot,
-) -> Result<Vec<i64>> {
+) -> Result<Vec<jiff::Timestamp>> {
     let mut times = Vec::new();
 
     for entry in &bundle.verification_material.tlog_entries {
@@ -151,8 +151,7 @@ fn extract_v1_integrated_times_with_promise(
             continue;
         }
 
-        let time = entry.integrated_time;
-        if time > 0 {
+        if let Some(time) = entry.integrated_time {
             crate::verify_impl::tlog::verify_set(entry, trusted_root)?;
             times.push(time);
         }
@@ -192,7 +191,7 @@ pub fn determine_validation_times(
     bundle: &Bundle,
     signature: &SignatureBytes,
     trusted_root: &TrustedRoot,
-) -> Result<Vec<i64>> {
+) -> Result<Vec<jiff::Timestamp>> {
     let mut times = extract_tsa_timestamps(bundle, signature.as_bytes(), trusted_root)?;
     times.extend(extract_v1_integrated_times_with_promise(
         bundle,
@@ -209,21 +208,24 @@ pub fn determine_validation_times(
     if is_v2 {
         Err(Error::Verification(
             "V2 bundle requires RFC3161 timestamp but none could be verified. \
-             V2 tlog entries have integrated_time=0 by design. \
+             V2 tlog entries have no integrated time by design. \
              Ensure TSA certificates are present in the trusted root."
                 .to_string(),
         ))
     } else {
         Err(Error::Verification(
             "No verified timestamp found. V1 bundles require either an RFC3161 timestamp \
-             or a tlog entry with both integrated_time > 0 and an inclusion_promise (SET)."
+             or a tlog entry with both an integrated time and an inclusion_promise (SET)."
                 .to_string(),
         ))
     }
 }
 
 /// Validate certificate is within validity period
-pub fn validate_certificate_time(validation_time: i64, cert_info: &CertificateInfo) -> Result<()> {
+pub fn validate_certificate_time(
+    validation_time: jiff::Timestamp,
+    cert_info: &CertificateInfo,
+) -> Result<()> {
     if validation_time < cert_info.not_before {
         return Err(Error::Verification(format!(
             "certificate not yet valid: validation time {} is before not_before {}",
@@ -254,7 +256,7 @@ pub fn validate_certificate_time(validation_time: i64, cert_info: &CertificateIn
 /// have different keys (as in Sigstore staging's multi-region deployment).
 pub fn verify_certificate_chain(
     verification_material: &VerificationMaterialContent,
-    validation_time: i64,
+    validation_time: jiff::Timestamp,
     trusted_root: &TrustedRoot,
 ) -> Result<DerPublicKey> {
     // Extract the end-entity certificate and any intermediates from the bundle
@@ -321,8 +323,9 @@ pub fn verify_certificate_chain(
     })?;
 
     // Convert validation time to webpki UnixTime
-    let verification_time =
-        UnixTime::since_unix_epoch(std::time::Duration::from_secs(validation_time as u64));
+    let verification_time = UnixTime::since_unix_epoch(std::time::Duration::from_secs(
+        validation_time.as_second() as u64,
+    ));
 
     // Verify the certificate chain with CODE_SIGNING EKU
     // This performs:
@@ -396,7 +399,9 @@ mod tests {
             2,
             "expected one TSA timestamp and one integratedTime, got {times:?}"
         );
-        let integrated_time = bundle.verification_material.tlog_entries[0].integrated_time;
+        let integrated_time = bundle.verification_material.tlog_entries[0]
+            .integrated_time
+            .unwrap();
         assert!(times.contains(&integrated_time));
     }
 
@@ -416,7 +421,7 @@ mod tests {
     #[test]
     fn sct_verifies_with_multiple_same_named_intermediates() {
         // The leaf's SCT timestamp / notBefore; used as the chain validation time.
-        const VALIDATION_TIME: i64 = 1_783_488_311;
+        let validation_time = jiff::Timestamp::from_second(1_783_488_311).unwrap();
 
         let trusted_root = TrustedRoot::from_json(include_str!(
             "../../test_data/sct-multi-intermediate/staging_trusted_root.json"
@@ -453,7 +458,7 @@ mod tests {
         // The canonical flow: the issuer comes from the verified chain, then SCT
         // verification uses it. Before the fix, SCT verification returned
         // Err("SCT signature verification failed: ... signature invalid").
-        let issuer_spki = verify_certificate_chain(material, VALIDATION_TIME, &trusted_root)
+        let issuer_spki = verify_certificate_chain(material, validation_time, &trusted_root)
             .expect("certificate chain should verify against the staging root");
         let cert = extract_certificate(material).unwrap();
         super::super::sct::verify_sct(cert.as_bytes(), issuer_spki.as_bytes(), &trusted_root)
