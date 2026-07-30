@@ -22,20 +22,18 @@ use sigstore_types::{Bundle, SignatureBytes, TransparencyLogEntry};
 /// - the inclusion promise (SET), if present.
 ///
 /// It also validates the entry's integrated time against the certificate
-/// validity window.
+/// validity window and the current time.
 ///
 /// # Arguments
 /// * `bundle` - The bundle containing transparency log entries
 /// * `trusted_root` - Trusted root for cryptographic verification
 /// * `not_before` - Certificate validity start time (Unix timestamp)
 /// * `not_after` - Certificate validity end time (Unix timestamp)
-/// * `clock_skew_seconds` - Tolerance in seconds for future time checks
 pub fn verify_tlog_entries(
     bundle: &Bundle,
     trusted_root: &TrustedRoot,
     not_before: i64,
     not_after: i64,
-    clock_skew_seconds: i64,
 ) -> Result<Option<i64>> {
     let mut integrated_time_result: Option<i64> = None;
 
@@ -46,35 +44,42 @@ pub fn verify_tlog_entries(
         // Validate integrated time (0 indicates missing/invalid time in v2 entries)
         let time = entry.integrated_time;
         if time > 0 {
-            // Check that integrated time is not in the future (with clock skew tolerance)
             let now = jiff::Timestamp::now().as_second();
-            if time > now + clock_skew_seconds {
-                return Err(Error::Verification(format!(
-                    "integrated time {} is in the future (current time: {}, tolerance: {}s)",
-                    time, now, clock_skew_seconds
-                )));
-            }
-
-            // Check that integrated time is within certificate validity period
-            if time < not_before {
-                return Err(Error::Verification(format!(
-                    "integrated time {} is before certificate validity (not_before: {})",
-                    time, not_before
-                )));
-            }
-
-            if time > not_after {
-                return Err(Error::Verification(format!(
-                    "integrated time {} is after certificate validity (not_after: {})",
-                    time, not_after
-                )));
-            }
-
+            validate_integrated_time(time, now, not_before, not_after)?;
             integrated_time_result = Some(time);
         }
     }
 
     Ok(integrated_time_result)
+}
+
+/// Validate an entry's integrated time: it must not be in the future and
+/// must fall within the certificate validity window.
+fn validate_integrated_time(time: i64, now: i64, not_before: i64, not_after: i64) -> Result<()> {
+    // Check that integrated time is not in the future
+    if time > now {
+        return Err(Error::Verification(format!(
+            "integrated time {} is in the future (current time: {})",
+            time, now
+        )));
+    }
+
+    // Check that integrated time is within certificate validity period
+    if time < not_before {
+        return Err(Error::Verification(format!(
+            "integrated time {} is before certificate validity (not_before: {})",
+            time, not_before
+        )));
+    }
+
+    if time > not_after {
+        return Err(Error::Verification(format!(
+            "integrated time {} is after certificate validity (not_after: {})",
+            time, not_after
+        )));
+    }
+
+    Ok(())
 }
 
 /// Cryptographically verify the log-inclusion material of a single tlog entry.
@@ -267,4 +272,25 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
         .map_err(|e| Error::Verification(format!("SET verification failed: {}", e)))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NOW: i64 = 1_700_000_000;
+    const NOT_BEFORE: i64 = NOW - 600;
+    const NOT_AFTER: i64 = NOW + 600;
+
+    #[test]
+    fn test_integrated_time_in_future_rejected() {
+        // Even one second in the future must be rejected.
+        let err = validate_integrated_time(NOW + 1, NOW, NOT_BEFORE, NOT_AFTER).unwrap_err();
+        assert!(err.to_string().contains("is in the future"));
+    }
+
+    #[test]
+    fn test_integrated_time_at_now_accepted() {
+        assert!(validate_integrated_time(NOW, NOW, NOT_BEFORE, NOT_AFTER).is_ok());
+    }
 }

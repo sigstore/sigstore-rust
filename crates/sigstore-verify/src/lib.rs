@@ -41,5 +41,4 @@ pub use sigstore_types as types;
 pub use error::{Error, Result};
 pub use verify::{
     verify, verify_with_key, CertificatePolicy, VerificationPolicy, VerificationResult, Verifier,
-    DEFAULT_CLOCK_SKEW_SECONDS,
 };
