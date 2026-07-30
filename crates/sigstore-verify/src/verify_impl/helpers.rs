@@ -64,22 +64,11 @@ pub fn extract_tsa_timestamps(
         let ts_bytes = ts.signed_timestamp.as_bytes();
 
         // Build verification options from trusted root
-        let mut opts = TsaVerifyOpts::new();
-
-        // Get TSA root certificates
-        if let Ok(tsa_roots) = trusted_root.tsa_root_certs() {
-            opts = opts.with_roots(tsa_roots);
-        }
-
-        // Get TSA intermediate certificates
-        if let Ok(tsa_intermediates) = trusted_root.tsa_intermediate_certs() {
-            opts = opts.with_intermediates(tsa_intermediates);
-        }
-
-        // Get ALL TSA leaf certificates (there may be multiple TSAs)
-        if let Ok(tsa_leaves) = trusted_root.tsa_leaf_certs() {
-            opts = opts.with_tsa_certificates(tsa_leaves);
-        }
+        let opts = TsaVerifyOpts::new()
+            .with_roots(trusted_root.tsa_root_certs())
+            .with_intermediates(trusted_root.tsa_intermediate_certs())
+            // There may be multiple TSAs, so pass every leaf certificate
+            .with_tsa_certificates(trusted_root.tsa_leaf_certs());
 
         // Verify the timestamp response with full cryptographic validation
         let result = verify_timestamp_response(ts_bytes, signature_bytes, opts).map_err(|e| {
@@ -87,15 +76,7 @@ pub fn extract_tsa_timestamps(
         })?;
 
         // Check that the timestamp falls within the TSA's validity period from the trust root
-        let within_validity = trusted_root
-            .is_timestamp_within_tsa_validity(result.time)
-            .map_err(|e| {
-                Error::Verification(format!(
-                    "invalid TSA validity period in trusted root: {}",
-                    e
-                ))
-            })?;
-        if !within_validity {
+        if !trusted_root.is_timestamp_within_tsa_validity(result.time) {
             return Err(Error::Verification(format!(
                 "TSA timestamp {} is outside the trust root's TSA validity period",
                 result.time
@@ -280,9 +261,7 @@ pub fn verify_certificate_chain(
     };
 
     // Get Fulcio certificates from trusted root to use as trust anchors
-    let fulcio_certs = trusted_root
-        .fulcio_certs()
-        .map_err(|e| Error::Verification(format!("failed to get Fulcio certs: {}", e)))?;
+    let fulcio_certs = trusted_root.fulcio_certs();
 
     if fulcio_certs.is_empty() {
         return Err(Error::Verification(
@@ -455,7 +434,6 @@ mod tests {
         use x509_cert::Certificate;
         let same_named_intermediates = trusted_root
             .fulcio_certs()
-            .unwrap()
             .iter()
             .filter_map(|der| Certificate::from_der(der).ok())
             .filter(|c| {

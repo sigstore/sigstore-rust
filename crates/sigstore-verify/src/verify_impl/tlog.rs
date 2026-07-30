@@ -180,9 +180,7 @@ pub fn verify_checkpoint(
     // only when it happened to be positioned before the matching key, so the
     // same trusted root could verify or fail depending on the order of its
     // `tlogs` array.
-    let rekor_keys = trusted_root
-        .rekor_keys()
-        .map_err(|e| Error::Verification(format!("Failed to get Rekor keys: {}", e)))?;
+    let rekor_keys = trusted_root.rekor_keys();
     let rekor_keys: Vec<_> = rekor_keys
         .iter()
         .map(|key| {

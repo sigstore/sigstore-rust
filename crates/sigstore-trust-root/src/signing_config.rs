@@ -33,10 +33,9 @@
 //! let config = SigningConfig::from_json(SIGSTORE_PRODUCTION_SIGNING_CONFIG).unwrap();
 //! ```
 
-use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, Result};
+use crate::{time_range::TimeRange, Error, Result};
 
 /// Embedded production signing config
 pub const SIGSTORE_PRODUCTION_SIGNING_CONFIG: &str =
@@ -58,32 +57,12 @@ pub const SUPPORTED_FULCIO_VERSIONS: &[u32] = &[1];
 /// Expected media type for signing config v0.2
 pub const SIGNING_CONFIG_MEDIA_TYPE: &str = "application/vnd.dev.sigstore.signingconfig.v0.2+json";
 
-/// Validity period for a service
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServiceValidityPeriod {
-    /// Start time of validity
-    pub start: Timestamp,
-    /// End time of validity (optional, None means still valid)
-    #[serde(default)]
-    pub end: Option<Timestamp>,
-}
-
-impl ServiceValidityPeriod {
-    /// Whether `time` falls within this validity period.
-    ///
-    /// Per the protobuf-specs `TimeRange` semantics the period is a closed
-    /// interval `[start, end]` (both bounds included); a missing `end` means
-    /// the period has started but has no known end.
-    pub fn contains(&self, time: Timestamp) -> bool {
-        crate::time_range::time_range_contains(self.start, self.end, time)
-    }
-
-    /// Check if this period is currently valid
-    pub fn is_valid(&self) -> bool {
-        self.contains(Timestamp::now())
-    }
-}
+/// Validity period for a service.
+///
+/// A signing config's `validFor` is an instance of the protobuf-specs
+/// `TimeRange` message, so this is an alias for [`TimeRange`] — the same type
+/// the trusted root uses for its validity periods.
+pub type ServiceValidityPeriod = TimeRange;
 
 /// A service endpoint configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -337,19 +316,24 @@ mod tests {
     }
 
     #[test]
-    fn test_service_validity_is_a_closed_interval() {
-        let start: Timestamp = "2020-01-01T00:00:00Z".parse().unwrap();
-        let end: Timestamp = "2021-01-01T00:00:00Z".parse().unwrap();
-        let period = ServiceValidityPeriod {
-            start,
-            end: Some(end),
-        };
+    fn test_service_endpoint_validity_is_a_time_range() {
+        // `ServiceValidityPeriod` is the protobuf-specs `TimeRange`; the
+        // containment semantics themselves are covered in `crate::time_range`.
+        let endpoint: ServiceEndpoint = serde_json::from_str(
+            r#"{
+                "url": "https://rekor.example.com",
+                "majorApiVersion": 1,
+                "validFor": {"start": "2020-01-01T00:00:00Z", "end": "2021-01-01T00:00:00Z"}
+            }"#,
+        )
+        .unwrap();
 
         // Both bounds are included per the TimeRange spec
-        assert!(period.contains(start));
-        assert!(period.contains(end));
-
-        assert!(!period.contains("2019-12-31T23:59:59Z".parse().unwrap()));
-        assert!(!period.contains("2021-01-01T00:00:01Z".parse().unwrap()));
+        assert!(endpoint.valid_for.contains(endpoint.valid_for.start));
+        assert!(endpoint.valid_for.contains(endpoint.valid_for.end.unwrap()));
+        assert!(!endpoint
+            .valid_for
+            .contains("2021-01-01T00:00:01Z".parse().unwrap()));
+        assert!(!endpoint.is_valid());
     }
 }
