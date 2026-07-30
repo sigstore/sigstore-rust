@@ -7,7 +7,7 @@ use crate::error::{Error, Result};
 use const_oid::db::rfc5912::ID_KP_CODE_SIGNING;
 use rustls_pki_types::{CertificateDer, UnixTime};
 use sigstore_crypto::CertificateInfo;
-use sigstore_trust_root::{TrustedRoot, TsaAuthorityChain};
+use sigstore_trust_root::{TrustedRoot, TsaAuthority};
 use sigstore_types::bundle::VerificationMaterialContent;
 use sigstore_types::{Bundle, DerCertificate, DerPublicKey, SignatureBytes, SignatureContent};
 use webpki::{anchor_from_trusted_cert, EndEntityCert, KeyUsage, ALL_VERIFICATION_ALGS};
@@ -66,9 +66,7 @@ pub fn extract_tsa_timestamps(
         return Ok(Vec::new());
     }
 
-    let authorities = trusted_root.tsa_authority_chains().map_err(|e| {
-        Error::Verification(format!("invalid TSA configuration in trusted root: {}", e))
-    })?;
+    let authorities = trusted_root.tsa_authorities();
 
     let mut timestamps = Vec::new();
 
@@ -89,18 +87,15 @@ pub fn extract_tsa_timestamps(
 ///
 /// Each authority is tried in isolation: the CMS signer certificate must be
 /// that authority's leaf and the chain must terminate at that authority's
-/// root. On success, ONLY that authority's `valid_for` window is consulted
-/// (an absent window is unrestricted, matching [`ValidityPeriod::contains`]
-/// semantics used elsewhere). A token whose signing authority's window
-/// excludes the signed time is NOT rescued by another authority's window: it
-/// is only accepted if some authority both cryptographically verified it and
-/// temporally authorizes it.
-///
-/// [`ValidityPeriod::contains`]: sigstore_trust_root::ValidityPeriod::contains
+/// root. On success, ONLY that authority's window is consulted (via
+/// [`TsaAuthority::authorizes`]; an absent window is unrestricted). A token
+/// whose signing authority's window excludes the signed time is NOT rescued
+/// by another authority's window: it is only accepted if some authority both
+/// cryptographically verified it and temporally authorizes it.
 fn verify_timestamp_against_authorities(
     ts_bytes: &[u8],
     signature_bytes: &[u8],
-    authorities: &[TsaAuthorityChain],
+    authorities: &[TsaAuthority],
 ) -> Result<jiff::Timestamp> {
     use sigstore_tsa::{verify_timestamp_response, VerifyOpts as TsaVerifyOpts};
 
@@ -109,11 +104,11 @@ fn verify_timestamp_against_authorities(
     let mut rejected_time = None;
     let mut last_error: Option<String> = None;
 
-    for (leaf, intermediates, root, valid_for) in authorities {
+    for authority in authorities {
         let opts = TsaVerifyOpts::new()
-            .with_root(root.clone())
-            .with_intermediates(intermediates.clone())
-            .with_tsa_certificates(vec![leaf.clone()]);
+            .with_root(authority.root.clone())
+            .with_intermediates(authority.intermediates.clone())
+            .with_tsa_certificates(vec![authority.leaf.clone()]);
 
         let result = match verify_timestamp_response(ts_bytes, signature_bytes, opts) {
             Ok(result) => result,
@@ -125,17 +120,7 @@ fn verify_timestamp_against_authorities(
 
         // The token is cryptographically bound to this authority: consult
         // only this authority's validity window.
-        let within_validity = match valid_for {
-            None => true,
-            Some(period) => period.contains(result.time).map_err(|e| {
-                Error::Verification(format!(
-                    "invalid TSA validity period in trusted root: {}",
-                    e
-                ))
-            })?,
-        };
-
-        if within_validity {
+        if authority.authorizes(result.time) {
             return Ok(result.time);
         }
         rejected_time = Some(result.time);
@@ -327,9 +312,7 @@ pub fn verify_certificate_chain(
     };
 
     // Get Fulcio certificates from trusted root to use as trust anchors
-    let fulcio_certs = trusted_root
-        .fulcio_certs()
-        .map_err(|e| Error::Verification(format!("failed to get Fulcio certs: {}", e)))?;
+    let fulcio_certs = trusted_root.fulcio_certs();
 
     if fulcio_certs.is_empty() {
         return Err(Error::Verification(
@@ -484,7 +467,6 @@ mod tests {
         use x509_cert::Certificate;
         let same_named_intermediates = trusted_root
             .fulcio_certs()
-            .unwrap()
             .iter()
             .filter_map(|der| Certificate::from_der(der).ok())
             .filter(|c| {
@@ -532,7 +514,8 @@ mod tests {
         fn verify_bundle_timestamp(root: &TrustedRoot) -> Result<Option<i64>> {
             let bundle = Bundle::from_json(TSA_BUNDLE).unwrap();
             let signature = extract_signature(&bundle.content).unwrap();
-            extract_tsa_timestamp(&bundle, signature.as_bytes(), root)
+            let timestamps = extract_tsa_timestamps(&bundle, signature.as_bytes(), root)?;
+            Ok(timestamps.first().map(|t| t.as_second()))
         }
 
         /// The token's signed time (whole seconds; the fixture's genTime has
@@ -689,10 +672,12 @@ mod tests {
             let bundle = Bundle::from_json(GITHUB_TSA_BUNDLE).unwrap();
             let signature = extract_signature(&bundle.content).unwrap();
             let root = TrustedRoot::from_json(GITHUB_TRUSTED_ROOT).unwrap();
-            let time = extract_tsa_timestamp(&bundle, signature.as_bytes(), &root)
-                .expect("GitHub bundle timestamp should verify")
+            let timestamps = extract_tsa_timestamps(&bundle, signature.as_bytes(), &root)
+                .expect("GitHub bundle timestamp should verify");
+            let time = timestamps
+                .first()
                 .expect("GitHub bundle carries a timestamp");
-            assert!(time > 0);
+            assert!(time.as_second() > 0);
         }
     }
 }
