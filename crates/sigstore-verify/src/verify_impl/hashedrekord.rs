@@ -188,17 +188,10 @@ fn validate_signature_match(
                 }
             }
             SignatureContent::DsseEnvelope(envelope) => {
-                // Compare against the first DSSE envelope signature
-                if let Some(first_sig) = envelope.signatures.first() {
-                    if &first_sig.sig != rekor_sig {
-                        return Err(Error::Verification(
-                            "DSSE signature in bundle does not match signature in Rekor entry"
-                                .to_string(),
-                        ));
-                    }
-                } else {
+                if &envelope.signature.sig != rekor_sig {
                     return Err(Error::Verification(
-                        "No signatures found in DSSE envelope".to_string(),
+                        "DSSE signature in bundle does not match signature in Rekor entry"
+                            .to_string(),
                     ));
                 }
             }

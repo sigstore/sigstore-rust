@@ -7,15 +7,22 @@ use crate::encoding::{KeyId, PayloadBytes, SignatureBytes};
 use serde::{Deserialize, Serialize};
 
 /// A DSSE envelope containing a signed payload
+///
+/// The DSSE wire format carries a `signatures` list, but a DSSE envelope in a
+/// Sigstore bundle must contain exactly one signature: the bundle's
+/// verification material (certificate, timestamps, log entries) vouches for a
+/// single signature, so every verification step must consume the same
+/// signature bytes. This type enforces that invariant at deserialization,
+/// making multi-signature envelopes unrepresentable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(try_from = "DsseEnvelopeWire", into = "DsseEnvelopeWire")]
 pub struct DsseEnvelope {
     /// Type URI of the payload
     pub payload_type: String,
     /// Payload bytes
     pub payload: PayloadBytes,
-    /// Signatures over the PAE (Pre-Authentication Encoding)
-    pub signatures: Vec<DsseSignature>,
+    /// The signature over the PAE (Pre-Authentication Encoding)
+    pub signature: DsseSignature,
 }
 
 /// A signature in a DSSE envelope
@@ -29,17 +36,50 @@ pub struct DsseSignature {
     pub keyid: KeyId,
 }
 
+/// The DSSE wire format, where `signatures` is a list
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DsseEnvelopeWire {
+    payload_type: String,
+    payload: PayloadBytes,
+    signatures: Vec<DsseSignature>,
+}
+
+impl TryFrom<DsseEnvelopeWire> for DsseEnvelope {
+    type Error = String;
+
+    fn try_from(wire: DsseEnvelopeWire) -> Result<Self, Self::Error> {
+        match <[DsseSignature; 1]>::try_from(wire.signatures) {
+            Ok([signature]) => Ok(Self {
+                payload_type: wire.payload_type,
+                payload: wire.payload,
+                signature,
+            }),
+            Err(signatures) => Err(format!(
+                "DSSE envelope must contain exactly one signature, found {}",
+                signatures.len()
+            )),
+        }
+    }
+}
+
+impl From<DsseEnvelope> for DsseEnvelopeWire {
+    fn from(envelope: DsseEnvelope) -> Self {
+        Self {
+            payload_type: envelope.payload_type,
+            payload: envelope.payload,
+            signatures: vec![envelope.signature],
+        }
+    }
+}
+
 impl DsseEnvelope {
     /// Create a new DSSE envelope
-    pub fn new(
-        payload_type: String,
-        payload: PayloadBytes,
-        signatures: Vec<DsseSignature>,
-    ) -> Self {
+    pub fn new(payload_type: String, payload: PayloadBytes, signature: DsseSignature) -> Self {
         Self {
             payload_type,
             payload,
-            signatures,
+            signature,
         }
     }
 
@@ -99,15 +139,39 @@ mod tests {
         let envelope = DsseEnvelope {
             payload_type: "application/vnd.in-toto+json".to_string(),
             payload: PayloadBytes::from_bytes(b"{\"_type\":\"https://in-toto.io/Statement/v1\"}"),
-            signatures: vec![DsseSignature {
+            signature: DsseSignature {
                 sig: SignatureBytes::from_bytes(b"\x30\x44\x02\x20"),
                 keyid: KeyId::default(),
-            }],
+            },
         };
 
         let json = serde_json::to_string(&envelope).unwrap();
+        // The wire format carries the signature as a one-element list
+        assert!(
+            json.contains(r#""signatures":[{"#),
+            "unexpected wire format: {json}"
+        );
         let parsed: DsseEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(envelope, parsed);
+    }
+
+    /// Envelopes with any signature count other than one are rejected at
+    /// parse time.
+    #[test]
+    fn test_dsse_envelope_rejects_non_single_signatures() {
+        let no_signatures = r#"{"payloadType":"application/vnd.in-toto+json","payload":"dGVzdA==","signatures":[]}"#;
+        let err = serde_json::from_str::<DsseEnvelope>(no_signatures).unwrap_err();
+        assert!(
+            err.to_string().contains("exactly one signature, found 0"),
+            "unexpected error: {err}"
+        );
+
+        let two_signatures = r#"{"payloadType":"application/vnd.in-toto+json","payload":"dGVzdA==","signatures":[{"sig":"c2ln"},{"sig":"c2ln"}]}"#;
+        let err = serde_json::from_str::<DsseEnvelope>(two_signatures).unwrap_err();
+        assert!(
+            err.to_string().contains("exactly one signature, found 2"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -116,7 +180,7 @@ mod tests {
         let json_with_empty_keyid = r#"{"payloadType":"application/vnd.in-toto+json","payload":"dGVzdA==","signatures":[{"sig":"c2ln","keyid":""}]}"#;
 
         let envelope: DsseEnvelope = serde_json::from_str(json_with_empty_keyid).unwrap();
-        assert_eq!(envelope.signatures[0].keyid, KeyId::default());
+        assert_eq!(envelope.signature.keyid, KeyId::default());
 
         let reserialized = serde_json::to_string(&envelope).unwrap();
         assert!(
@@ -127,7 +191,7 @@ mod tests {
         // Test that missing keyid deserializes to default
         let json_without_keyid = r#"{"payloadType":"application/vnd.in-toto+json","payload":"dGVzdA==","signatures":[{"sig":"c2ln"}]}"#;
         let envelope_no_keyid: DsseEnvelope = serde_json::from_str(json_without_keyid).unwrap();
-        assert_eq!(envelope_no_keyid.signatures[0].keyid, KeyId::default());
+        assert_eq!(envelope_no_keyid.signature.keyid, KeyId::default());
 
         // Test with non-empty keyid - should be preserved
         let json_with_keyid = r#"{"payloadType":"application/vnd.in-toto+json","payload":"dGVzdA==","signatures":[{"sig":"c2ln","keyid":"test-key"}]}"#;

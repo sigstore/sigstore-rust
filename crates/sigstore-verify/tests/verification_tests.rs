@@ -107,7 +107,7 @@ fn test_parse_v03_dsse_bundle() {
     match &bundle.content {
         sigstore_verify::types::SignatureContent::DsseEnvelope(env) => {
             assert_eq!(env.payload_type, "application/vnd.in-toto+json");
-            assert!(!env.signatures.is_empty());
+            assert!(!env.signature.sig.as_bytes().is_empty());
         }
         _ => panic!("Expected DSSE envelope"),
     }
@@ -513,7 +513,7 @@ fn test_parse_dsse_bundle_from_python() {
     match &bundle.content {
         sigstore_verify::types::SignatureContent::DsseEnvelope(env) => {
             assert_eq!(env.payload_type, "application/vnd.in-toto+json");
-            assert_eq!(env.signatures.len(), 1, "Should have exactly 1 signature");
+            assert!(!env.signature.sig.as_bytes().is_empty());
         }
         _ => panic!("Expected DSSE envelope"),
     }
@@ -524,19 +524,21 @@ fn test_parse_dsse_bundle_from_python() {
     assert_eq!(entry.kind_version.kind, "intoto");
 }
 
+/// Regression test for TOB-SIGSTORE-9: DSSE bundles with multiple signatures
+/// are rejected at parse time — the `DsseEnvelope` type only admits a single
+/// signature, so no verification path (payload, timestamp, Rekor
+/// consistency) can ever consume different signatures.
+/// Equivalent to sigstore-go's TestSigstoreBundle2Sig, which expects
+/// ErrDSSEInvalidSignatureCount (at verification time; we are stricter and
+/// reject when parsing the bundle).
 #[test]
-fn test_parse_dsse_bundle_with_multiple_signatures() {
-    // DSSE bundle with 2 signatures
-    let bundle = Bundle::from_json(DSSE_2SIGS_BUNDLE).expect("Failed to parse DSSE 2-sigs bundle");
-
-    // Check DSSE envelope has multiple signatures
-    match &bundle.content {
-        sigstore_verify::types::SignatureContent::DsseEnvelope(env) => {
-            assert_eq!(env.payload_type, "application/vnd.in-toto+json");
-            assert_eq!(env.signatures.len(), 2, "Should have exactly 2 signatures");
-        }
-        _ => panic!("Expected DSSE envelope"),
-    }
+fn test_dsse_bundle_with_2_signatures_rejected_at_parse() {
+    let err = Bundle::from_json(DSSE_2SIGS_BUNDLE)
+        .expect_err("multi-signature DSSE bundles must fail to parse");
+    assert!(
+        err.to_string().contains("exactly one signature"),
+        "expected the single-signature invariant to be the failure cause, got: {err}"
+    );
 }
 
 #[test]
@@ -596,36 +598,6 @@ fn test_bundle_v03_certificate_extraction() {
 }
 
 // ==== Sigstore-go Equivalent Tests ====
-
-/// Test that DSSE bundles with multiple signatures fail verification
-/// Equivalent to sigstore-go's TestSigstoreBundle2Sig which expects ErrDSSEInvalidSignatureCount
-#[test]
-fn test_dsse_bundle_with_2_signatures_should_fail() {
-    let bundle = Bundle::from_json(DSSE_2SIGS_BUNDLE).expect("Failed to parse DSSE 2-sigs bundle");
-
-    // Verify the bundle has 2 signatures
-    match &bundle.content {
-        sigstore_verify::types::SignatureContent::DsseEnvelope(env) => {
-            assert_eq!(env.signatures.len(), 2, "Bundle should have 2 signatures");
-        }
-        _ => panic!("Expected DSSE envelope"),
-    }
-
-    // Verification should fail because we only support single signatures
-    // Use extracted digest or dummy - doesn't matter since validation should fail first
-    let artifact_digest =
-        extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::from_bytes([0u8; 32]));
-    let policy = VerificationPolicy::default();
-
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
-
-    // This should fail - multiple signatures are not supported
-    // sigstore-go returns ErrDSSEInvalidSignatureCount for this case
-    assert!(
-        result.is_err(),
-        "Verification should fail for bundles with multiple signatures"
-    );
-}
 
 /// Test GitHub Actions provenance bundle certificate extension extraction
 /// Equivalent to sigstore-go's TestSummarizeCertificateWithActionsBundle
@@ -901,7 +873,7 @@ fn test_parse_conda_attestation_bundle() {
                 env.payload_type, "application/vnd.in-toto+json",
                 "Should have in-toto payload type"
             );
-            assert_eq!(env.signatures.len(), 1, "Should have exactly 1 signature");
+            assert!(!env.signature.sig.as_bytes().is_empty());
 
             // Decode payload and verify it's a conda attestation
             let payload_bytes = env.decode_payload();

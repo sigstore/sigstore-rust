@@ -279,7 +279,7 @@ impl Verifier {
         // validate the certificate chain, so this step comes first.
         // These include TSA timestamps and (in the case of rekor v1 entries)
         // rekor log integrated time.
-        let signature = crate::verify_impl::helpers::extract_signature(&bundle.content)?;
+        let signature = crate::verify_impl::helpers::extract_signature(&bundle.content);
         let validation_times = crate::verify_impl::helpers::determine_validation_times(
             bundle,
             &signature,
@@ -391,32 +391,11 @@ impl Verifier {
         //      public key.
         // For DSSE envelopes, verify using PAE (Pre-Authentication Encoding)
         if let SignatureContent::DsseEnvelope(envelope) = &bundle.content {
-            let payload_bytes = envelope.decode_payload();
-
-            // Compute the PAE that was signed
-            let pae = sigstore_types::pae(&envelope.payload_type, &payload_bytes);
-
-            // Verify at least one signature is cryptographically valid
-            let mut any_sig_valid = false;
-            for sig in &envelope.signatures {
-                if sigstore_crypto::verify_signature(
-                    &cert_info.public_key,
-                    &pae,
-                    &sig.sig,
-                    cert_info.key_algorithm.default_signing_scheme(),
-                )
-                .is_ok()
-                {
-                    any_sig_valid = true;
-                    break;
-                }
-            }
-
-            if !any_sig_valid {
-                return Err(Error::Verification(
-                    "DSSE signature verification failed: no valid signatures found".to_string(),
-                ));
-            }
+            verify_dsse_envelope_signature(
+                envelope,
+                &cert_info.public_key,
+                cert_info.key_algorithm.default_signing_scheme(),
+            )?;
 
             // Verify the payload binds the artifact
             verify_dsse_artifact_binding(envelope, &artifact)?;
@@ -477,6 +456,20 @@ fn compute_artifact_digest_algo(artifact: &Artifact<'_>, algo: HashAlgorithm) ->
             Ok(hash.to_vec())
         }
     }
+}
+
+/// Verify the DSSE envelope's signature over its PAE with the given key.
+fn verify_dsse_envelope_signature(
+    envelope: &sigstore_types::DsseEnvelope,
+    public_key: &sigstore_types::DerPublicKey,
+    scheme: SigningScheme,
+) -> Result<()> {
+    // Compute the PAE that was signed
+    let payload_bytes = envelope.decode_payload();
+    let pae = sigstore_types::pae(&envelope.payload_type, &payload_bytes);
+
+    sigstore_crypto::verify_signature(public_key, &pae, &envelope.signature.sig, scheme)
+        .map_err(|e| Error::Verification(format!("DSSE signature verification failed: {}", e)))
 }
 
 /// Verify that a DSSE envelope's payload binds the artifact being verified.
@@ -750,25 +743,7 @@ pub fn verify_with_key<'a>(
             )?;
         }
         SignatureContent::DsseEnvelope(envelope) => {
-            let payload_bytes = envelope.decode_payload();
-            let pae = sigstore_types::pae(&envelope.payload_type, &payload_bytes);
-
-            // Verify at least one signature is valid
-            let mut any_sig_valid = false;
-            for sig in &envelope.signatures {
-                if sigstore_crypto::verify_signature(public_key, &pae, &sig.sig, signing_scheme)
-                    .is_ok()
-                {
-                    any_sig_valid = true;
-                    break;
-                }
-            }
-
-            if !any_sig_valid {
-                return Err(Error::Verification(
-                    "DSSE signature verification failed: no valid signatures found".to_string(),
-                ));
-            }
+            verify_dsse_envelope_signature(envelope, public_key, signing_scheme)?;
 
             // Verify the payload binds the artifact
             verify_dsse_artifact_binding(envelope, &artifact)?;
@@ -846,11 +821,18 @@ mod tests {
         );
     }
 
+    fn unused_signature() -> sigstore_types::DsseSignature {
+        sigstore_types::DsseSignature {
+            sig: sigstore_types::SignatureBytes::from_bytes(b"unused"),
+            keyid: sigstore_types::KeyId::default(),
+        }
+    }
+
     fn in_toto_envelope(payload: &str) -> sigstore_types::DsseEnvelope {
         sigstore_types::DsseEnvelope::new(
             "application/vnd.in-toto+json".to_string(),
             sigstore_types::PayloadBytes::from_bytes(payload.as_bytes()),
-            vec![],
+            unused_signature(),
         )
     }
 
@@ -898,11 +880,54 @@ mod tests {
         let envelope = sigstore_types::DsseEnvelope::new(
             "application/vnd.example+json".to_string(),
             sigstore_types::PayloadBytes::from_bytes(b"{}"),
-            vec![],
+            unused_signature(),
         );
 
         let artifact = Artifact::from(b"hello world".as_slice());
         let err = verify_dsse_artifact_binding(&envelope, &artifact).unwrap_err();
         assert!(err.to_string().contains("unsupported DSSE payload type"));
+    }
+
+    const DSSE_TEST_PAYLOAD: &[u8] = br#"{"hello":"world"}"#;
+
+    fn dsse_envelope_signed_over(
+        keypair: &sigstore_crypto::KeyPair,
+        data: &[u8],
+    ) -> sigstore_types::DsseEnvelope {
+        sigstore_types::DsseEnvelope::new(
+            "application/vnd.in-toto+json".to_string(),
+            sigstore_types::PayloadBytes::from_bytes(DSSE_TEST_PAYLOAD),
+            sigstore_types::DsseSignature {
+                sig: keypair.sign(data).unwrap(),
+                keyid: sigstore_types::KeyId::default(),
+            },
+        )
+    }
+
+    #[test]
+    fn test_dsse_envelope_valid_signature_verifies() {
+        let keypair = sigstore_crypto::KeyPair::generate_ecdsa_p256().unwrap();
+        let pae = sigstore_types::pae("application/vnd.in-toto+json", DSSE_TEST_PAYLOAD);
+        let envelope = dsse_envelope_signed_over(&keypair, &pae);
+
+        let public_key = keypair.public_key_der().unwrap();
+        verify_dsse_envelope_signature(&envelope, &public_key, keypair.default_scheme())
+            .expect("an envelope with a valid signature must verify");
+    }
+
+    #[test]
+    fn test_dsse_envelope_invalid_signature_is_hard_error() {
+        let keypair = sigstore_crypto::KeyPair::generate_ecdsa_p256().unwrap();
+        // Signature over something other than the PAE: must fail.
+        let envelope = dsse_envelope_signed_over(&keypair, b"not the PAE");
+
+        let public_key = keypair.public_key_der().unwrap();
+        let err = verify_dsse_envelope_signature(&envelope, &public_key, keypair.default_scheme())
+            .expect_err("an invalid signature must fail verification");
+        assert!(
+            err.to_string()
+                .contains("DSSE signature verification failed"),
+            "unexpected error: {err}"
+        );
     }
 }

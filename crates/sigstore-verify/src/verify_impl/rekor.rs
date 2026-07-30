@@ -139,43 +139,29 @@ fn verify_dsse_v001(
         VerificationMaterialContent::PublicKey { .. } => None,
     };
 
-    // Verify that the signatures in the bundle match what's in Rekor
+    // Verify that the signature in the bundle matches what's in Rekor
     // This prevents signature substitution attacks
     // IMPORTANT: We must verify BOTH the signature bytes AND the verifier (certificate)
-    if envelope.signatures.len() != rekor_signatures.len() {
+    // The bundle's envelope holds exactly one signature by construction.
+    if rekor_signatures.len() != 1 {
         return Err(Error::Verification(format!(
-            "DSSE signature count mismatch: bundle has {}, Rekor entry has {}",
-            envelope.signatures.len(),
+            "DSSE signature count mismatch: bundle has 1, Rekor entry has {}",
             rekor_signatures.len()
         )));
     }
+    let rekor_sig = &rekor_signatures[0];
 
-    // Check that each signature in the bundle exists in the Rekor entry
-    // We must match both the signature AND the verifier to prevent signature substitution
-    for bundle_sig in &envelope.signatures {
-        let mut found = false;
-        for rekor_sig in rekor_signatures {
-            if bundle_sig.sig.as_bytes() != rekor_sig.signature.as_bytes() {
-                continue;
-            }
-            match &bundle_cert {
-                Some(cert) => {
-                    // Convert Rekor's PEM verifier to DER for canonical comparison
-                    let rekor_cert_der = rekor_sig
-                        .to_certificate()
-                        .map_err(|e| Error::Verification(format!("{}", e)))?;
-                    if cert.as_bytes() == rekor_cert_der.as_bytes() {
-                        found = true;
-                        break;
-                    }
-                }
-                None => {
-                    found = true;
-                    break;
-                }
-            }
-        }
-        if !found {
+    if envelope.signature.sig.as_bytes() != rekor_sig.signature.as_bytes() {
+        return Err(Error::Verification(
+            "DSSE signature in bundle does not match any signature in Rekor entry (signature or verifier mismatch)".to_string(),
+        ));
+    }
+    if let Some(cert) = &bundle_cert {
+        // Convert Rekor's PEM verifier to DER for canonical comparison
+        let rekor_cert_der = rekor_sig
+            .to_certificate()
+            .map_err(|e| Error::Verification(format!("{}", e)))?;
+        if cert.as_bytes() != rekor_cert_der.as_bytes() {
             return Err(Error::Verification(
                 "DSSE signature in bundle does not match any signature in Rekor entry (signature or verifier mismatch)".to_string(),
             ));
@@ -221,23 +207,16 @@ fn verify_intoto_v002(
         ));
     }
 
-    // Validate that the signatures match
+    // Validate that the bundle's single signature is present in the Rekor entry
     let mut found_match = false;
-    for bundle_sig in &envelope.signatures {
-        for rekor_sig in rekor_signatures {
-            // The Rekor signature is also double-base64-encoded, decode it once
-            let rekor_sig_decoded = base64::engine::general_purpose::STANDARD
-                .decode(rekor_sig.sig.as_bytes())
-                .map_err(|e| {
-                    Error::Verification(format!("failed to decode Rekor signature: {}", e))
-                })?;
+    for rekor_sig in rekor_signatures {
+        // The Rekor signature is also double-base64-encoded, decode it once
+        let rekor_sig_decoded = base64::engine::general_purpose::STANDARD
+            .decode(rekor_sig.sig.as_bytes())
+            .map_err(|e| Error::Verification(format!("failed to decode Rekor signature: {}", e)))?;
 
-            if bundle_sig.sig.as_bytes() == rekor_sig_decoded.as_slice() {
-                found_match = true;
-                break;
-            }
-        }
-        if found_match {
+        if envelope.signature.sig.as_bytes() == rekor_sig_decoded.as_slice() {
+            found_match = true;
             break;
         }
     }

@@ -31,17 +31,14 @@ pub fn extract_certificate(
 }
 
 /// Extract signature from bundle content (needed for TSA verification)
-pub fn extract_signature(content: &SignatureContent) -> Result<SignatureBytes> {
+///
+/// `DsseEnvelope` holds exactly one signature by construction, so the
+/// signature handed to timestamp verification is necessarily the same one
+/// that payload verification consumes (TOB-SIGSTORE-9).
+pub fn extract_signature(content: &SignatureContent) -> SignatureBytes {
     match content {
-        SignatureContent::MessageSignature(msg_sig) => Ok(msg_sig.signature.clone()),
-        SignatureContent::DsseEnvelope(envelope) => {
-            if envelope.signatures.is_empty() {
-                return Err(Error::Verification(
-                    "no signatures in DSSE envelope".to_string(),
-                ));
-            }
-            Ok(envelope.signatures[0].sig.clone())
-        }
+        SignatureContent::MessageSignature(msg_sig) => msg_sig.signature.clone(),
+        SignatureContent::DsseEnvelope(envelope) => envelope.signature.sig.clone(),
     }
 }
 
@@ -390,7 +387,7 @@ mod tests {
             "../../test_data/bundles/cosign-v3-blob.sigstore.json"
         ))
         .unwrap();
-        let signature = extract_signature(&bundle.content).unwrap();
+        let signature = extract_signature(&bundle.content);
 
         let times = determine_validation_times(&bundle, &signature, &trusted_root).unwrap();
 
@@ -403,6 +400,24 @@ mod tests {
             .integrated_time
             .unwrap();
         assert!(times.contains(&integrated_time));
+    }
+
+    /// The signature handed to TSA timestamp verification is the envelope's
+    /// single signature.
+    #[test]
+    fn extract_signature_returns_the_dsse_signature() {
+        let content = SignatureContent::DsseEnvelope(sigstore_types::DsseEnvelope::new(
+            "application/vnd.in-toto+json".to_string(),
+            sigstore_types::PayloadBytes::from_bytes(b"{}"),
+            sigstore_types::DsseSignature {
+                sig: SignatureBytes::from_bytes(b"signature-0"),
+                keyid: sigstore_types::KeyId::default(),
+            },
+        ));
+        assert_eq!(
+            extract_signature(&content),
+            SignatureBytes::from_bytes(b"signature-0")
+        );
     }
 
     /// Regression test for the Sigstore staging multi-region rollout (July 2026).
