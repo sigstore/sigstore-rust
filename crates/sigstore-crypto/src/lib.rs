@@ -11,10 +11,7 @@ pub mod signing;
 pub mod verification;
 pub mod x509;
 
-pub use checkpoint::{
-    compute_key_hint, detect_key_type, extract_raw_key, verify_ecdsa_p256, verify_ed25519,
-    verify_signature_auto, Checkpoint, CheckpointSignature, CheckpointVerifyExt, KeyType,
-};
+pub use checkpoint::{compute_key_hint, Checkpoint, CheckpointSignature, CheckpointVerifyExt};
 pub use error::{Error, Result};
 pub use hash::{sha256, sha256_reader, sha384, sha512, Sha256Hasher};
 pub use keyring::Keyring;

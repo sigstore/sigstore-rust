@@ -22,7 +22,6 @@ base64 = { workspace = true }
 pem = { workspace = true }
 x509-cert = { workspace = true }
 jiff = { workspace = true }
-tracing = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }
