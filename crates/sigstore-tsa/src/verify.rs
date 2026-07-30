@@ -40,6 +40,11 @@ pub struct VerifyOpts<'a> {
 
     /// TSA certificates (optional if embedded in timestamp)
     /// Multiple certificates can be provided to support multiple TSAs
+    ///
+    /// When non-empty, the CMS signer certificate MUST match one of these
+    /// certificates. This pins the timestamp to a known TSA identity: a
+    /// token whose signer merely chains to a trusted root via embedded
+    /// certificates is rejected unless the signer itself is listed here.
     pub tsa_certificates: Vec<CertificateDer<'a>>,
 }
 
@@ -315,6 +320,29 @@ fn verify_cms_signature(
 
     // Find the signer certificate
     let signer_cert = find_signer_certificate(&signer_info.sid, &all_certs)?;
+
+    // When the caller pinned specific TSA certificates, the CMS signer must be
+    // one of them. Finding the signer among the token's embedded certificates
+    // is not enough to attribute the timestamp to a specific configured
+    // authority: a token can embed arbitrary certificates (TOB-SIGSTORE-11).
+    if !opts.tsa_certificates.is_empty() {
+        use x509_cert::der::Encode;
+        let signer_der = signer_cert.to_der().map_err(|e| {
+            Error::SignatureVerificationError(format!(
+                "failed to encode signer certificate to DER: {}",
+                e
+            ))
+        })?;
+        if !opts
+            .tsa_certificates
+            .iter()
+            .any(|cert| cert.as_ref() == signer_der.as_slice())
+        {
+            return Err(Error::SignatureVerificationError(
+                "CMS signer certificate does not match any provided TSA certificate".to_string(),
+            ));
+        }
+    }
 
     // Get signed attributes and verify the message-digest attribute
     let signed_attrs = signer_info.signed_attrs.as_ref().ok_or_else(|| {
@@ -748,6 +776,62 @@ mod tests {
             }
             other => panic!(
                 "Expected CertificateValidationError error, got: {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_verify_timestamp_accepts_pinned_signer_certificate() {
+        let timestamp_token = extract_timestamp_token(VALID_BUNDLE);
+        let signature = extract_signature(VALID_BUNDLE);
+
+        let tsa_certs = extract_tsa_certs(VALID_TRUSTED_ROOT);
+        // The chain is leaf-first: pin the CMS signer to the leaf.
+        let leaf = tsa_certs.first().unwrap().clone();
+        let root = tsa_certs.last().unwrap().clone();
+        let intermediates: Vec<_> = tsa_certs[1..tsa_certs.len() - 1].to_vec();
+
+        let opts = VerifyOpts::new()
+            .with_root(root)
+            .with_intermediates(intermediates)
+            .with_tsa_certificates(vec![leaf]);
+
+        let result = verify_timestamp_response(&timestamp_token, &signature, opts);
+        assert!(
+            result.is_ok(),
+            "Timestamp signed by the pinned certificate should verify: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_verify_timestamp_rejects_signer_not_in_pinned_certificates() {
+        let timestamp_token = extract_timestamp_token(VALID_BUNDLE);
+        let signature = extract_signature(VALID_BUNDLE);
+
+        let tsa_certs = extract_tsa_certs(VALID_TRUSTED_ROOT);
+        let root = tsa_certs.last().unwrap().clone();
+        let intermediates: Vec<_> = tsa_certs[..tsa_certs.len() - 1].to_vec();
+
+        // Pin to the root certificate only: the actual CMS signer is the
+        // embedded leaf, so pinning must reject the token even though the
+        // signer chains to the trusted root.
+        let opts = VerifyOpts::new()
+            .with_root(root.clone())
+            .with_intermediates(intermediates)
+            .with_tsa_certificates(vec![root]);
+
+        let result = verify_timestamp_response(&timestamp_token, &signature, opts);
+        match result.unwrap_err() {
+            Error::SignatureVerificationError(msg) => {
+                assert!(
+                    msg.contains("does not match any provided TSA certificate"),
+                    "unexpected message: {msg}"
+                );
+            }
+            other => panic!(
+                "Expected SignatureVerificationError error, got: {:?}",
                 other
             ),
         }

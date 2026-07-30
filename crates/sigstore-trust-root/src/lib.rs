@@ -93,7 +93,7 @@ pub use signing_config::{
 pub use sigstore_types::TimeRange;
 pub use trusted_root::{
     CertificateAuthority, CertificateTransparencyLog, SigstoreInstance, TimestampAuthority,
-    TransparencyLog, TrustedRoot, ValidityPeriod, SIGSTORE_GITHUB_TRUSTED_ROOT,
+    TransparencyLog, TrustedRoot, TsaAuthorityChain, ValidityPeriod, SIGSTORE_GITHUB_TRUSTED_ROOT,
     SIGSTORE_PRODUCTION_TRUSTED_ROOT, SIGSTORE_STAGING_TRUSTED_ROOT,
 };
 
