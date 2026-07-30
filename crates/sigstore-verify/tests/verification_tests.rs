@@ -1100,9 +1100,9 @@ fn test_foreign_tlog_entry_rejected_even_when_tlog_skipped() {
     );
 }
 
-/// Production trusted root with an extra, malformed tlog entry inserted at
-/// `index` (its `keyId` is too short to yield a 4-byte checkpoint key hint).
-fn production_root_with_malformed_tlog_at(index: usize) -> TrustedRoot {
+/// Production trusted root with an extra tlog entry inserted at `index` whose
+/// `keyId` is too short to yield a 4-byte checkpoint key hint.
+fn production_root_with_unhintable_tlog_at(index: usize) -> TrustedRoot {
     let mut root: serde_json::Value =
         serde_json::from_str(SIGSTORE_PRODUCTION_TRUSTED_ROOT).unwrap();
     let tlogs = root["tlogs"].as_array_mut().unwrap();
@@ -1112,15 +1112,16 @@ fn production_root_with_malformed_tlog_at(index: usize) -> TrustedRoot {
     TrustedRoot::from_json(&serde_json::to_string(&root).unwrap()).unwrap()
 }
 
-/// A malformed Rekor log ID in the trusted root must produce the same
-/// outcome wherever it sits in the `tlogs` array.
+/// A Rekor log ID too short to yield a checkpoint key hint must produce the
+/// same outcome wherever it sits in the `tlogs` array.
 ///
 /// Checkpoint key hints used to be derived lazily inside the key-matching
-/// loop, so a log ID too short to yield a hint was fatal only when it
-/// preceded the matching key and invisible when it followed it - the same
-/// trusted root could verify or fail purely on array order.
+/// loop, so such an entry was fatal only when it preceded the matching key and
+/// invisible when it followed it - the same trusted root could verify or fail
+/// purely on array order. An entry with no derivable hint can never match a
+/// checkpoint signature, so it is skipped rather than failing the whole lookup.
 #[test]
-fn test_malformed_rekor_log_id_fails_regardless_of_position() {
+fn test_unhintable_rekor_log_id_is_ignored_regardless_of_position() {
     let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
     let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
     let policy = VerificationPolicy::default();
@@ -1135,25 +1136,20 @@ fn test_malformed_rekor_log_id_fails_regardless_of_position() {
         artifact,
         &bundle,
         &policy,
-        &production_root_with_malformed_tlog_at(0),
+        &production_root_with_unhintable_tlog_at(0),
     );
     let last = verify(
         artifact,
         &bundle,
         &policy,
-        &production_root_with_malformed_tlog_at(tlog_count),
+        &production_root_with_unhintable_tlog_at(tlog_count),
     );
 
     assert!(
-        first.is_err() && last.is_err(),
-        "malformed trust material must fail closed; got first={:?} last={:?}",
+        first.is_ok() && last.is_ok(),
+        "an entry with no derivable key hint must not affect verification; got first={:?} last={:?}",
         first.err(),
         last.err()
-    );
-    assert_eq!(
-        first.unwrap_err().to_string(),
-        last.unwrap_err().to_string(),
-        "outcome must not depend on the position of the malformed entry"
     );
 }
 
