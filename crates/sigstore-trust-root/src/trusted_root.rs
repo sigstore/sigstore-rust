@@ -4,8 +4,9 @@ use crate::{time_range::TimeRange, Error, Result};
 use jiff::Timestamp;
 use rustls_pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
+use sigstore_crypto::{SigningScheme, VerificationKey};
 use sigstore_types::{
-    DerCertificate, DerPublicKey, HashAlgorithm, KeyHint, LogId, LogKeyId, Sha256Hash,
+    DerCertificate, DerPublicKey, HashAlgorithm, KeyDetails, KeyHint, LogId, LogKeyId, Sha256Hash,
 };
 
 /// TSA certificate with its optional validity period
@@ -115,8 +116,8 @@ pub struct PublicKey {
     /// Raw bytes of the public key (DER-encoded)
     pub raw_bytes: DerPublicKey,
 
-    /// Key details/type
-    pub key_details: String,
+    /// The signature algorithm declared for this key
+    pub key_details: KeyDetails,
 
     /// Validity period for this key
     #[serde(default)]
@@ -162,11 +163,14 @@ pub struct CertificateEntry {
 /// the signing config uses for its service validity periods.
 pub type ValidityPeriod = TimeRange;
 
-/// A transparency log key (Rekor or CTFE) from the trusted root.
+/// A transparency log key (Rekor or CTFE) from the trusted root, parsed and
+/// ready to verify with.
 ///
-/// This is the single parsed representation for transparency key material;
-/// identifier forms needed by specific verification flows are derived from it
-/// via [`LogKey::key_hint`] and [`LogKey::computed_log_id`].
+/// The verification scheme comes from the trusted root's declared
+/// `keyDetails`, not from inspecting the key material, and the key/scheme
+/// consistency is checked when the key is parsed. The identifier forms needed
+/// by specific verification flows are precomputed ([`LogKey::key_hint`]) or
+/// derived ([`LogKey::computed_log_id`]).
 #[derive(Debug, Clone)]
 pub struct LogKey {
     /// The log's key ID as declared in the trusted root (the base64-encoded
@@ -174,24 +178,18 @@ pub struct LogKey {
     pub log_id: LogKeyId,
     /// The DER (SPKI)-encoded public key.
     pub public_key: DerPublicKey,
-}
-
-impl LogKey {
+    /// The verification key, using the scheme declared by `keyDetails`.
+    pub key: VerificationKey,
     /// The checkpoint key hint: the first 4 bytes of the decoded log ID.
     ///
     /// Checkpoint (signed note) signatures identify their signing key by this
-    /// hint.
-    pub fn key_hint(&self) -> Result<KeyHint> {
-        let bytes = self.log_id.decode()?;
-        if bytes.len() < 4 {
-            return Err(Error::InvalidKey(format!(
-                "log ID {} is shorter than a 4-byte key hint",
-                self.log_id
-            )));
-        }
-        Ok(KeyHint::try_from_slice(&bytes[..4])?)
-    }
+    /// hint. `None` when the declared log ID cannot yield one (not decodable,
+    /// or shorter than 4 bytes) — such an entry can never match a checkpoint
+    /// signature.
+    pub key_hint: Option<KeyHint>,
+}
 
+impl LogKey {
     /// The log ID recomputed from the public key: the SHA-256 hash of the
     /// DER-encoded key.
     ///
@@ -202,6 +200,63 @@ impl LogKey {
     pub fn computed_log_id(&self) -> Sha256Hash {
         sigstore_crypto::sha256(self.public_key.as_bytes())
     }
+}
+
+/// A transparency log key this implementation cannot verify with.
+///
+/// Trusted roots legitimately carry such keys (e.g. staging's CT log key,
+/// whose deprecated `PKCS1_RSA_PKCS1V5` key details name no fixed hash and
+/// whose material is not an SPKI structure). They are reported alongside the
+/// usable keys so that a lookup which lands on one can say why it failed
+/// instead of pretending the key does not exist.
+#[derive(Debug, Clone)]
+pub struct UnusableLogKey {
+    /// The log's key ID as declared in the trusted root.
+    pub log_id: LogKeyId,
+    /// The DER-encoded public key as declared in the trusted root.
+    pub public_key: DerPublicKey,
+    /// Why the key cannot be used for verification.
+    pub reason: String,
+}
+
+impl UnusableLogKey {
+    /// The log ID recomputed from the declared key bytes, matching
+    /// [`LogKey::computed_log_id`].
+    pub fn computed_log_id(&self) -> Sha256Hash {
+        sigstore_crypto::sha256(self.public_key.as_bytes())
+    }
+}
+
+/// The transparency log keys of one kind (Rekor or CTFE) from a trusted root.
+#[derive(Debug, Clone, Default)]
+pub struct LogKeys {
+    /// Keys this implementation can verify with.
+    pub usable: Vec<LogKey>,
+    /// Keys it cannot, with the reason.
+    pub unusable: Vec<UnusableLogKey>,
+}
+
+impl LogKeys {
+    /// Whether the trusted root declared no keys of this kind at all.
+    pub fn is_empty(&self) -> bool {
+        self.usable.is_empty() && self.unusable.is_empty()
+    }
+}
+
+/// Parse a trusted-root public key into a verification key using the scheme
+/// its `keyDetails` declares.
+fn parsed_verification_key(
+    public_key: &PublicKey,
+) -> std::result::Result<VerificationKey, String> {
+    let scheme = SigningScheme::try_from(&public_key.key_details).map_err(|e| e.to_string())?;
+    VerificationKey::from_spki(&public_key.raw_bytes, scheme).map_err(|e| e.to_string())
+}
+
+/// The checkpoint key hint for a declared log ID: the first 4 bytes of the
+/// decoded ID, or `None` when the ID cannot yield one.
+fn derive_key_hint(log_id: &LogKeyId) -> Option<KeyHint> {
+    let bytes = log_id.decode().ok()?;
+    KeyHint::try_from_slice(bytes.get(..4)?).ok()
 }
 
 /// Whether an instance with the given `valid_for` may be used as verification
@@ -250,79 +305,102 @@ impl TrustedRoot {
     ///
     /// Keys whose `valid_for` window has not started yet are excluded.
     /// Expired keys are included because they are needed to verify log
-    /// entries that were integrated while the key was valid.
-    pub fn rekor_keys(&self) -> Vec<LogKey> {
-        let now = Timestamp::now();
-        let mut keys = Vec::new();
-        for tlog in &self.tlogs {
-            if !usable_for_verification(tlog.public_key.valid_for.as_ref(), now) {
-                continue;
-            }
-            keys.push(LogKey {
-                log_id: tlog.log_id.key_id.clone(),
-                public_key: tlog.public_key.raw_bytes.clone(),
-            });
-        }
-        keys
-    }
-
-    /// Get a specific Rekor public key by log ID
-    ///
-    /// Keys whose `valid_for` window has not started yet are not returned.
-    /// Expired keys are returned because they are needed to verify log
-    /// entries that were integrated while the key was valid.
-    pub fn rekor_key_for_log(&self, log_id: &LogKeyId) -> Result<DerPublicKey> {
-        let now = Timestamp::now();
-        for tlog in &self.tlogs {
-            if &tlog.log_id.key_id == log_id {
-                if !usable_for_verification(tlog.public_key.valid_for.as_ref(), now) {
-                    continue;
-                }
-                return Ok(tlog.public_key.raw_bytes.clone());
-            }
-        }
-        Err(Error::KeyNotFound(log_id.to_string()))
-    }
-
-    /// Get a specific Rekor public key by log ID, valid at the given time
-    ///
-    /// Unlike [`Self::rekor_key_for_log`] this requires the key's `valid_for`
-    /// window (if present) to fully contain `time`, which is suitable when
-    /// the relevant timestamp of the material being verified is known (e.g.
-    /// a log entry's integrated time).
-    pub fn rekor_key_for_log_at(&self, log_id: &LogKeyId, time: Timestamp) -> Result<DerPublicKey> {
-        for tlog in &self.tlogs {
-            if &tlog.log_id.key_id == log_id {
-                let valid = tlog
-                    .public_key
-                    .valid_for
-                    .map_or(true, |period| period.contains(time));
-                if valid {
-                    return Ok(tlog.public_key.raw_bytes.clone());
-                }
-            }
-        }
-        Err(Error::KeyNotFound(log_id.to_string()))
+    /// entries that were integrated while the key was valid. Keys this
+    /// implementation cannot verify with are reported in
+    /// [`LogKeys::unusable`].
+    pub fn rekor_keys(&self) -> LogKeys {
+        Self::collect_log_keys(self.tlogs.iter().map(|t| (&t.log_id, &t.public_key)))
     }
 
     /// Get all Certificate Transparency log keys
     ///
     /// Keys whose `valid_for` window has not started yet are excluded.
     /// Expired keys are included because they are needed to verify SCTs
-    /// issued while the key was valid.
-    pub fn ctfe_keys(&self) -> Vec<LogKey> {
+    /// issued while the key was valid. Keys this implementation cannot
+    /// verify with are reported in [`LogKeys::unusable`].
+    pub fn ctfe_keys(&self) -> LogKeys {
+        Self::collect_log_keys(self.ctlogs.iter().map(|c| (&c.log_id, &c.public_key)))
+    }
+
+    fn collect_log_keys<'a>(entries: impl Iterator<Item = (&'a LogId, &'a PublicKey)>) -> LogKeys {
         let now = Timestamp::now();
-        let mut keys = Vec::new();
-        for ctlog in &self.ctlogs {
-            if !usable_for_verification(ctlog.public_key.valid_for.as_ref(), now) {
+        let mut keys = LogKeys::default();
+        for (log_id, public_key) in entries {
+            if !usable_for_verification(public_key.valid_for.as_ref(), now) {
                 continue;
             }
-            keys.push(LogKey {
-                log_id: ctlog.log_id.key_id.clone(),
-                public_key: ctlog.public_key.raw_bytes.clone(),
-            });
+            match parsed_verification_key(public_key) {
+                Ok(key) => keys.usable.push(LogKey {
+                    log_id: log_id.key_id.clone(),
+                    public_key: public_key.raw_bytes.clone(),
+                    key,
+                    key_hint: derive_key_hint(&log_id.key_id),
+                }),
+                Err(reason) => keys.unusable.push(UnusableLogKey {
+                    log_id: log_id.key_id.clone(),
+                    public_key: public_key.raw_bytes.clone(),
+                    reason,
+                }),
+            }
         }
         keys
+    }
+
+    /// Get a specific Rekor verification key by log ID
+    ///
+    /// Keys whose `valid_for` window has not started yet are not returned.
+    /// Expired keys are returned because they are needed to verify log
+    /// entries that were integrated while the key was valid.
+    pub fn rekor_key_for_log(&self, log_id: &LogKeyId) -> Result<VerificationKey> {
+        let now = Timestamp::now();
+        self.rekor_key_matching(log_id, |public_key| {
+            usable_for_verification(public_key.valid_for.as_ref(), now)
+        })
+    }
+
+    /// Get a specific Rekor verification key by log ID, valid at the given time
+    ///
+    /// Unlike [`Self::rekor_key_for_log`] this requires the key's `valid_for`
+    /// window (if present) to fully contain `time`, which is suitable when
+    /// the relevant timestamp of the material being verified is known (e.g.
+    /// a log entry's integrated time).
+    pub fn rekor_key_for_log_at(
+        &self,
+        log_id: &LogKeyId,
+        time: Timestamp,
+    ) -> Result<VerificationKey> {
+        self.rekor_key_matching(log_id, |public_key| {
+            public_key
+                .valid_for
+                .map_or(true, |period| period.contains(time))
+        })
+    }
+
+    /// Find the first tlog entry with the declared `log_id` whose validity
+    /// window passes `window_ok`, and parse its key. An entry that matches
+    /// but cannot be parsed is remembered so the error can say why, while the
+    /// search continues in case another entry with the same ID is usable.
+    fn rekor_key_matching(
+        &self,
+        log_id: &LogKeyId,
+        window_ok: impl Fn(&PublicKey) -> bool,
+    ) -> Result<VerificationKey> {
+        let mut unusable_reason = None;
+        for tlog in &self.tlogs {
+            if &tlog.log_id.key_id != log_id || !window_ok(&tlog.public_key) {
+                continue;
+            }
+            match parsed_verification_key(&tlog.public_key) {
+                Ok(key) => return Ok(key),
+                Err(reason) => unusable_reason = Some(reason),
+            }
+        }
+        match unusable_reason {
+            Some(reason) => Err(Error::InvalidKey(format!(
+                "log key {log_id} cannot be used for verification: {reason}"
+            ))),
+            None => Err(Error::KeyNotFound(log_id.to_string())),
+        }
     }
 
     /// Get all TSA certificates with their validity periods
@@ -509,8 +587,9 @@ mod tests {
         );
     }
 
-    fn has_log(keys: &[LogKey], log_id: &str) -> bool {
-        keys.iter()
+    fn has_log(keys: &LogKeys, log_id: &str) -> bool {
+        keys.usable
+            .iter()
             .any(|key| key.log_id == LogKeyId::new(log_id.to_string()))
     }
 
@@ -518,7 +597,8 @@ mod tests {
     fn test_rekor_keys() {
         let root = TrustedRoot::from_json(SAMPLE_TRUSTED_ROOT).unwrap();
         let keys = root.rekor_keys();
-        assert_eq!(keys.len(), 1);
+        assert_eq!(keys.usable.len(), 1);
+        assert!(keys.unusable.is_empty());
         assert!(has_log(&keys, "test-key-id"));
     }
 
@@ -599,7 +679,7 @@ mod tests {
         ]);
 
         let keys = root.rekor_keys();
-        assert_eq!(keys.len(), 2);
+        assert_eq!(keys.usable.len(), 2);
         assert!(has_log(&keys, "expired-key"));
         assert!(has_log(&keys, "current-key"));
         assert!(!has_log(&keys, "future-key"));
@@ -689,7 +769,7 @@ mod tests {
         let root = TrustedRoot::from_json(&json).unwrap();
 
         let keys = root.ctfe_keys();
-        assert_eq!(keys.len(), 1);
+        assert_eq!(keys.usable.len(), 1);
         assert!(has_log(&keys, "current-ctlog"));
 
         // Malformed timestamp is rejected when the trusted root is parsed
@@ -709,20 +789,82 @@ mod tests {
             .decode(TEST_KEY)
             .unwrap();
         let computed = sigstore_crypto::sha256(&key_bytes);
-        let key = LogKey {
-            log_id: LogKeyId::from_bytes(computed.as_bytes()),
-            public_key: DerPublicKey::new(key_bytes),
-        };
+        let log_id = LogKeyId::from_bytes(computed.as_bytes());
+
+        let root = trusted_root_with_tlog_validity(&[(
+            log_id.as_str(),
+            r#"{"start": "2021-01-01T00:00:00Z"}"#,
+        )]);
+        let keys = root.rekor_keys();
+        let key = &keys.usable[0];
 
         assert_eq!(key.computed_log_id(), computed);
-        assert_eq!(key.key_hint().unwrap().as_ref(), &computed.as_bytes()[..4]);
+        assert_eq!(
+            key.key_hint.unwrap().as_ref(),
+            &computed.as_bytes()[..4],
+            "key hint is the first 4 bytes of the decoded log ID"
+        );
+    }
 
-        // A log ID too short to yield a key hint is an error
-        let short = LogKey {
-            log_id: LogKeyId::from_bytes(&[1, 2, 3]),
-            public_key: key.public_key.clone(),
-        };
-        assert!(matches!(short.key_hint(), Err(Error::InvalidKey(_))));
+    #[test]
+    fn test_short_log_id_yields_no_key_hint() {
+        // "AQID" decodes to [1, 2, 3]: too short for a 4-byte key hint. The
+        // key stays usable (e.g. for SET verification by full log ID); it
+        // just can never match a checkpoint signature.
+        let root =
+            trusted_root_with_tlog_validity(&[("AQID", r#"{"start": "2021-01-01T00:00:00Z"}"#)]);
+        let keys = root.rekor_keys();
+        assert_eq!(keys.usable.len(), 1);
+        assert!(keys.usable[0].key_hint.is_none());
+    }
+
+    #[test]
+    fn test_unsupported_key_details_is_reported_unusable() {
+        // A deprecated key details value that names no fixed hash algorithm
+        // cannot be mapped to a verification scheme.
+        let json = trusted_root_json_with_tlog_validity(&[(
+            "deprecated-key",
+            r#"{"start": "2021-01-01T00:00:00Z"}"#,
+        )])
+        .replace("PKIX_ECDSA_P256_SHA_256", "PKCS1_RSA_PKCS1V5");
+        let root = TrustedRoot::from_json(&json).unwrap();
+
+        let keys = root.rekor_keys();
+        assert!(keys.usable.is_empty());
+        assert_eq!(keys.unusable.len(), 1);
+        assert!(keys.unusable[0].reason.contains("PKCS1_RSA_PKCS1V5"));
+
+        // A by-ID lookup that lands on the unusable key says why
+        assert!(matches!(
+            root.rekor_key_for_log(&LogKeyId::new("deprecated-key".to_string())),
+            Err(Error::InvalidKey(_))
+        ));
+    }
+
+    #[test]
+    fn test_key_details_mismatching_key_material_is_unusable() {
+        // The key material is an ECDSA P-256 SPKI, but the trusted root
+        // declares Ed25519: the declaration is checked against the key.
+        let json = trusted_root_json_with_tlog_validity(&[(
+            "lying-key",
+            r#"{"start": "2021-01-01T00:00:00Z"}"#,
+        )])
+        .replace("PKIX_ECDSA_P256_SHA_256", "PKIX_ED25519");
+        let root = TrustedRoot::from_json(&json).unwrap();
+
+        let keys = root.rekor_keys();
+        assert!(keys.usable.is_empty());
+        assert_eq!(keys.unusable.len(), 1);
+    }
+
+    #[test]
+    fn test_staging_ct_keys_report_the_rsa_key_unusable() {
+        // Staging's CT log key is a raw PKCS#1 RSA key with deprecated key
+        // details; it must be reported, not silently dropped or fatal.
+        let root = TrustedRoot::from_json(SIGSTORE_STAGING_TRUSTED_ROOT).unwrap();
+        let keys = root.ctfe_keys();
+        assert!(!keys.usable.is_empty());
+        assert_eq!(keys.unusable.len(), 1);
     }
 
     #[test]

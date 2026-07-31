@@ -93,9 +93,10 @@ pub use signing_config::{
 };
 pub use time_range::TimeRange;
 pub use trusted_root::{
-    CertificateAuthority, CertificateTransparencyLog, LogKey, SigstoreInstance, TimestampAuthority,
-    TransparencyLog, TrustedRoot, ValidityPeriod, SIGSTORE_GITHUB_TRUSTED_ROOT,
-    SIGSTORE_PRODUCTION_TRUSTED_ROOT, SIGSTORE_STAGING_TRUSTED_ROOT,
+    CertificateAuthority, CertificateTransparencyLog, LogKey, LogKeys, SigstoreInstance,
+    TimestampAuthority, TransparencyLog, TrustedRoot, UnusableLogKey, ValidityPeriod,
+    SIGSTORE_GITHUB_TRUSTED_ROOT, SIGSTORE_PRODUCTION_TRUSTED_ROOT,
+    SIGSTORE_STAGING_TRUSTED_ROOT,
 };
 
 #[cfg(feature = "tuf")]

@@ -65,8 +65,8 @@ fn test_trusted_root_api() {
 
     // Test API methods
     println!("Fulcio certificates: {}", trusted_root.fulcio_certs().len());
-    println!("Rekor keys: {}", trusted_root.rekor_keys().len());
-    println!("CTFE keys: {}", trusted_root.ctfe_keys().len());
+    println!("Rekor keys: {}", trusted_root.rekor_keys().usable.len());
+    println!("CTFE keys: {}", trusted_root.ctfe_keys().usable.len());
     println!(
         "TSA certificates: {}",
         trusted_root.tsa_certs_with_validity().len()

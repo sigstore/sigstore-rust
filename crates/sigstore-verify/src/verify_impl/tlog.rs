@@ -6,7 +6,7 @@
 use crate::error::{Error, Result};
 use base64::Engine;
 use serde::Serialize;
-use sigstore_crypto::{verify_signature_auto, Checkpoint};
+use sigstore_crypto::Checkpoint;
 use sigstore_trust_root::TrustedRoot;
 use sigstore_types::bundle::InclusionProof;
 use sigstore_types::{Bundle, SignatureBytes, TransparencyLogEntry};
@@ -165,28 +165,18 @@ pub fn verify_checkpoint(
     }
 
     // Get all Rekor keys from the trusted root; checkpoint signatures
-    // identify their key by a 4-byte hint derived from the log ID.
-    //
-    // The hints are derived up front rather than inside the match loop below:
-    // deriving them lazily made a log ID too short to yield a hint matter only
-    // when it happened to precede the matching key, so the same trusted root
-    // could verify or fail depending on the order of its `tlogs` array. Such an
-    // entry can never match a hint, so it is simply skipped.
+    // identify their key by a 4-byte hint derived from the log ID, which the
+    // trusted root precomputes for every usable key.
     let rekor_keys = trusted_root.rekor_keys();
-    let rekor_keys: Vec<_> = rekor_keys
-        .iter()
-        .filter_map(|key| key.key_hint().ok().map(|hint| (hint, key)))
-        .collect();
 
-    // For each signature in the checkpoint, try to find a matching key and verify
+    // For each signature in the checkpoint, try to find a matching key and
+    // verify with the scheme the trusted root declares for that key
     for sig in &checkpoint.signatures {
-        // Find the key with matching key hint
-        for (key_hint, key) in &rekor_keys {
-            if &sig.key_id == key_hint {
-                // Found matching key, verify the signature using automatic key type detection
+        for key in &rekor_keys.usable {
+            if key.key_hint == Some(sig.key_id) {
                 let message = checkpoint.signed_data();
 
-                verify_signature_auto(&key.public_key, &sig.signature, message).map_err(|e| {
+                key.key.verify(message, &sig.signature).map_err(|e| {
                     Error::Verification(format!("Checkpoint signature verification failed: {}", e))
                 })?;
 
@@ -195,9 +185,19 @@ pub fn verify_checkpoint(
         }
     }
 
-    Err(Error::Verification(
-        "No matching Rekor key found for checkpoint signature".to_string(),
-    ))
+    let mut message = "No matching Rekor key found for checkpoint signature".to_string();
+    if !rekor_keys.unusable.is_empty() {
+        let reasons: Vec<_> = rekor_keys
+            .unusable
+            .iter()
+            .map(|key| format!("{}: {}", key.log_id, key.reason))
+            .collect();
+        message.push_str(&format!(
+            " (unusable trusted-root keys were skipped: {})",
+            reasons.join("; ")
+        ));
+    }
+    Err(Error::Verification(message))
 }
 
 #[derive(Serialize)]
@@ -270,9 +270,10 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
     // Get signature bytes from signed timestamp
     let signature = SignatureBytes::new(promise.signed_entry_timestamp.as_bytes().to_vec());
 
-    // Use automatic key type detection from the SPKI structure,
-    // rather than hardcoding ECDSA P-256 (matches checkpoint verification behavior)
-    verify_signature_auto(&log_key, &signature, &canonical_json)
+    // The verification scheme comes from the trusted root's declared
+    // `keyDetails` for this log key
+    log_key
+        .verify(&canonical_json, &signature)
         .map_err(|e| Error::Verification(format!("SET verification failed: {}", e)))?;
 
     Ok(())

@@ -6,7 +6,7 @@
 
 use crate::error::{Error, Result};
 use const_oid::db::rfc6962::CT_PRECERT_SCTS;
-use sigstore_crypto::{Keyring, SigningScheme, VerificationKey};
+use sigstore_crypto::{Keyring, SigningScheme};
 use sigstore_trust_root::TrustedRoot;
 use sigstore_types::{Sha256Hash, SignatureBytes};
 use tls_codec::{SerializeBytes, TlsByteVecU16, TlsByteVecU24, TlsSerializeBytes, TlsSize};
@@ -224,34 +224,44 @@ pub fn verify_sct(
     // disagrees with its key cannot redirect the lookup.
     //
     // Trusted roots legitimately carry CT keys this implementation cannot use
-    // (e.g. staging's raw PKCS#1 RSA key, which is not an SPKI structure). Such
-    // a key could never verify an SCT, so it is left out of the keyring instead
-    // of failing every SCT verification; only an SCT that asks for it fails.
+    // (e.g. staging's raw PKCS#1 RSA key, which is not an SPKI structure). The
+    // trusted root reports those separately; only an SCT that asks for one
+    // fails, with the reason.
     let mut keyring = Keyring::new();
-    let mut unusable = Vec::new();
-    for key in &ct_keys {
-        match VerificationKey::from_spki(&key.public_key, scheme) {
-            Ok(verification_key) => keyring.add_key(key.computed_log_id(), verification_key),
-            Err(e) => unusable.push((key.computed_log_id(), e)),
-        }
+    for key in &ct_keys.usable {
+        keyring.add_key(key.computed_log_id(), key.key.clone());
     }
 
     // Construct the DigitallySigned structure
     let digitally_signed = DigitallySigned::from_embedded_sct(&cert, &sct, issuer_key_hash)?;
     let log_id = digitally_signed.log_id();
 
-    if keyring.get_key(&log_id).is_none() {
-        return Err(match unusable.iter().find(|(id, _)| *id == log_id) {
-            Some((_, e)) => Error::Verification(format!(
+    let Some(log_key) = keyring.get_key(&log_id) else {
+        let unusable = ct_keys
+            .unusable
+            .iter()
+            .find(|key| key.computed_log_id() == log_id);
+        return Err(match unusable {
+            Some(key) => Error::Verification(format!(
                 "trusted root CT log key {:?} cannot verify this SCT: {}",
                 log_id.to_hex(),
-                e
+                key.reason
             )),
             None => Error::Verification(format!(
                 "SCT log ID {:?} not found in trusted root CT logs",
                 log_id.to_hex()
             )),
         });
+    };
+
+    // The SCT's declared signature algorithm must agree with the scheme the
+    // trusted root declares for this log's key
+    if log_key.scheme() != scheme {
+        return Err(Error::Verification(format!(
+            "SCT declares signature algorithm {} but the trusted root key for this log uses {}",
+            scheme.name(),
+            log_key.scheme().name()
+        )));
     }
 
     // Verify the signature
