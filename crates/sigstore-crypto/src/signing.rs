@@ -7,7 +7,7 @@ use aws_lc_rs::{
 };
 use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, SECP_256_R_1};
 use der::{asn1::BitString, Encode as _};
-use sigstore_types::{DerPublicKey, SignatureBytes};
+use sigstore_types::{DerPublicKey, KeyDetails, SignatureBytes};
 use spki::{AlgorithmIdentifier, SubjectPublicKeyInfo};
 
 /// Supported signing schemes
@@ -35,6 +35,38 @@ pub enum SigningScheme {
     RsaPkcs1Sha384,
     /// RSA PKCS#1 v1.5 with SHA-512
     RsaPkcs1Sha512,
+}
+
+/// Derive the signing scheme from a key's declared `keyDetails`.
+///
+/// This is how trusted-root key material selects its verification scheme:
+/// the trust root's declaration is authoritative, rather than whatever
+/// algorithm detection infers from the key bytes. Key details this
+/// implementation cannot verify with (deprecated spellings without a fixed
+/// hash, HMAC, post-quantum and stateful hash-based schemes, unrecognized
+/// values) yield [`Error::UnsupportedAlgorithm`].
+impl TryFrom<&KeyDetails> for SigningScheme {
+    type Error = Error;
+
+    fn try_from(details: &KeyDetails) -> Result<Self> {
+        match details {
+            KeyDetails::PkixEcdsaP256Sha256 => Ok(SigningScheme::EcdsaP256Sha256),
+            KeyDetails::PkixEcdsaP384Sha384 => Ok(SigningScheme::EcdsaP384Sha384),
+            KeyDetails::PkixEd25519 => Ok(SigningScheme::Ed25519),
+            // aws-lc-rs verification accepts RSA keys of 2048-8192 bits with
+            // one algorithm per padding/hash pair, so the three sizes share a
+            // scheme; the actual key size is enforced by the key material.
+            KeyDetails::PkixRsaPkcs1v15_2048Sha256
+            | KeyDetails::PkixRsaPkcs1v15_3072Sha256
+            | KeyDetails::PkixRsaPkcs1v15_4096Sha256 => Ok(SigningScheme::RsaPkcs1Sha256),
+            KeyDetails::PkixRsaPss2048Sha256
+            | KeyDetails::PkixRsaPss3072Sha256
+            | KeyDetails::PkixRsaPss4096Sha256 => Ok(SigningScheme::RsaPssSha256),
+            other => Err(Error::UnsupportedAlgorithm(format!(
+                "no supported signing scheme for key details {other}"
+            ))),
+        }
+    }
 }
 
 impl SigningScheme {

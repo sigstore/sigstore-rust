@@ -8,10 +8,16 @@ use aws_lc_rs::signature::{
     RSA_PKCS1_2048_8192_SHA512, RSA_PSS_2048_8192_SHA256, RSA_PSS_2048_8192_SHA384,
     RSA_PSS_2048_8192_SHA512,
 };
+use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, RSA_ENCRYPTION, SECP_256_R_1, SECP_384_R_1};
+use const_oid::ObjectIdentifier;
 use sigstore_types::{DerPublicKey, SignatureBytes};
 use spki::SubjectPublicKeyInfoRef;
 
+/// id-Ed25519: 1.3.101.112
+const ID_ED25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
+
 /// A public key for verification
+#[derive(Debug, Clone)]
 pub struct VerificationKey {
     /// Raw public key bytes (format depends on scheme)
     bytes: Vec<u8>,
@@ -19,14 +25,75 @@ pub struct VerificationKey {
     scheme: SigningScheme,
 }
 
+/// Check that an SPKI's algorithm identifier is consistent with the scheme
+/// the key is about to be used with.
+///
+/// A mismatched signature would fail verification anyway, but checking here
+/// surfaces a key/scheme disagreement (e.g. a trusted root whose `keyDetails`
+/// does not describe its key material) when the key is constructed, with an
+/// error that says what is wrong instead of a generic verification failure.
+fn check_spki_matches_scheme(spki: &SubjectPublicKeyInfoRef<'_>, scheme: SigningScheme) -> Result<()> {
+    let key_oid = spki.algorithm.oid;
+    let mismatch = |expected: &str| {
+        Err(Error::InvalidKey(format!(
+            "key algorithm {key_oid} does not match declared scheme {} (expected {expected})",
+            scheme.name()
+        )))
+    };
+
+    match scheme {
+        SigningScheme::Ed25519 => {
+            if key_oid != ID_ED25519 {
+                return mismatch("Ed25519");
+            }
+        }
+        SigningScheme::EcdsaP256Sha256
+        | SigningScheme::EcdsaP256Sha384
+        | SigningScheme::EcdsaP384Sha256
+        | SigningScheme::EcdsaP384Sha384 => {
+            if key_oid != ID_EC_PUBLIC_KEY {
+                return mismatch("id-ecPublicKey");
+            }
+            let curve = spki.algorithm.parameters_oid().map_err(|e| {
+                Error::InvalidKey(format!("EC key has no readable curve parameter: {e}"))
+            })?;
+            let expected_curve = match scheme {
+                SigningScheme::EcdsaP256Sha256 | SigningScheme::EcdsaP256Sha384 => SECP_256_R_1,
+                _ => SECP_384_R_1,
+            };
+            if curve != expected_curve {
+                return Err(Error::InvalidKey(format!(
+                    "EC curve {curve} does not match declared scheme {}",
+                    scheme.name()
+                )));
+            }
+        }
+        SigningScheme::RsaPssSha256
+        | SigningScheme::RsaPssSha384
+        | SigningScheme::RsaPssSha512
+        | SigningScheme::RsaPkcs1Sha256
+        | SigningScheme::RsaPkcs1Sha384
+        | SigningScheme::RsaPkcs1Sha512 => {
+            if key_oid != RSA_ENCRYPTION {
+                return mismatch("rsaEncryption");
+            }
+        }
+    }
+
+    Ok(())
+}
+
 impl VerificationKey {
     /// Create a verification key from a DER-encoded SPKI public key
     ///
-    /// This parses the SubjectPublicKeyInfo structure and extracts the raw
+    /// This parses the SubjectPublicKeyInfo structure, checks that the key's
+    /// algorithm identifier is consistent with `scheme`, and extracts the raw
     /// public key bytes needed for verification.
     pub fn from_spki(key: &DerPublicKey, scheme: SigningScheme) -> Result<Self> {
         let spki = SubjectPublicKeyInfoRef::try_from(key.as_bytes())
             .map_err(|e| Error::InvalidKey(format!("Invalid SPKI: {e}")))?;
+
+        check_spki_matches_scheme(&spki, scheme)?;
 
         // Extract raw public key bytes from the BIT STRING
         let raw_bytes = spki.subject_public_key.raw_bytes().to_vec();
