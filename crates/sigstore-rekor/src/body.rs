@@ -6,7 +6,8 @@
 use serde::{Deserialize, Serialize};
 use sigstore_types::encoding::base64_bytes;
 use sigstore_types::{
-    DerCertificate, DerPublicKey, HashAlgorithm, HexHash, PayloadBytes, PemContent, SignatureBytes,
+    DerCertificate, DerPublicKey, HashAlgorithm, HexHash, KeyDetails, PayloadBytes, PemContent,
+    SignatureBytes,
 };
 
 /// Parsed Rekor entry body
@@ -230,8 +231,8 @@ pub struct DsseV002Signature {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DsseV002Verifier {
-    /// Key algorithm details (e.g., "PKIX_ECDSA_P256_SHA_256")
-    pub key_details: String,
+    /// The signature algorithm declared for the verifier's key
+    pub key_details: KeyDetails,
     /// X.509 certificate information
     pub x509_certificate: X509CertificateRaw,
 }

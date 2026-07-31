@@ -3,7 +3,8 @@
 use serde::{Deserialize, Serialize};
 use sigstore_types::{
     CanonicalizedBody, CheckpointData, DerCertificate, EntryUuid, HashAlgorithm, HexLogId,
-    InclusionPromise, KindVersion, LogId, PemContent, Sha256Hash, SignatureBytes, SignedTimestamp,
+    InclusionPromise, KeyDetails, KindVersion, LogId, PemContent, Sha256Hash, SignatureBytes,
+    SignedTimestamp,
 };
 use std::collections::HashMap;
 
@@ -337,8 +338,8 @@ pub struct HashedRekordSignatureV2 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HashedRekordVerifierV2 {
-    /// Key details (enum value as string)
-    pub key_details: String,
+    /// The signature algorithm declared for the verifier's key
+    pub key_details: KeyDetails,
     /// X.509 certificate
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x509_certificate: Option<HashedRekordPublicKeyV2>,
@@ -377,7 +378,7 @@ impl HashedRekordV2 {
                     content: signature.clone(),
                     verifier: HashedRekordVerifierV2 {
                         // Assuming ECDSA P-256 SHA-256 for now as per conformance tests
-                        key_details: "PKIX_ECDSA_P256_SHA_256".to_string(),
+                        key_details: KeyDetails::PkixEcdsaP256Sha256,
                         x509_certificate: Some(HashedRekordPublicKeyV2 {
                             content: certificate.clone(),
                         }),
@@ -408,8 +409,8 @@ pub struct DsseRequestV002 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DsseVerifierV2 {
-    /// Key details (enum value as string)
-    pub key_details: String,
+    /// The signature algorithm declared for the verifier's key
+    pub key_details: KeyDetails,
     /// X.509 certificate
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x509_certificate: Option<HashedRekordPublicKeyV2>,
@@ -430,7 +431,7 @@ impl DsseEntryV2 {
                 envelope: envelope.clone(),
                 verifiers: vec![DsseVerifierV2 {
                     // Assuming ECDSA P-256 SHA-256 for now as per conformance tests
-                    key_details: "PKIX_ECDSA_P256_SHA_256".to_string(),
+                    key_details: KeyDetails::PkixEcdsaP256Sha256,
                     x509_certificate: Some(HashedRekordPublicKeyV2 {
                         content: certificate.clone(),
                     }),
