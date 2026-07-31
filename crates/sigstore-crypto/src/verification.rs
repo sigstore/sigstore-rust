@@ -16,6 +16,48 @@ use spki::SubjectPublicKeyInfoRef;
 /// id-Ed25519: 1.3.101.112
 const ID_ED25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
 
+/// Key type detected from SPKI
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyType {
+    /// Ed25519 key
+    Ed25519,
+    /// ECDSA P-256 key
+    EcdsaP256,
+    /// Unknown/unsupported key type
+    Unknown,
+}
+
+/// Detect the key type from SPKI-encoded public key bytes.
+///
+/// This parses the SubjectPublicKeyInfo structure to determine the algorithm.
+/// It is only appropriate where no declared algorithm exists for a key (e.g.
+/// a bare user-supplied public key); key material that comes with a
+/// declaration, like trusted-root keys, should be parsed with the declared
+/// scheme instead.
+pub fn detect_key_type(public_key: &DerPublicKey) -> KeyType {
+    match SubjectPublicKeyInfoRef::try_from(public_key.as_bytes()) {
+        Ok(spki) => {
+            if spki.algorithm.oid == ID_ED25519 {
+                KeyType::Ed25519
+            } else if spki.algorithm.oid == ID_EC_PUBLIC_KEY {
+                KeyType::EcdsaP256
+            } else {
+                tracing::warn!("Unknown key algorithm OID: {}", spki.algorithm.oid);
+                KeyType::Unknown
+            }
+        }
+        Err(_) => {
+            // If we can't parse as SPKI, might be raw key bytes
+            // Check if it looks like a raw Ed25519 key (32 bytes)
+            if public_key.as_bytes().len() == 32 {
+                KeyType::Ed25519
+            } else {
+                KeyType::Unknown
+            }
+        }
+    }
+}
+
 /// A public key for verification
 #[derive(Debug, Clone)]
 pub struct VerificationKey {
