@@ -332,20 +332,28 @@ impl Updater {
             // not re-fetched, so repeated resolutions don't re-download metadata.
             // A delegated role the snapshot does not pin is not trusted: skip it
             // without fetching, rather than failing the whole search.
-            if role != "targets" && self.trusted.targets_role(&role).is_none() {
-                let pinned = self
-                    .trusted
-                    .snapshot()
-                    .map(|s| s.meta.contains_key(&format!("{role}.json")))
-                    .unwrap_or(false);
-                if !pinned {
-                    tracing::debug!(%role, "delegated role not in snapshot; skipping");
-                    continue;
+            if role != "targets" {
+                if self.trusted.targets_role(&role).is_none() {
+                    let pinned = self
+                        .trusted
+                        .snapshot()
+                        .map(|s| s.meta.contains_key(&format!("{role}.json")))
+                        .unwrap_or(false);
+                    if !pinned {
+                        tracing::debug!(%role, "delegated role not in snapshot; skipping");
+                        continue;
+                    }
+                    let bytes = self.fetch_targets_metadata(&role).await?;
+                    self.trusted
+                        .update_delegated_targets(&bytes, &role, &delegator, now)?;
+                    self.cache_put(&format!("{}.json", encode_role(&role)), &bytes);
+                } else {
+                    // The same role name can be reachable through parents with
+                    // different authorities. Its cached envelope is usable only
+                    // if it also satisfies the current parent's delegation.
+                    self.trusted
+                        .verify_delegated_targets(&role, &delegator, now)?;
                 }
-                let bytes = self.fetch_targets_metadata(&role).await?;
-                self.trusted
-                    .update_delegated_targets(&bytes, &role, &delegator, now)?;
-                self.cache_put(&format!("{}.json", encode_role(&role)), &bytes);
             }
             visited.insert(role.clone());
 

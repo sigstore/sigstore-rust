@@ -260,6 +260,34 @@ impl TrustedMetadataSet {
         self.targets.get(name).map(|m| &m.signed)
     }
 
+    /// Verify that a cached delegated targets role is authorized by the
+    /// delegator through which it is currently being reached.
+    ///
+    /// Delegated metadata is cached by role name because the snapshot has a
+    /// single pin for that name. A role name can nevertheless be delegated by
+    /// multiple parents with different keys and thresholds, so callers must
+    /// perform this check on every delegating edge before using a cached role.
+    pub fn verify_delegated_targets(
+        &self,
+        role_name: &str,
+        delegator_name: &str,
+        now: jiff::Timestamp,
+    ) -> Result<&Targets> {
+        if is_top_level_role(role_name) {
+            return Err(Error::Malformed(format!(
+                "delegated role must not reuse top-level role name {role_name:?}"
+            )));
+        }
+        let (keys, role_keys) = self.delegation_authority(delegator_name, role_name)?;
+        let metadata = self
+            .targets
+            .get(role_name)
+            .ok_or_else(|| Error::UnknownRole(role_name.to_string()))?;
+        metadata.verify_threshold(&keys, &role_keys, role_name)?;
+        ensure_not_expired(&metadata.signed, role_name, now)?;
+        Ok(&metadata.signed)
+    }
+
     /// Incorporate the top-level `targets` metadata file.
     ///
     /// Requires a trusted snapshot first; checks length/hash/version against the

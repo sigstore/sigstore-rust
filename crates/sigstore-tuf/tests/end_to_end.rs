@@ -195,6 +195,154 @@ fn build_repo_with_timestamp_expiry(timestamp_expires: &str) -> (MemRepo, Vec<u8
     (repo, root_bytes)
 }
 
+/// Build a repository where two parents delegate the same role name using
+/// different keys. The shared metadata is signed only by parent A's key.
+fn build_shared_role_repo() -> (MemRepo, Vec<u8>) {
+    let root_kp = KeyPair::generate_ecdsa_p256().unwrap();
+    let parent_a_kp = KeyPair::generate_ecdsa_p256().unwrap();
+    let parent_b_kp = KeyPair::generate_ecdsa_p256().unwrap();
+    let (root_kid, root_key) = key_entry(&root_kp);
+    let (a_kid, a_key) = key_entry(&parent_a_kp);
+    let (b_kid, b_key) = key_entry(&parent_b_kp);
+
+    let shared_signed = json!({
+        "_type": "targets", "spec_version": "1.0.0", "version": 1,
+        "expires": FAR_FUTURE,
+        "targets": {
+            "team-a/trusted_root.json": { "length": 1, "hashes": {} },
+            "team-b/trusted_root.json": { "length": 1, "hashes": {} },
+        },
+    });
+    let shared_bytes = envelope(
+        shared_signed.clone(),
+        vec![signature(&shared_signed, &a_kid, &parent_a_kp)],
+    );
+
+    let parent_a_signed = json!({
+        "_type": "targets", "spec_version": "1.0.0", "version": 1,
+        "expires": FAR_FUTURE, "targets": {},
+        "delegations": {
+            "keys": { a_kid.clone(): a_key.clone() },
+            "roles": [{
+                "name": "release", "keyids": [a_kid.clone()], "threshold": 1,
+                "paths": ["team-a/*"], "terminating": false,
+            }],
+        },
+    });
+    let parent_a_bytes = envelope(
+        parent_a_signed.clone(),
+        vec![signature(&parent_a_signed, &a_kid, &parent_a_kp)],
+    );
+
+    let parent_b_signed = json!({
+        "_type": "targets", "spec_version": "1.0.0", "version": 1,
+        "expires": FAR_FUTURE, "targets": {},
+        "delegations": {
+            "keys": { b_kid.clone(): b_key.clone() },
+            "roles": [{
+                "name": "release", "keyids": [b_kid.clone()], "threshold": 1,
+                "paths": ["team-b/*"], "terminating": false,
+            }],
+        },
+    });
+    let parent_b_bytes = envelope(
+        parent_b_signed.clone(),
+        vec![signature(&parent_b_signed, &b_kid, &parent_b_kp)],
+    );
+
+    let targets_signed = json!({
+        "_type": "targets", "spec_version": "1.0.0", "version": 1,
+        "expires": FAR_FUTURE, "targets": {},
+        "delegations": {
+            "keys": { a_kid.clone(): a_key, b_kid.clone(): b_key },
+            "roles": [
+                {
+                    "name": "parent-a", "keyids": [a_kid], "threshold": 1,
+                    "paths": ["team-a/*"], "terminating": false,
+                },
+                {
+                    "name": "parent-b", "keyids": [b_kid], "threshold": 1,
+                    "paths": ["team-b/*"], "terminating": false,
+                }
+            ],
+        },
+    });
+    let targets_bytes = envelope(
+        targets_signed.clone(),
+        vec![signature(&targets_signed, &root_kid, &root_kp)],
+    );
+
+    let snapshot_signed = json!({
+        "_type": "snapshot", "spec_version": "1.0.0", "version": 1,
+        "expires": FAR_FUTURE,
+        "meta": {
+            "targets.json": metafile(&targets_bytes, 1),
+            "parent-a.json": metafile(&parent_a_bytes, 1),
+            "parent-b.json": metafile(&parent_b_bytes, 1),
+            "release.json": metafile(&shared_bytes, 1),
+        },
+    });
+    let snapshot_bytes = envelope(
+        snapshot_signed.clone(),
+        vec![signature(&snapshot_signed, &root_kid, &root_kp)],
+    );
+    let timestamp_signed = json!({
+        "_type": "timestamp", "spec_version": "1.0.0", "version": 1,
+        "expires": FAR_FUTURE,
+        "meta": { "snapshot.json": metafile(&snapshot_bytes, 1) },
+    });
+    let timestamp_bytes = envelope(
+        timestamp_signed.clone(),
+        vec![signature(&timestamp_signed, &root_kid, &root_kp)],
+    );
+
+    let role = json!({ "keyids": [root_kid.clone()], "threshold": 1 });
+    let root_signed = json!({
+        "_type": "root", "spec_version": "1.0.0", "version": 1,
+        "expires": FAR_FUTURE, "consistent_snapshot": false,
+        "keys": { root_kid.clone(): root_key },
+        "roles": {
+            "root": role, "timestamp": role, "snapshot": role, "targets": role,
+        },
+    });
+    let root_bytes = envelope(
+        root_signed.clone(),
+        vec![signature(&root_signed, &root_kid, &root_kp)],
+    );
+
+    let mut repo = MemRepo::default();
+    repo.metadata
+        .insert("timestamp.json".into(), timestamp_bytes);
+    repo.metadata.insert("snapshot.json".into(), snapshot_bytes);
+    repo.metadata.insert("targets.json".into(), targets_bytes);
+    repo.metadata.insert("parent-a.json".into(), parent_a_bytes);
+    repo.metadata.insert("parent-b.json".into(), parent_b_bytes);
+    repo.metadata.insert("release.json".into(), shared_bytes);
+    (repo, root_bytes)
+}
+
+#[tokio::test]
+async fn cached_role_is_reverified_against_each_delegator() {
+    let (repo, root_bytes) = build_shared_role_repo();
+    let mut updater = Updater::new(repo, &root_bytes).unwrap();
+    updater.refresh(now()).await.unwrap();
+
+    updater
+        .get_targetinfo("team-a/trusted_root.json", now())
+        .await
+        .unwrap()
+        .expect("parent A authorizes its release metadata");
+
+    let err = updater
+        .get_targetinfo("team-b/trusted_root.json", now())
+        .await
+        .expect_err("parent A's cached signature must not satisfy parent B");
+    assert!(
+        matches!(err, sigstore_tuf::Error::ThresholdNotMet { .. }),
+        "got: {err}"
+    );
+}
+
 #[tokio::test]
 async fn get_target_serves_a_cached_target_without_re_downloading() {
     // Regression: an online updater with a store must reuse a previously cached
