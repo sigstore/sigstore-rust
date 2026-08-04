@@ -155,17 +155,18 @@ async fn reads_v2_checkpoint_and_tile_storage_paths() {
 
     let (url, tile_request) = serve_once("200 OK", "application/octet-stream", b"tile");
     let tile = RekorClient::new_v2(url)
-        .get_tile(2, 123_456, NonZeroU8::new(7))
+        .get_tile(2, 1_234_067, NonZeroU8::new(7))
         .await
         .unwrap();
     assert_eq!(tile.level, 2);
-    assert_eq!(tile.index, 123_456);
+    assert_eq!(tile.index, 1_234_067);
     assert_eq!(tile.width, NonZeroU8::new(7));
     assert_eq!(tile.as_bytes(), b"tile");
+    // C2SP spec example: every base-1000 group is zero-padded to 3 digits.
     assert!(tile_request
         .recv()
         .unwrap()
-        .starts_with("GET /api/v2/tile/2/x123/456.p/7 "));
+        .starts_with("GET /api/v2/tile/2/x001/x234/067.p/7 "));
 
     let (url, entries_request) = serve_once("200 OK", "application/octet-stream", b"entries");
     let entries = RekorClient::new_v2(url)

@@ -636,22 +636,15 @@ fn validate_v2_entry(entry: &TransparencyLogEntry) -> Result<()> {
     Ok(())
 }
 
+/// Encode a tile index per C2SP tlog-tiles: base-1000 groups, each
+/// zero-padded to 3 digits, all but the last prefixed with `x`
+/// (e.g. 1234067 -> `x001/x234/067`).
 fn tile_path(index: u64, width: Option<NonZeroU8>) -> String {
-    let digits = format!("{index:03}");
-    let first_group_len = digits.len() % 3;
-    let first_group_len = if first_group_len == 0 {
-        3
-    } else {
-        first_group_len
-    };
-    let mut groups = Vec::new();
-    groups.push(digits[..first_group_len].to_string());
-    for offset in (first_group_len..digits.len()).step_by(3) {
-        groups.push(digits[offset..offset + 3].to_string());
-    }
-    let last = groups.len() - 1;
-    for group in &mut groups[..last] {
-        group.insert(0, 'x');
+    let mut groups = vec![format!("{:03}", index % 1000)];
+    let mut remaining = index / 1000;
+    while remaining > 0 {
+        groups.insert(0, format!("x{:03}", remaining % 1000));
+        remaining /= 1000;
     }
     let mut path = groups.join("/");
     if let Some(width) = width {
@@ -663,4 +656,37 @@ fn tile_path(index: u64, width: Option<NonZeroU8>) -> String {
 /// Convenience function to get log info from the public Rekor instance
 pub async fn get_public_log_info() -> Result<LogInfo> {
     RekorClient::public().get_log_info().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tile_path;
+    use std::num::NonZeroU8;
+
+    #[test]
+    fn tile_path_zero_pads_every_group() {
+        // Groups with fewer than 3 significant digits must still be
+        // zero-padded; 1234067 -> x001/x234/067 is the C2SP spec example.
+        for (index, expected) in [
+            (0, "000"),
+            (1, "001"),
+            (999, "999"),
+            (1_000, "x001/000"),
+            (1_234, "x001/234"),
+            (12_345, "x012/345"),
+            (123_456, "x123/456"),
+            (999_999, "x999/999"),
+            (1_000_000, "x001/x000/000"),
+            (1_234_067, "x001/x234/067"),
+            (u64::MAX, "x018/x446/x744/x073/x709/x551/615"),
+        ] {
+            assert_eq!(tile_path(index, None), expected, "index {index}");
+        }
+    }
+
+    #[test]
+    fn tile_path_appends_partial_tile_width() {
+        assert_eq!(tile_path(1_234, NonZeroU8::new(7)), "x001/234.p/7");
+        assert_eq!(tile_path(5, NonZeroU8::new(255)), "005.p/255");
+    }
 }
