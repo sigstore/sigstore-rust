@@ -1286,6 +1286,68 @@ fn test_verify_dsse_with_hashedrekord_v002() {
     );
 }
 
+#[test]
+fn rekor_v2_accepts_a_valid_log_signature_after_an_invalid_matching_signature() {
+    use base64::Engine as _;
+
+    let mut json: serde_json::Value = serde_json::from_str(include_str!(
+        "../test_data/bundles/conda-attestation-rekor2.sigstore.json"
+    ))
+    .unwrap();
+    let envelope = json["verificationMaterial"]["tlogEntries"][0]["inclusionProof"]["checkpoint"]
+        ["envelope"]
+        .as_str()
+        .unwrap();
+    let valid_line = envelope
+        .lines()
+        .find(|line| line.starts_with("— log2025-"))
+        .unwrap();
+    let (name, encoded) = valid_line.rsplit_once(' ').unwrap();
+    let mut signature = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .unwrap();
+    signature[4] ^= 1;
+    let invalid_line = format!(
+        "{name} {}",
+        base64::engine::general_purpose::STANDARD.encode(signature)
+    );
+    let envelope = envelope.replacen(valid_line, &format!("{invalid_line}\n{valid_line}"), 1);
+    json["verificationMaterial"]["tlogEntries"][0]["inclusionProof"]["checkpoint"]["envelope"] =
+        serde_json::json!(envelope);
+
+    let bundle = Bundle::from_json(&serde_json::to_string(&json).unwrap()).unwrap();
+    let artifact = include_bytes!("../test_data/bundles/signed-package-2.1.0-hb0f4dca_0.conda");
+    verify(
+        artifact.as_slice(),
+        &bundle,
+        &VerificationPolicy::default(),
+        &staging_root(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn rekor_v2_ignores_untrusted_duplicate_inclusion_proof_fields() {
+    let mut json: serde_json::Value = serde_json::from_str(include_str!(
+        "../test_data/bundles/conda-attestation-rekor2.sigstore.json"
+    ))
+    .unwrap();
+    let proof = &mut json["verificationMaterial"]["tlogEntries"][0]["inclusionProof"];
+    proof["logIndex"] = serde_json::json!("0");
+    proof["treeSize"] = serde_json::json!("1");
+    proof["rootHash"] = serde_json::json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+    let bundle = Bundle::from_json(&serde_json::to_string(&json).unwrap()).unwrap();
+    let artifact = include_bytes!("../test_data/bundles/signed-package-2.1.0-hb0f4dca_0.conda");
+
+    verify(
+        artifact.as_slice(),
+        &bundle,
+        &VerificationPolicy::default(),
+        &staging_root(),
+    )
+    .unwrap();
+}
+
 fn managed_key_public_key() -> sigstore_types::DerPublicKey {
     sigstore_types::DerPublicKey::from_pem(MANAGED_KEY_PUBLIC_KEY).expect("managed key parses")
 }

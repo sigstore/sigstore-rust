@@ -25,6 +25,10 @@ pub enum Error {
     #[error("Invalid response: {0}")]
     InvalidResponse(String),
 
+    /// Operation is unavailable for the configured Rekor API version.
+    #[error("Unsupported operation: {0}")]
+    UnsupportedOperation(String),
+
     /// Base64 decoding error
     #[error("Base64 error: {0}")]
     Base64(#[from] base64::DecodeError),

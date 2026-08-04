@@ -1,10 +1,52 @@
 //! Rekor client for transparency log operations
 
 use crate::entry::{
-    DsseEntry, DsseEntryV2, HashedRekord, HashedRekordV2, LogEntry, LogEntryResponse, LogInfo,
+    DsseEntry, HashedRekord, HashedRekordV2, LogEntry, LogEntryResponse, LogInfo, RekorApiVersion,
     SearchIndex,
 };
 use crate::error::{Error, Result};
+use sigstore_types::{Checkpoint, TransparencyLogEntry};
+use std::num::NonZeroU8;
+use std::time::Duration;
+
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Raw hash tile returned by Rekor v2's C2SP tile endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RekorV2Tile {
+    pub level: u32,
+    pub index: u64,
+    pub width: Option<NonZeroU8>,
+    pub bytes: Vec<u8>,
+}
+
+impl RekorV2Tile {
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+/// Raw entry bundle returned by Rekor v2's C2SP tile endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RekorV2EntryBundle {
+    pub index: u64,
+    pub width: Option<NonZeroU8>,
+    pub bytes: Vec<u8>,
+}
+
+impl RekorV2EntryBundle {
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
 
 #[cfg(feature = "cache")]
 use sigstore_cache::{CacheAdapter, CacheKey};
@@ -15,6 +57,8 @@ use std::sync::Arc;
 pub struct RekorClient {
     /// Base URL of the Rekor instance
     url: String,
+    /// API exposed by this Rekor instance.
+    api_version: RekorApiVersion,
     /// HTTP client
     client: reqwest::Client,
     /// Optional cache adapter
@@ -25,22 +69,62 @@ pub struct RekorClient {
 impl RekorClient {
     /// Create a new Rekor client
     pub fn new(url: impl Into<String>) -> Self {
+        Self::new_for_version(url, RekorApiVersion::V1)
+    }
+
+    /// Create a client for a Rekor v2 instance.
+    pub fn new_v2(url: impl Into<String>) -> Self {
+        Self::new_for_version(url, RekorApiVersion::V2)
+    }
+
+    fn new_for_version(url: impl Into<String>, api_version: RekorApiVersion) -> Self {
+        let url = url.into();
         Self {
-            url: url.into(),
-            client: reqwest::Client::new(),
+            url: url.trim_end_matches('/').to_string(),
+            api_version,
+            client: reqwest::Client::builder()
+                .timeout(DEFAULT_TIMEOUT)
+                .build()
+                .expect("default HTTP client configuration is valid"),
             #[cfg(feature = "cache")]
             cache: None,
         }
     }
 
-    /// Create a client for the public Sigstore Rekor instance
+    /// Create a client for the public Sigstore Rekor v1 instance.
     pub fn public() -> Self {
-        Self::new("https://rekor.sigstore.dev")
+        Self::new(RekorApiVersion::V1.default_url())
     }
 
-    /// Create a client for the Sigstore staging Rekor instance
+    /// Create a client for the public Sigstore Rekor v2 instance.
+    pub fn public_v2() -> Self {
+        Self::new_v2(RekorApiVersion::V2.default_url())
+    }
+
+    /// Create a client for the Sigstore staging Rekor v1 instance.
     pub fn staging() -> Self {
-        Self::new("https://rekor.sigstage.dev")
+        Self::new(RekorApiVersion::V1.default_staging_url())
+    }
+
+    /// Create a client for the Sigstore staging Rekor v2 instance.
+    pub fn staging_v2() -> Self {
+        Self::new_v2(RekorApiVersion::V2.default_staging_url())
+    }
+
+    /// Return the API version configured for this client.
+    pub fn api_version(&self) -> RekorApiVersion {
+        self.api_version
+    }
+
+    fn require_version(&self, required: RekorApiVersion) -> Result<()> {
+        if self.api_version != required {
+            return Err(Error::UnsupportedOperation(format!(
+                "operation requires Rekor API v{}, but this client uses v{}",
+                required.major(),
+                self.api_version.major()
+            )));
+        }
+        Ok(())
     }
 
     /// Create a builder for configuring the client
@@ -53,6 +137,7 @@ impl RekorClient {
     /// With the `cache` feature enabled and a cache configured, this will
     /// cache the log info with the default TTL (1 hour).
     pub async fn get_log_info(&self) -> Result<LogInfo> {
+        self.require_version(RekorApiVersion::V1)?;
         #[cfg(feature = "cache")]
         if let Some(ref cache) = self.cache {
             if let Ok(Some(cached)) = cache.get(CacheKey::RekorLogInfo).await {
@@ -105,6 +190,7 @@ impl RekorClient {
 
     /// Get a log entry by UUID
     pub async fn get_entry_by_uuid(&self, uuid: &str) -> Result<LogEntry> {
+        self.require_version(RekorApiVersion::V1)?;
         let url = format!("{}/api/v1/log/entries/{}", self.url, uuid);
         let response = self
             .client
@@ -138,6 +224,7 @@ impl RekorClient {
 
     /// Get a log entry by index
     pub async fn get_entry_by_index(&self, index: i64) -> Result<LogEntry> {
+        self.require_version(RekorApiVersion::V1)?;
         let url = format!("{}/api/v1/log/entries?logIndex={}", self.url, index);
         let response = self
             .client
@@ -170,6 +257,7 @@ impl RekorClient {
 
     /// Create a new log entry (V1)
     pub async fn create_entry(&self, entry: HashedRekord) -> Result<LogEntry> {
+        self.require_version(RekorApiVersion::V1)?;
         let url = format!("{}/api/v1/log/entries", self.url);
         let response = self
             .client
@@ -202,8 +290,13 @@ impl RekorClient {
         Ok(entry)
     }
 
-    /// Create a new log entry (V2)
-    pub async fn create_entry_v2(&self, entry: HashedRekordV2) -> Result<LogEntry> {
+    /// Create a Rekor v2 hashedrekord entry.
+    ///
+    /// Rekor v2 returns the protobuf `TransparencyLogEntry` JSON representation
+    /// used directly by Sigstore bundles. No v1 compatibility conversion is
+    /// performed.
+    pub async fn create_entry_v2(&self, entry: HashedRekordV2) -> Result<TransparencyLogEntry> {
+        self.require_version(RekorApiVersion::V2)?;
         let url = format!("{}/api/v2/log/entries", self.url);
         let response = self
             .client
@@ -226,46 +319,15 @@ impl RekorClient {
             .text()
             .await
             .map_err(|e| Error::Http(e.to_string()))?;
-
-        let entry_v2: crate::entry::LogEntryV2 = serde_json::from_str(&response_text)
-            .map_err(|e| Error::Http(format!("failed to parse JSON: {}", e)))?;
-
-        // Convert V2 entry to LogEntry
-        let log_index = entry_v2.log_index.parse::<i64>().unwrap_or_default();
-        // Rekor V2 entries have no integrated time; the field is "0" when absent.
-        let integrated_time = entry_v2
-            .integrated_time
-            .parse::<i64>()
-            .ok()
-            .filter(|&t| t != 0)
-            .and_then(|t| jiff::Timestamp::from_second(t).ok());
-
-        let verification = Some(crate::entry::Verification {
-            inclusion_proof: entry_v2
-                .inclusion_proof
-                .map(|p| crate::entry::RekorInclusionProof {
-                    checkpoint: p.checkpoint.envelope,
-                    // Convert Sha256Hash to hex strings (V1 format)
-                    hashes: p.hashes.iter().map(|h| h.to_hex()).collect(),
-                    log_index: p.log_index.parse::<i64>().unwrap_or_default(),
-                    root_hash: p.root_hash.to_hex(),
-                    tree_size: p.tree_size.parse::<i64>().unwrap_or_default(),
-                }),
-            signed_entry_timestamp: entry_v2.inclusion_promise.map(|p| p.signed_entry_timestamp),
-        });
-
-        Ok(LogEntry {
-            uuid: Default::default(), // V2 response doesn't include UUID in body
-            body: entry_v2.canonicalized_body,
-            integrated_time,
-            log_id: entry_v2.log_id.key_id.into_string().into(),
-            log_index,
-            verification,
-        })
+        let entry: TransparencyLogEntry = serde_json::from_str(&response_text)
+            .map_err(|e| Error::InvalidResponse(format!("invalid v2 log entry JSON: {e}")))?;
+        validate_v2_entry(&entry)?;
+        Ok(entry)
     }
 
     /// Create a new DSSE log entry (V1)
     pub async fn create_dsse_entry(&self, entry: DsseEntry) -> Result<LogEntry> {
+        self.require_version(RekorApiVersion::V1)?;
         let url = format!("{}/api/v1/log/entries", self.url);
         let response = self
             .client
@@ -298,70 +360,9 @@ impl RekorClient {
         Ok(entry)
     }
 
-    /// Create a new DSSE log entry (V2)
-    pub async fn create_dsse_entry_v2(&self, entry: DsseEntryV2) -> Result<LogEntry> {
-        let url = format!("{}/api/v2/log/entries", self.url);
-        let response = self
-            .client
-            .post(&url)
-            .json(&entry)
-            .send()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Api(format!(
-                "failed to create DSSE entry: {} - {}",
-                status, body
-            )));
-        }
-
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-
-        let entry_v2: crate::entry::LogEntryV2 = serde_json::from_str(&response_text)
-            .map_err(|e| Error::Http(format!("failed to parse JSON: {}", e)))?;
-
-        // Convert V2 entry to LogEntry
-        let log_index = entry_v2.log_index.parse::<i64>().unwrap_or_default();
-        // Rekor V2 entries have no integrated time; the field is "0" when absent.
-        let integrated_time = entry_v2
-            .integrated_time
-            .parse::<i64>()
-            .ok()
-            .filter(|&t| t != 0)
-            .and_then(|t| jiff::Timestamp::from_second(t).ok());
-
-        let verification = Some(crate::entry::Verification {
-            inclusion_proof: entry_v2
-                .inclusion_proof
-                .map(|p| crate::entry::RekorInclusionProof {
-                    checkpoint: p.checkpoint.envelope,
-                    // Convert Sha256Hash to hex strings (V1 format)
-                    hashes: p.hashes.iter().map(|h| h.to_hex()).collect(),
-                    log_index: p.log_index.parse::<i64>().unwrap_or_default(),
-                    root_hash: p.root_hash.to_hex(),
-                    tree_size: p.tree_size.parse::<i64>().unwrap_or_default(),
-                }),
-            signed_entry_timestamp: entry_v2.inclusion_promise.map(|p| p.signed_entry_timestamp),
-        });
-
-        Ok(LogEntry {
-            uuid: Default::default(), // V2 response doesn't include UUID in body
-            body: entry_v2.canonicalized_body,
-            integrated_time,
-            log_id: entry_v2.log_id.key_id.into_string().into(),
-            log_index,
-            verification,
-        })
-    }
-
     /// Search the index for entries
     pub async fn search_index(&self, query: SearchIndex) -> Result<Vec<String>> {
+        self.require_version(RekorApiVersion::V1)?;
         let url = format!("{}/api/v1/index/retrieve", self.url);
         let response = self
             .client
@@ -396,6 +397,7 @@ impl RekorClient {
     /// With the `cache` feature enabled and a cache configured, this will
     /// cache the public key with the default TTL (24 hours).
     pub async fn get_public_key(&self) -> Result<String> {
+        self.require_version(RekorApiVersion::V1)?;
         #[cfg(feature = "cache")]
         if let Some(ref cache) = self.cache {
             if let Ok(Some(cached)) = cache.get(CacheKey::RekorPublicKey).await {
@@ -419,6 +421,74 @@ impl RekorClient {
         }
 
         Ok(key)
+    }
+
+    /// Fetch and parse the latest C2SP signed checkpoint from a Rekor v2 log.
+    ///
+    /// Parsing does not authenticate the checkpoint signature. Consumers must
+    /// verify it with a key from their trusted root before trusting its contents.
+    pub async fn get_checkpoint(&self) -> Result<Checkpoint> {
+        self.require_version(RekorApiVersion::V2)?;
+        let bytes = self.get_v2_bytes("checkpoint").await?;
+        let text = String::from_utf8(bytes)
+            .map_err(|e| Error::InvalidResponse(format!("checkpoint is not UTF-8: {e}")))?;
+        Checkpoint::from_text(&text)
+            .map_err(|e| Error::InvalidResponse(format!("invalid checkpoint: {e}")))
+    }
+
+    /// Fetch a full or partial Rekor v2 hash tile.
+    pub async fn get_tile(
+        &self,
+        level: u32,
+        index: u64,
+        width: Option<NonZeroU8>,
+    ) -> Result<RekorV2Tile> {
+        self.require_version(RekorApiVersion::V2)?;
+        let path = tile_path(index, width);
+        let bytes = self.get_v2_bytes(&format!("tile/{level}/{path}")).await?;
+        Ok(RekorV2Tile {
+            level,
+            index,
+            width,
+            bytes,
+        })
+    }
+
+    /// Fetch a full or partial Rekor v2 entry bundle.
+    pub async fn get_entry_bundle(
+        &self,
+        index: u64,
+        width: Option<NonZeroU8>,
+    ) -> Result<RekorV2EntryBundle> {
+        self.require_version(RekorApiVersion::V2)?;
+        let path = tile_path(index, width);
+        let bytes = self.get_v2_bytes(&format!("tile/entries/{path}")).await?;
+        Ok(RekorV2EntryBundle {
+            index,
+            width,
+            bytes,
+        })
+    }
+
+    async fn get_v2_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let url = format!("{}/api/v2/{path}", self.url);
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::Http(e.to_string()))?;
+        if !response.status().is_success() {
+            return Err(Error::Api(format!(
+                "failed to fetch Rekor v2 {path}: {}",
+                response.status()
+            )));
+        }
+        response
+            .bytes()
+            .await
+            .map(|bytes| bytes.to_vec())
+            .map_err(|e| Error::Http(e.to_string()))
     }
 
     /// Fetch public key from the API (bypassing cache)
@@ -470,6 +540,8 @@ impl RekorClient {
 /// ```
 pub struct RekorClientBuilder {
     url: String,
+    api_version: RekorApiVersion,
+    timeout: Duration,
     #[cfg(feature = "cache")]
     cache: Option<Arc<dyn CacheAdapter>>,
 }
@@ -477,11 +549,26 @@ pub struct RekorClientBuilder {
 impl RekorClientBuilder {
     /// Create a new builder with the given URL
     pub fn new(url: impl Into<String>) -> Self {
+        let url = url.into();
         Self {
-            url: url.into(),
+            url: url.trim_end_matches('/').to_string(),
+            api_version: RekorApiVersion::V1,
+            timeout: DEFAULT_TIMEOUT,
             #[cfg(feature = "cache")]
             cache: None,
         }
+    }
+
+    /// Select the Rekor API exposed by the configured URL.
+    pub fn with_api_version(mut self, api_version: RekorApiVersion) -> Self {
+        self.api_version = api_version;
+        self
+    }
+
+    /// Set the HTTP request timeout. Rekor v2 writes should use at least 20 seconds.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     /// Set the cache adapter
@@ -502,11 +589,75 @@ impl RekorClientBuilder {
     pub fn build(self) -> RekorClient {
         RekorClient {
             url: self.url,
-            client: reqwest::Client::new(),
+            api_version: self.api_version,
+            client: reqwest::Client::builder()
+                .timeout(self.timeout)
+                .build()
+                .expect("HTTP client configuration is valid"),
             #[cfg(feature = "cache")]
             cache: self.cache,
         }
     }
+}
+
+fn validate_v2_entry(entry: &TransparencyLogEntry) -> Result<()> {
+    if entry.kind_version.kind != "hashedrekord" || entry.kind_version.version != "0.0.2" {
+        return Err(Error::InvalidResponse(format!(
+            "expected hashedrekord/0.0.2, received {}/{}",
+            entry.kind_version.kind, entry.kind_version.version
+        )));
+    }
+    if entry.integrated_time.is_some() {
+        return Err(Error::InvalidResponse(
+            "Rekor v2 response contains a nonzero integrated time".to_string(),
+        ));
+    }
+    if entry.inclusion_promise.is_some() {
+        return Err(Error::InvalidResponse(
+            "Rekor v2 response contains an inclusion promise".to_string(),
+        ));
+    }
+    let proof = entry.inclusion_proof.as_ref().ok_or_else(|| {
+        Error::InvalidResponse("Rekor v2 response has no inclusion proof".to_string())
+    })?;
+    // proof.log_index, proof.tree_size, and proof.root_hash are unauthenticated
+    // duplicates in Rekor v2. Consumers use the top-level index and signed
+    // checkpoint values instead.
+    if entry.log_index.as_u64().is_none() {
+        return Err(Error::InvalidResponse(
+            "Rekor v2 response has a negative log index".to_string(),
+        ));
+    }
+    if proof.checkpoint.is_empty() {
+        return Err(Error::InvalidResponse(
+            "Rekor v2 response has an empty checkpoint".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn tile_path(index: u64, width: Option<NonZeroU8>) -> String {
+    let digits = format!("{index:03}");
+    let first_group_len = digits.len() % 3;
+    let first_group_len = if first_group_len == 0 {
+        3
+    } else {
+        first_group_len
+    };
+    let mut groups = Vec::new();
+    groups.push(digits[..first_group_len].to_string());
+    for offset in (first_group_len..digits.len()).step_by(3) {
+        groups.push(digits[offset..offset + 3].to_string());
+    }
+    let last = groups.len() - 1;
+    for group in &mut groups[..last] {
+        group.insert(0, 'x');
+    }
+    let mut path = groups.join("/");
+    if let Some(width) = width {
+        path.push_str(&format!(".p/{width}"));
+    }
+    path
 }
 
 /// Convenience function to get log info from the public Rekor instance
