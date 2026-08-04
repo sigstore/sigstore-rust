@@ -108,16 +108,13 @@ impl DelegatedRole {
     /// (the SHA-256 hex of the target path begins with the prefix) or one of its
     /// shell-style `paths` globs. A role with neither field authorizes nothing.
     ///
-    /// Glob matching uses [`globset`] with `literal_separator` enabled, i.e.
-    /// proper shell-glob semantics where a `*` (or `?`) does **not** cross a path
-    /// separator (`/`). This follows the TUF spec, whose own example notes that
-    /// `*.tgz` matches `foo.tgz` but not `targets/foo.tgz`; matching across `/`
-    /// (as plain `fnmatch` / globset's default does) would over-authorize a
-    /// delegation. A `paths` entry that is not a valid glob is a hard error
-    /// rather than a silent non-match, so a repository we cannot correctly
-    /// evaluate is rejected instead of having a delegation quietly ignored.
-    ///
-    /// [`globset`]: https://docs.rs/globset
+    /// Patterns are evaluated using TUF's shell-style path-pattern grammar:
+    /// `*`, `?`, and bracket expressions never match a path separator (`/`).
+    /// Every `*` is interpreted independently, so adjacent stars do not acquire
+    /// the recursive-glob semantics that some glob libraries assign to `**`.
+    /// A malformed pattern is a hard error rather than a silent non-match, so a
+    /// repository we cannot correctly evaluate is rejected instead of having a
+    /// delegation quietly ignored.
     pub fn matches_path(&self, target_path: &str) -> Result<bool> {
         if let Some(prefixes) = &self.path_hash_prefixes {
             let hash = hex::encode(sigstore_crypto::sha256(target_path.as_bytes()).as_bytes());
@@ -125,22 +122,124 @@ impl DelegatedRole {
         }
         if let Some(paths) = &self.paths {
             for pattern in paths {
-                let glob = globset::GlobBuilder::new(pattern)
-                    .literal_separator(true)
-                    .build()
-                    .map_err(|e| {
-                        Error::Malformed(format!(
-                            "role {:?} has invalid delegation path pattern {pattern:?}: {e}",
-                            self.name
-                        ))
-                    })?;
-                if glob.compile_matcher().is_match(target_path) {
+                let tokens = parse_path_pattern(pattern).map_err(|e| {
+                    Error::Malformed(format!(
+                        "role {:?} has invalid delegation path pattern {pattern:?}: {e}",
+                        self.name
+                    ))
+                })?;
+                if path_pattern_matches(&tokens, target_path) {
                     return Ok(true);
                 }
             }
         }
         Ok(false)
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PathPatternToken {
+    Literal(char),
+    AnySequence,
+    AnyCharacter,
+    Class {
+        negated: bool,
+        ranges: Vec<(char, char)>,
+    },
+}
+
+/// Parse the shell-style path-pattern subset defined by TUF. Parsing this
+/// locally avoids library-specific extensions such as recursive `**` globs.
+fn parse_path_pattern(pattern: &str) -> std::result::Result<Vec<PathPatternToken>, String> {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut tokens = Vec::new();
+    let mut i = 0;
+
+    while i < chars.len() {
+        match chars[i] {
+            '*' => tokens.push(PathPatternToken::AnySequence),
+            '?' => tokens.push(PathPatternToken::AnyCharacter),
+            '[' => {
+                let close = chars[i + 1..]
+                    .iter()
+                    .position(|c| *c == ']')
+                    .map(|offset| i + 1 + offset)
+                    .ok_or_else(|| "unclosed character class".to_string())?;
+                let mut contents = &chars[i + 1..close];
+                let negated = contents.first() == Some(&'!');
+                if negated {
+                    contents = &contents[1..];
+                }
+                if contents.is_empty() {
+                    return Err("empty character class".to_string());
+                }
+
+                let mut ranges = Vec::new();
+                let mut j = 0;
+                while j < contents.len() {
+                    if j + 2 < contents.len() && contents[j + 1] == '-' {
+                        let start = contents[j];
+                        let end = contents[j + 2];
+                        if start > end {
+                            return Err(format!("invalid character range {start}-{end}"));
+                        }
+                        ranges.push((start, end));
+                        j += 3;
+                    } else {
+                        ranges.push((contents[j], contents[j]));
+                        j += 1;
+                    }
+                }
+                tokens.push(PathPatternToken::Class { negated, ranges });
+                i = close;
+            }
+            literal => tokens.push(PathPatternToken::Literal(literal)),
+        }
+        i += 1;
+    }
+    Ok(tokens)
+}
+
+fn path_pattern_matches(tokens: &[PathPatternToken], target_path: &str) -> bool {
+    let target: Vec<char> = target_path.chars().collect();
+    let mut matched = vec![false; target.len() + 1];
+    matched[0] = true;
+
+    for token in tokens {
+        let mut next = vec![false; target.len() + 1];
+        match token {
+            PathPatternToken::AnySequence => {
+                next[0] = matched[0];
+                for i in 1..=target.len() {
+                    // Match zero characters, or extend this same star by one
+                    // non-separator character.
+                    next[i] = matched[i] || (target[i - 1] != '/' && next[i - 1]);
+                }
+            }
+            PathPatternToken::Literal(expected) => {
+                for i in 1..=target.len() {
+                    next[i] = matched[i - 1] && target[i - 1] == *expected;
+                }
+            }
+            PathPatternToken::AnyCharacter => {
+                for i in 1..=target.len() {
+                    next[i] = matched[i - 1] && target[i - 1] != '/';
+                }
+            }
+            PathPatternToken::Class { negated, ranges } => {
+                for i in 1..=target.len() {
+                    let actual = target[i - 1];
+                    let contained = ranges
+                        .iter()
+                        .any(|(start, end)| *start <= actual && actual <= *end);
+                    next[i] = matched[i - 1] && actual != '/' && contained != *negated;
+                }
+            }
+        }
+        matched = next;
+    }
+
+    matched[target.len()]
 }
 
 #[cfg(test)]
@@ -176,6 +275,12 @@ mod tests {
         assert!(nested.matches_path("releases/x/x_v1").unwrap());
         assert!(!nested.matches_path("releases/x").unwrap());
         assert!(!nested.matches_path("releases/x/y/z").unwrap());
+
+        // Adjacent stars are still independent `*` tokens in TUF: neither may
+        // match `/`, so `**` must not acquire recursive-glob semantics.
+        let adjacent = with_paths(serde_json::json!(["releases/**"]));
+        assert!(adjacent.matches_path("releases/package").unwrap());
+        assert!(!adjacent.matches_path("releases/stable/package").unwrap());
     }
 
     #[test]

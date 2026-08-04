@@ -86,7 +86,6 @@ serde_json_canonicalizer = "0.3"
 
 # Glob matching for TUF delegation paths (matches python-tuf's `fnmatch`
 # semantics, the same behaviour `tough` relies on).
-globset = "0.4"
 
 # Async utilities
 futures = "0.3"
