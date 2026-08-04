@@ -53,12 +53,19 @@ use sigstore_cache::{CacheAdapter, CacheKey};
 #[cfg(feature = "cache")]
 use std::sync::Arc;
 
-/// A client for interacting with Rekor
+fn build_http_client(timeout: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .expect("HTTP client configuration is valid")
+}
+
+/// A client for the Rekor v1 REST API.
+///
+/// For tile-based Rekor v2 logs, use [`RekorV2Client`].
 pub struct RekorClient {
     /// Base URL of the Rekor instance
     url: String,
-    /// API exposed by this Rekor instance.
-    api_version: RekorApiVersion,
     /// HTTP client
     client: reqwest::Client,
     /// Optional cache adapter
@@ -67,25 +74,11 @@ pub struct RekorClient {
 }
 
 impl RekorClient {
-    /// Create a new Rekor client
+    /// Create a new Rekor v1 client
     pub fn new(url: impl Into<String>) -> Self {
-        Self::new_for_version(url, RekorApiVersion::V1)
-    }
-
-    /// Create a client for a Rekor v2 instance.
-    pub fn new_v2(url: impl Into<String>) -> Self {
-        Self::new_for_version(url, RekorApiVersion::V2)
-    }
-
-    fn new_for_version(url: impl Into<String>, api_version: RekorApiVersion) -> Self {
-        let url = url.into();
         Self {
-            url: url.trim_end_matches('/').to_string(),
-            api_version,
-            client: reqwest::Client::builder()
-                .timeout(DEFAULT_TIMEOUT)
-                .build()
-                .expect("default HTTP client configuration is valid"),
+            url: url.into().trim_end_matches('/').to_string(),
+            client: build_http_client(DEFAULT_TIMEOUT),
             #[cfg(feature = "cache")]
             cache: None,
         }
@@ -96,35 +89,9 @@ impl RekorClient {
         Self::new(RekorApiVersion::V1.default_url())
     }
 
-    /// Create a client for the public Sigstore Rekor v2 instance.
-    pub fn public_v2() -> Self {
-        Self::new_v2(RekorApiVersion::V2.default_url())
-    }
-
     /// Create a client for the Sigstore staging Rekor v1 instance.
     pub fn staging() -> Self {
         Self::new(RekorApiVersion::V1.default_staging_url())
-    }
-
-    /// Create a client for the Sigstore staging Rekor v2 instance.
-    pub fn staging_v2() -> Self {
-        Self::new_v2(RekorApiVersion::V2.default_staging_url())
-    }
-
-    /// Return the API version configured for this client.
-    pub fn api_version(&self) -> RekorApiVersion {
-        self.api_version
-    }
-
-    fn require_version(&self, required: RekorApiVersion) -> Result<()> {
-        if self.api_version != required {
-            return Err(Error::UnsupportedOperation(format!(
-                "operation requires Rekor API v{}, but this client uses v{}",
-                required.major(),
-                self.api_version.major()
-            )));
-        }
-        Ok(())
     }
 
     /// Create a builder for configuring the client
@@ -137,7 +104,6 @@ impl RekorClient {
     /// With the `cache` feature enabled and a cache configured, this will
     /// cache the log info with the default TTL (1 hour).
     pub async fn get_log_info(&self) -> Result<LogInfo> {
-        self.require_version(RekorApiVersion::V1)?;
         #[cfg(feature = "cache")]
         if let Some(ref cache) = self.cache {
             if let Ok(Some(cached)) = cache.get(CacheKey::RekorLogInfo).await {
@@ -190,7 +156,6 @@ impl RekorClient {
 
     /// Get a log entry by UUID
     pub async fn get_entry_by_uuid(&self, uuid: &str) -> Result<LogEntry> {
-        self.require_version(RekorApiVersion::V1)?;
         let url = format!("{}/api/v1/log/entries/{}", self.url, uuid);
         let response = self
             .client
@@ -224,7 +189,6 @@ impl RekorClient {
 
     /// Get a log entry by index
     pub async fn get_entry_by_index(&self, index: i64) -> Result<LogEntry> {
-        self.require_version(RekorApiVersion::V1)?;
         let url = format!("{}/api/v1/log/entries?logIndex={}", self.url, index);
         let response = self
             .client
@@ -257,7 +221,6 @@ impl RekorClient {
 
     /// Create a new log entry (V1)
     pub async fn create_entry(&self, entry: HashedRekord) -> Result<LogEntry> {
-        self.require_version(RekorApiVersion::V1)?;
         let url = format!("{}/api/v1/log/entries", self.url);
         let response = self
             .client
@@ -290,44 +253,8 @@ impl RekorClient {
         Ok(entry)
     }
 
-    /// Create a Rekor v2 hashedrekord entry.
-    ///
-    /// Rekor v2 returns the protobuf `TransparencyLogEntry` JSON representation
-    /// used directly by Sigstore bundles. No v1 compatibility conversion is
-    /// performed.
-    pub async fn create_entry_v2(&self, entry: HashedRekordV2) -> Result<TransparencyLogEntry> {
-        self.require_version(RekorApiVersion::V2)?;
-        let url = format!("{}/api/v2/log/entries", self.url);
-        let response = self
-            .client
-            .post(&url)
-            .json(&entry)
-            .send()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Api(format!(
-                "failed to create entry: {} - {}",
-                status, body
-            )));
-        }
-
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-        let entry: TransparencyLogEntry = serde_json::from_str(&response_text)
-            .map_err(|e| Error::InvalidResponse(format!("invalid v2 log entry JSON: {e}")))?;
-        validate_v2_entry(&entry)?;
-        Ok(entry)
-    }
-
     /// Create a new DSSE log entry (V1)
     pub async fn create_dsse_entry(&self, entry: DsseEntry) -> Result<LogEntry> {
-        self.require_version(RekorApiVersion::V1)?;
         let url = format!("{}/api/v1/log/entries", self.url);
         let response = self
             .client
@@ -362,7 +289,6 @@ impl RekorClient {
 
     /// Search the index for entries
     pub async fn search_index(&self, query: SearchIndex) -> Result<Vec<String>> {
-        self.require_version(RekorApiVersion::V1)?;
         let url = format!("{}/api/v1/index/retrieve", self.url);
         let response = self
             .client
@@ -397,7 +323,6 @@ impl RekorClient {
     /// With the `cache` feature enabled and a cache configured, this will
     /// cache the public key with the default TTL (24 hours).
     pub async fn get_public_key(&self) -> Result<String> {
-        self.require_version(RekorApiVersion::V1)?;
         #[cfg(feature = "cache")]
         if let Some(ref cache) = self.cache {
             if let Ok(Some(cached)) = cache.get(CacheKey::RekorPublicKey).await {
@@ -423,74 +348,6 @@ impl RekorClient {
         Ok(key)
     }
 
-    /// Fetch and parse the latest C2SP signed checkpoint from a Rekor v2 log.
-    ///
-    /// Parsing does not authenticate the checkpoint signature. Consumers must
-    /// verify it with a key from their trusted root before trusting its contents.
-    pub async fn get_checkpoint(&self) -> Result<Checkpoint> {
-        self.require_version(RekorApiVersion::V2)?;
-        let bytes = self.get_v2_bytes("checkpoint").await?;
-        let text = String::from_utf8(bytes)
-            .map_err(|e| Error::InvalidResponse(format!("checkpoint is not UTF-8: {e}")))?;
-        Checkpoint::from_text(&text)
-            .map_err(|e| Error::InvalidResponse(format!("invalid checkpoint: {e}")))
-    }
-
-    /// Fetch a full or partial Rekor v2 hash tile.
-    pub async fn get_tile(
-        &self,
-        level: u32,
-        index: u64,
-        width: Option<NonZeroU8>,
-    ) -> Result<RekorV2Tile> {
-        self.require_version(RekorApiVersion::V2)?;
-        let path = tile_path(index, width);
-        let bytes = self.get_v2_bytes(&format!("tile/{level}/{path}")).await?;
-        Ok(RekorV2Tile {
-            level,
-            index,
-            width,
-            bytes,
-        })
-    }
-
-    /// Fetch a full or partial Rekor v2 entry bundle.
-    pub async fn get_entry_bundle(
-        &self,
-        index: u64,
-        width: Option<NonZeroU8>,
-    ) -> Result<RekorV2EntryBundle> {
-        self.require_version(RekorApiVersion::V2)?;
-        let path = tile_path(index, width);
-        let bytes = self.get_v2_bytes(&format!("tile/entries/{path}")).await?;
-        Ok(RekorV2EntryBundle {
-            index,
-            width,
-            bytes,
-        })
-    }
-
-    async fn get_v2_bytes(&self, path: &str) -> Result<Vec<u8>> {
-        let url = format!("{}/api/v2/{path}", self.url);
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-        if !response.status().is_success() {
-            return Err(Error::Api(format!(
-                "failed to fetch Rekor v2 {path}: {}",
-                response.status()
-            )));
-        }
-        response
-            .bytes()
-            .await
-            .map(|bytes| bytes.to_vec())
-            .map_err(|e| Error::Http(e.to_string()))
-    }
-
     /// Fetch public key from the API (bypassing cache)
     async fn fetch_public_key(&self) -> Result<String> {
         let url = format!("{}/api/v1/log/publicKey", self.url);
@@ -511,6 +368,145 @@ impl RekorClient {
         response
             .text()
             .await
+            .map_err(|e| Error::Http(e.to_string()))
+    }
+}
+
+/// A client for tile-based Rekor v2 logs.
+///
+/// Rekor v2 shares no endpoints with the v1 REST API: writes go through
+/// `/api/v2/log/entries` and reads use the C2SP tlog-tiles endpoints
+/// (checkpoint, hash tiles, and entry bundles). Use [`RekorClient`] for
+/// Rekor v1 instances.
+pub struct RekorV2Client {
+    /// Base URL of the Rekor v2 log
+    url: String,
+    /// HTTP client
+    client: reqwest::Client,
+}
+
+impl RekorV2Client {
+    /// Create a new Rekor v2 client with the default request timeout.
+    pub fn new(url: impl Into<String>) -> Self {
+        Self::new_with_timeout(url, DEFAULT_TIMEOUT)
+    }
+
+    /// Create a new Rekor v2 client with a custom HTTP request timeout.
+    ///
+    /// Rekor v2 writes wait for log inclusion; use at least 20 seconds.
+    pub fn new_with_timeout(url: impl Into<String>, timeout: Duration) -> Self {
+        Self {
+            url: url.into().trim_end_matches('/').to_string(),
+            client: build_http_client(timeout),
+        }
+    }
+
+    /// Create a client for the public Sigstore Rekor v2 instance.
+    pub fn public() -> Self {
+        Self::new(RekorApiVersion::V2.default_url())
+    }
+
+    /// Create a client for the Sigstore staging Rekor v2 instance.
+    pub fn staging() -> Self {
+        Self::new(RekorApiVersion::V2.default_staging_url())
+    }
+
+    /// Create a Rekor v2 hashedrekord entry.
+    ///
+    /// Rekor v2 returns the protobuf `TransparencyLogEntry` JSON representation
+    /// used directly by Sigstore bundles. No v1 compatibility conversion is
+    /// performed.
+    pub async fn create_entry(&self, entry: HashedRekordV2) -> Result<TransparencyLogEntry> {
+        let url = format!("{}/api/v2/log/entries", self.url);
+        let response = self
+            .client
+            .post(&url)
+            .json(&entry)
+            .send()
+            .await
+            .map_err(|e| Error::Http(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Api(format!(
+                "failed to create entry: {} - {}",
+                status, body
+            )));
+        }
+
+        let response_text = response
+            .text()
+            .await
+            .map_err(|e| Error::Http(e.to_string()))?;
+        let entry: TransparencyLogEntry = serde_json::from_str(&response_text)
+            .map_err(|e| Error::InvalidResponse(format!("invalid v2 log entry JSON: {e}")))?;
+        validate_v2_entry(&entry)?;
+        Ok(entry)
+    }
+
+    /// Fetch and parse the latest C2SP signed checkpoint from a Rekor v2 log.
+    ///
+    /// Parsing does not authenticate the checkpoint signature. Consumers must
+    /// verify it with a key from their trusted root before trusting its contents.
+    pub async fn get_checkpoint(&self) -> Result<Checkpoint> {
+        let bytes = self.get_bytes("checkpoint").await?;
+        let text = String::from_utf8(bytes)
+            .map_err(|e| Error::InvalidResponse(format!("checkpoint is not UTF-8: {e}")))?;
+        Checkpoint::from_text(&text)
+            .map_err(|e| Error::InvalidResponse(format!("invalid checkpoint: {e}")))
+    }
+
+    /// Fetch a full or partial Rekor v2 hash tile.
+    pub async fn get_tile(
+        &self,
+        level: u32,
+        index: u64,
+        width: Option<NonZeroU8>,
+    ) -> Result<RekorV2Tile> {
+        let path = tile_path(index, width);
+        let bytes = self.get_bytes(&format!("tile/{level}/{path}")).await?;
+        Ok(RekorV2Tile {
+            level,
+            index,
+            width,
+            bytes,
+        })
+    }
+
+    /// Fetch a full or partial Rekor v2 entry bundle.
+    pub async fn get_entry_bundle(
+        &self,
+        index: u64,
+        width: Option<NonZeroU8>,
+    ) -> Result<RekorV2EntryBundle> {
+        let path = tile_path(index, width);
+        let bytes = self.get_bytes(&format!("tile/entries/{path}")).await?;
+        Ok(RekorV2EntryBundle {
+            index,
+            width,
+            bytes,
+        })
+    }
+
+    async fn get_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let url = format!("{}/api/v2/{path}", self.url);
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::Http(e.to_string()))?;
+        if !response.status().is_success() {
+            return Err(Error::Api(format!(
+                "failed to fetch Rekor v2 {path}: {}",
+                response.status()
+            )));
+        }
+        response
+            .bytes()
+            .await
+            .map(|bytes| bytes.to_vec())
             .map_err(|e| Error::Http(e.to_string()))
     }
 }
@@ -540,7 +536,6 @@ impl RekorClient {
 /// ```
 pub struct RekorClientBuilder {
     url: String,
-    api_version: RekorApiVersion,
     timeout: Duration,
     #[cfg(feature = "cache")]
     cache: Option<Arc<dyn CacheAdapter>>,
@@ -552,20 +547,13 @@ impl RekorClientBuilder {
         let url = url.into();
         Self {
             url: url.trim_end_matches('/').to_string(),
-            api_version: RekorApiVersion::V1,
             timeout: DEFAULT_TIMEOUT,
             #[cfg(feature = "cache")]
             cache: None,
         }
     }
 
-    /// Select the Rekor API exposed by the configured URL.
-    pub fn with_api_version(mut self, api_version: RekorApiVersion) -> Self {
-        self.api_version = api_version;
-        self
-    }
-
-    /// Set the HTTP request timeout. Rekor v2 writes should use at least 20 seconds.
+    /// Set the HTTP request timeout.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -589,11 +577,7 @@ impl RekorClientBuilder {
     pub fn build(self) -> RekorClient {
         RekorClient {
             url: self.url,
-            api_version: self.api_version,
-            client: reqwest::Client::builder()
-                .timeout(self.timeout)
-                .build()
-                .expect("HTTP client configuration is valid"),
+            client: build_http_client(self.timeout),
             #[cfg(feature = "cache")]
             cache: self.cache,
         }

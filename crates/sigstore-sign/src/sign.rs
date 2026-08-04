@@ -8,7 +8,8 @@ use sigstore_crypto::{KeyPair, Sha256Hasher, SigningScheme};
 use sigstore_fulcio::FulcioClient;
 use sigstore_oidc::IdentityToken;
 use sigstore_rekor::{
-    DsseEntry, HashedRekord, HashedRekordV2, RekorApiVersion, RekorClient, RekorV2KeyDetails,
+    DsseEntry, HashedRekord, HashedRekordV2, RekorApiVersion, RekorClient, RekorV2Client,
+    RekorV2KeyDetails,
 };
 use sigstore_trust_root::{
     SigningConfig as TufSigningConfig, SIGSTORE_PRODUCTION_SIGNING_CONFIG,
@@ -437,7 +438,7 @@ impl Signer {
                 Ok(TlogEntryBuilder::from_log_entry(&entry, "hashedrekord", "0.0.1").build())
             }
             RekorApiVersion::V2 => {
-                let rekor = RekorClient::new_v2(&self.rekor_url);
+                let rekor = RekorV2Client::new(&self.rekor_url);
                 let request = HashedRekordV2::new_with_certificate(
                     artifact_hash,
                     signature,
@@ -445,7 +446,7 @@ impl Signer {
                     self.rekor_v2_key_details()?,
                 );
                 rekor
-                    .create_entry_v2(request)
+                    .create_entry(request)
                     .await
                     .map_err(|e| Error::Signing(format!("Failed to create Rekor entry: {e}")))
             }
@@ -583,7 +584,7 @@ impl Signer {
                 Ok(TlogEntryBuilder::from_log_entry(&entry, "dsse", "0.0.1").build())
             }
             RekorApiVersion::V2 => {
-                let rekor = RekorClient::new_v2(&self.rekor_url);
+                let rekor = RekorV2Client::new(&self.rekor_url);
                 let hash = sha256_pae_yielding(&envelope.payload_type, envelope.payload.as_bytes())
                     .await
                     .finalize();
@@ -593,7 +594,7 @@ impl Signer {
                     certificate,
                     self.rekor_v2_key_details()?,
                 );
-                rekor.create_entry_v2(request).await.map_err(|e| {
+                rekor.create_entry(request).await.map_err(|e| {
                     Error::Signing(format!("Failed to create Rekor entry for DSSE: {e}"))
                 })
             }

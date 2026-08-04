@@ -22,14 +22,6 @@ pub enum RekorApiVersion {
 }
 
 impl RekorApiVersion {
-    /// Return the API's major version number.
-    pub fn major(self) -> u8 {
-        match self {
-            Self::V1 => 1,
-            Self::V2 => 2,
-        }
-    }
-
     /// Get the default Rekor URL for this API version
     pub fn default_url(&self) -> &'static str {
         match self {

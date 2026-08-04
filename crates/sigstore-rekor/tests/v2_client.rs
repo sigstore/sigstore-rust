@@ -1,4 +1,4 @@
-use sigstore_rekor::{HashedRekordV2, RekorApiVersion, RekorClient, RekorV2KeyDetails};
+use sigstore_rekor::{HashedRekordV2, RekorV2Client, RekorV2KeyDetails};
 use sigstore_types::{DerCertificate, Sha256Hash, SignatureBytes};
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -70,9 +70,9 @@ fn request() -> HashedRekordV2 {
 #[tokio::test]
 async fn create_entry_returns_the_protobuf_entry_without_lossy_conversion() {
     let (url, received) = serve_once("201 Created", "application/json", VALID_ENTRY.as_bytes());
-    let client = RekorClient::new_v2(url);
+    let client = RekorV2Client::new(url);
 
-    let entry = client.create_entry_v2(request()).await.unwrap();
+    let entry = client.create_entry(request()).await.unwrap();
 
     assert_eq!(entry.log_index.value(), 7);
     assert_eq!(
@@ -108,8 +108,8 @@ async fn create_entry_rejects_malformed_or_incomplete_v2_responses() {
             ),
     ] {
         let (url, received) = serve_once("201 Created", "application/json", invalid.as_bytes());
-        let error = RekorClient::new_v2(url)
-            .create_entry_v2(request())
+        let error = RekorV2Client::new(url)
+            .create_entry(request())
             .await
             .unwrap_err();
         received.recv().unwrap();
@@ -130,8 +130,8 @@ async fn create_entry_ignores_unauthenticated_duplicate_proof_fields() {
         .replace("\"treeSize\":\"8\"", "\"treeSize\":\"1\"");
     let (url, _received) = serve_once("201 Created", "application/json", response.as_bytes());
 
-    let entry = RekorClient::new_v2(url)
-        .create_entry_v2(request())
+    let entry = RekorV2Client::new(url)
+        .create_entry(request())
         .await
         .unwrap();
     assert_eq!(entry.log_index.value(), 7);
@@ -145,7 +145,7 @@ async fn reads_v2_checkpoint_and_tile_storage_paths() {
         "application/octet-stream",
         b"example.com/log\n1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n\n\xe2\x80\x94 example.com/log AAAAAAA=\n",
     );
-    let checkpoint = RekorClient::new_v2(url).get_checkpoint().await.unwrap();
+    let checkpoint = RekorV2Client::new(url).get_checkpoint().await.unwrap();
     assert_eq!(checkpoint.origin, "example.com/log");
     assert_eq!(checkpoint.tree_size, 1);
     assert!(checkpoint_request
@@ -154,7 +154,7 @@ async fn reads_v2_checkpoint_and_tile_storage_paths() {
         .starts_with("GET /api/v2/checkpoint "));
 
     let (url, tile_request) = serve_once("200 OK", "application/octet-stream", b"tile");
-    let tile = RekorClient::new_v2(url)
+    let tile = RekorV2Client::new(url)
         .get_tile(2, 1_234_067, NonZeroU8::new(7))
         .await
         .unwrap();
@@ -169,7 +169,7 @@ async fn reads_v2_checkpoint_and_tile_storage_paths() {
         .starts_with("GET /api/v2/tile/2/x001/x234/067.p/7 "));
 
     let (url, entries_request) = serve_once("200 OK", "application/octet-stream", b"entries");
-    let entries = RekorClient::new_v2(url)
+    let entries = RekorV2Client::new(url)
         .get_entry_bundle(1, None)
         .await
         .unwrap();
@@ -180,12 +180,4 @@ async fn reads_v2_checkpoint_and_tile_storage_paths() {
         .recv()
         .unwrap()
         .starts_with("GET /api/v2/tile/entries/001 "));
-}
-
-#[tokio::test]
-async fn rejects_v2_operations_on_a_v1_client() {
-    let client = RekorClient::new("https://rekor.example");
-    let error = client.get_checkpoint().await.unwrap_err();
-    assert!(error.to_string().contains("requires Rekor API v2"));
-    assert_eq!(client.api_version(), RekorApiVersion::V1);
 }

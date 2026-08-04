@@ -35,7 +35,7 @@ println!("tree size: {}", log.tree_size);
 ## V2 write example
 
 ```rust,no_run
-use sigstore_rekor::{HashedRekordV2, RekorClient, RekorV2KeyDetails};
+use sigstore_rekor::{HashedRekordV2, RekorV2Client, RekorV2KeyDetails};
 use sigstore_types::{DerCertificate, Sha256Hash, SignatureBytes};
 
 # async fn example(
@@ -49,24 +49,24 @@ let request = HashedRekordV2::new_with_certificate(
     &certificate,
     RekorV2KeyDetails::PkixEcdsaP256Sha256,
 );
-let entry = RekorClient::public_v2().create_entry_v2(request).await?;
+let entry = RekorV2Client::public().create_entry(request).await?;
 println!("log index: {}", entry.log_index);
 # Ok(())
 # }
 ```
 
-`create_entry_v2` returns the protobuf-compatible
+`RekorV2Client::create_entry` returns the protobuf-compatible
 `sigstore_types::TransparencyLogEntry` directly. It does not convert the v2
 response through the differently encoded v1 response types.
 
 ## V2 checkpoint and tile reads
 
 ```rust,no_run
-use sigstore_rekor::RekorClient;
+use sigstore_rekor::RekorV2Client;
 use std::num::NonZeroU8;
 
 # async fn example() -> Result<(), sigstore_rekor::Error> {
-let client = RekorClient::public_v2();
+let client = RekorV2Client::public();
 let checkpoint = client.get_checkpoint().await?;
 let full_tile = client.get_tile(0, 12, None).await?;
 let partial_entries = client
@@ -87,9 +87,10 @@ not expose the v1 online-verification endpoints.
 
 ## API selection
 
-`RekorClient::new`, `public`, and `staging` construct v1 clients.
-`RekorClient::new_v2`, `public_v2`, and `staging_v2` construct v2 clients.
-Version-specific operations fail locally when called on the wrong client.
+The two protocols share no endpoints, so they are separate types:
+`RekorClient` speaks the v1 REST API and `RekorV2Client` speaks the v2
+write and tile-read API. Calling an endpoint of the wrong version is a
+compile error rather than a runtime failure.
 For signing, prefer endpoints discovered from Sigstore's TUF `SigningConfig`
 rather than hard-coded public URLs.
 
