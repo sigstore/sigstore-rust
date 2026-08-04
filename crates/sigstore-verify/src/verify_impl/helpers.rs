@@ -127,7 +127,10 @@ pub fn has_v2_tlog_entries(bundle: &Bundle) -> bool {
         .verification_material
         .tlog_entries
         .iter()
-        .any(|entry| entry.kind_version.version == "0.0.2")
+        .any(|entry| {
+            entry.kind_version.version == "0.0.2"
+                && matches!(entry.kind_version.kind.as_str(), "hashedrekord" | "dsse")
+        })
 }
 
 /// Extract integrated time from V1 tlog entries that have inclusion promises.
@@ -152,9 +155,10 @@ fn extract_v1_integrated_times_with_promise(
     let mut times = Vec::new();
 
     for entry in &bundle.verification_material.tlog_entries {
-        // Only V1 entries (0.0.1) with inclusion promises are valid timestamp sources
-        let is_v1 = entry.kind_version.version == "0.0.1"
-            && (entry.kind_version.kind == "hashedrekord" || entry.kind_version.kind == "dsse");
+        // Rekor v1 uses 0.0.1 for hashedrekord/dsse and 0.0.2 for intoto.
+        let is_v1 = (entry.kind_version.version == "0.0.1"
+            && matches!(entry.kind_version.kind.as_str(), "hashedrekord" | "dsse"))
+            || (entry.kind_version.kind == "intoto" && entry.kind_version.version == "0.0.2");
 
         if !is_v1 || entry.inclusion_promise.is_none() {
             continue;

@@ -472,11 +472,8 @@ fn verify_dsse_envelope_signature(
 /// Only in-toto statements are supported: any other payload type has no
 /// defined relationship to the artifact, so verification fails closed rather
 /// than accepting an arbitrary artifact alongside a validly-signed envelope.
-/// The artifact's SHA-256 digest must match at least one subject of the
-/// statement, and the statement must have at least one subject.
-///
-/// Note: in-toto supports multiple digest algorithms (e.g. sha512), but
-/// Sigstore currently mandates SHA-256 for attestation subjects.
+/// A supported artifact digest (SHA-256 or SHA-512) must match at least one
+/// subject of the statement, and the statement must have at least one subject.
 fn verify_dsse_artifact_binding(
     envelope: &sigstore_types::DsseEnvelope,
     artifact: &Artifact<'_>,
@@ -488,11 +485,6 @@ fn verify_dsse_artifact_binding(
         )));
     }
 
-    let artifact_hash = compute_artifact_digest_algo(artifact, HashAlgorithm::Sha2256)?;
-    let artifact_hash_hex = sigstore_types::Sha256Hash::try_from_slice(&artifact_hash)
-        .map_err(|_| Error::Verification("invalid SHA-256 hash length".to_string()))?
-        .to_hex();
-
     let payload_str = std::str::from_utf8(envelope.payload.as_bytes())
         .map_err(|e| Error::Verification(format!("payload is not valid UTF-8: {}", e)))?;
     let statement: Statement = serde_json::from_str(payload_str)
@@ -503,7 +495,37 @@ fn verify_dsse_artifact_binding(
             "in-toto statement has no subjects: cannot bind artifact to attestation".to_string(),
         ));
     }
-    if !statement.matches_sha256(&artifact_hash_hex) {
+    let matches = match artifact {
+        Artifact::Bytes(bytes) => {
+            let sha256 = hex::encode(sigstore_crypto::sha256(bytes));
+            let sha512 = hex::encode(sigstore_crypto::sha512(bytes));
+            statement.subject.iter().any(|subject| {
+                subject.digest.sha256.as_deref() == Some(sha256.as_str())
+                    || subject.digest.sha512.as_deref() == Some(sha512.as_str())
+            })
+        }
+        Artifact::Digest(hash) => match hash.len() {
+            32 => {
+                let digest = hex::encode(hash);
+                statement.matches_sha256(&digest)
+            }
+            64 => {
+                let digest = hex::encode(hash);
+                statement
+                    .subject
+                    .iter()
+                    .any(|subject| subject.digest.sha512.as_deref() == Some(digest.as_str()))
+            }
+            length => {
+                return Err(Error::Verification(format!(
+                    "unsupported pre-computed artifact digest length: {}",
+                    length
+                )))
+            }
+        },
+    };
+
+    if !matches {
         return Err(Error::Verification(
             "artifact hash does not match any subject in attestation".to_string(),
         ));
