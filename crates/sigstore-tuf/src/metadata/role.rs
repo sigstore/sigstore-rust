@@ -284,13 +284,58 @@ mod tests {
     }
 
     #[test]
+    fn adjacent_stars_keep_normal_star_semantics() {
+        for pattern in ["**", "***", "****"] {
+            let r = with_paths(serde_json::json!([pattern]));
+            assert!(r.matches_path("").unwrap(), "{pattern}");
+            assert!(r.matches_path("package").unwrap(), "{pattern}");
+            assert!(!r.matches_path("stable/package").unwrap(), "{pattern}");
+        }
+
+        let surrounded = with_paths(serde_json::json!(["release-**.json"]));
+        assert!(surrounded.matches_path("release-.json").unwrap());
+        assert!(surrounded.matches_path("release-stable.json").unwrap());
+        assert!(!surrounded
+            .matches_path("release-stable/package.json")
+            .unwrap());
+    }
+
+    #[test]
     fn supports_character_classes_and_single_char() {
         let r = with_paths(serde_json::json!(["foo-[0-9].tgz"]));
         assert!(r.matches_path("foo-2.tgz").unwrap());
         assert!(!r.matches_path("foo-a.tgz").unwrap());
+
+        let negated = with_paths(serde_json::json!(["foo-[!0-9].tgz"]));
+        assert!(negated.matches_path("foo-a.tgz").unwrap());
+        assert!(!negated.matches_path("foo-2.tgz").unwrap());
+
         let q = with_paths(serde_json::json!(["foo-?.tgz"]));
         assert!(q.matches_path("foo-x.tgz").unwrap());
+        assert!(q.matches_path("foo-🦀.tgz").unwrap());
         assert!(!q.matches_path("foo-xy.tgz").unwrap());
+        assert!(!q.matches_path("foo-/.tgz").unwrap());
+
+        // Even a class containing (or negating) `/` cannot match a separator.
+        for pattern in ["foo-[/].tgz", "foo-[!x].tgz"] {
+            let class = with_paths(serde_json::json!([pattern]));
+            assert!(!class.matches_path("foo-/.tgz").unwrap(), "{pattern}");
+        }
+    }
+
+    #[test]
+    fn patterns_are_anchored_and_combined_with_or() {
+        let r = with_paths(serde_json::json!(["exact", "*.json"]));
+        assert!(r.matches_path("exact").unwrap());
+        assert!(r.matches_path("root.json").unwrap());
+        assert!(!r.matches_path("prefix-exact").unwrap());
+        assert!(!r.matches_path("root.json.suffix").unwrap());
+
+        // Braces are not part of TUF's path-pattern grammar and are literals,
+        // not a library-specific alternation extension.
+        let literal = with_paths(serde_json::json!(["{one,two}.json"]));
+        assert!(literal.matches_path("{one,two}.json").unwrap());
+        assert!(!literal.matches_path("one.json").unwrap());
     }
 
     #[test]
@@ -310,9 +355,11 @@ mod tests {
 
     #[test]
     fn invalid_pattern_is_a_hard_error() {
-        // An unparseable glob must fail closed, not silently fail to match.
-        let r = with_paths(serde_json::json!(["a[b"]));
-        assert!(r.matches_path("anything").is_err());
+        // An unparseable pattern must fail closed, not silently fail to match.
+        for pattern in ["a[b", "[]", "[!]", "[z-a]"] {
+            let r = with_paths(serde_json::json!([pattern]));
+            assert!(r.matches_path("anything").is_err(), "{pattern}");
+        }
     }
 
     #[test]
