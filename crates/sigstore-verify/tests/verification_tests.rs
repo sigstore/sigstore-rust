@@ -1287,6 +1287,42 @@ fn test_verify_dsse_with_hashedrekord_v002() {
 }
 
 #[test]
+fn verifies_sigstore_python_rekor_v2_message_signature_fixture() {
+    let artifact = include_bytes!("../test_data/upstream/sigstore-python/staging-rekor-v2.txt");
+    let bundle = Bundle::from_json(include_str!(
+        "../test_data/upstream/sigstore-python/staging-rekor-v2.txt.sigstore.json"
+    ))
+    .unwrap();
+
+    verify(
+        artifact.as_slice(),
+        &bundle,
+        &VerificationPolicy::default(),
+        &staging_root(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn verifies_sigstore_python_rekor_v2_dsse_fixture() {
+    let bundle = Bundle::from_json(include_str!(
+        "../test_data/upstream/sigstore-python/a.dsse.staging-rekor-v2.txt.sigstore.json"
+    ))
+    .unwrap();
+    let subject_digest =
+        Sha256Hash::from_hex("a0cfc71271d6e278e57cd332ff957c3f7043fdda354c4cbb190a30d56efa01bf")
+            .unwrap();
+
+    verify(
+        subject_digest,
+        &bundle,
+        &VerificationPolicy::default(),
+        &staging_root(),
+    )
+    .unwrap();
+}
+
+#[test]
 fn rekor_v2_accepts_a_valid_log_signature_after_an_invalid_matching_signature() {
     use base64::Engine as _;
 

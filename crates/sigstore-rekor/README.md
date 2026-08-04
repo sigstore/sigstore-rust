@@ -92,3 +92,21 @@ not expose the v1 online-verification endpoints.
 Version-specific operations fail locally when called on the wrong client.
 For signing, prefer endpoints discovered from Sigstore's TUF `SigningConfig`
 rather than hard-coded public URLs.
+
+## Reference implementations
+
+The v2 behavior is cross-checked against the other Sigstore clients:
+
+- [sigstore-python's v2 request builder](https://github.com/sigstore/sigstore-python/blob/71b63df1aea910fbfe5ba0fb1dc1199a27f56b25/sigstore/_internal/rekor/client_v2.py)
+  submits both artifacts and DSSE PAE digests as `hashedrekord/0.0.2`.
+- [sigstore-python's v2 entry binding](https://github.com/sigstore/sigstore-python/blob/71b63df1aea910fbfe5ba0fb1dc1199a27f56b25/sigstore/verify/verifier.py#L429-L445)
+  checks the PAE digest, signature, certificate, and key details.
+- [sigstore-go's v2 submission path](https://github.com/sigstore/sigstore-go/blob/22d3691c7b8e0c5530fae3c05577690bfef5cd00/pkg/sign/transparency.go#L154-L235)
+  derives the prehash algorithm from key details and stores the returned
+  `TransparencyLogEntry` directly.
+- [sigstore-go's v2 verification path](https://github.com/sigstore/sigstore-go/blob/22d3691c7b8e0c5530fae3c05577690bfef5cd00/pkg/verify/tlog.go#L112-L151)
+  verifies the tile-log checkpoint and inclusion proof separately from v1.
+
+`sigstore-verify` also carries pinned upstream sigstore-python message-signature
+and DSSE Rekor v2 fixtures under
+`test_data/upstream/sigstore-python/` and verifies both in CI.
