@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use sigstore_types::encoding::base64_bytes;
 use sigstore_types::{
-    DerCertificate, DerPublicKey, HashAlgorithm, HexHash, PayloadBytes, PemContent, SignatureBytes,
+    DerCertificate, DerPublicKey, HashAlgorithm, HexHash, PemContent, SignatureBytes,
 };
 
 /// Parsed Rekor entry body
@@ -251,21 +251,62 @@ pub struct IntotoV002Spec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IntotoV002Content {
     pub envelope: IntotoEnvelope,
+    /// Hash of the complete submitted DSSE envelope.
+    pub hash: HashValue,
+    /// Hash of the decoded DSSE payload.
+    pub payload_hash: HashValue,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IntotoEnvelope {
-    /// Payload bytes (actually double-encoded in Rekor)
-    pub payload: PayloadBytes,
+    /// DSSE payload type. Canonical log entries omit the proposed payload.
+    pub payload_type: String,
     pub signatures: Vec<IntotoSignature>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IntotoSignature {
-    /// Signature bytes (double-encoded in Rekor)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyid: Option<String>,
+    /// Signature bytes (double-encoded in Rekor).
     pub sig: SignatureBytes,
+    /// PEM certificate or public key associated with the signature.
+    pub public_key: PemContent,
+}
+
+impl IntotoSignature {
+    /// Parse the PEM verifier as an X.509 certificate.
+    pub fn to_certificate(&self) -> Result<DerCertificate, crate::error::Error> {
+        let pem_str = self.verifier_pem()?;
+        DerCertificate::from_pem(&pem_str).map_err(|e| {
+            crate::error::Error::InvalidResponse(format!(
+                "failed to parse intoto signature certificate PEM: {}",
+                e
+            ))
+        })
+    }
+
+    /// Parse the PEM verifier as a SubjectPublicKeyInfo public key.
+    pub fn to_public_key(&self) -> Result<DerPublicKey, crate::error::Error> {
+        let pem_str = self.verifier_pem()?;
+        DerPublicKey::from_pem(&pem_str).map_err(|e| {
+            crate::error::Error::InvalidResponse(format!(
+                "failed to parse intoto signature public key PEM: {}",
+                e
+            ))
+        })
+    }
+
+    fn verifier_pem(&self) -> Result<String, crate::error::Error> {
+        String::from_utf8(self.public_key.as_bytes().to_vec()).map_err(|e| {
+            crate::error::Error::InvalidResponse(format!("PEM not valid UTF-8: {}", e))
+        })
+    }
 }
 
 // ============================================================================
