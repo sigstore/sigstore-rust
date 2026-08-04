@@ -9,7 +9,8 @@
 //! conformance_client --metadata-dir <DIR> init <TRUSTED_ROOT>
 //! conformance_client --metadata-dir <DIR> --metadata-url <URL> refresh
 //! conformance_client --metadata-dir <DIR> --metadata-url <URL> \
-//!     --target-name <PATH> --target-base-url <URL> --target-dir <DIR> download
+//!     --target-name <PATH> [--target-name <PATH> ...] \
+//!     --target-base-url <URL> --target-dir <DIR> download
 //! ```
 //!
 //! Exit code 0 on success, 1 on any failure. The harness wraps invocations in
@@ -55,7 +56,7 @@ impl MetadataStore for ConformanceStore {
 struct Args {
     metadata_dir: Option<String>,
     metadata_url: Option<String>,
-    target_name: Option<String>,
+    target_names: Vec<String>,
     target_dir: Option<String>,
     target_base_url: Option<String>,
     positionals: Vec<String>,
@@ -75,7 +76,10 @@ fn parse_args() -> std::result::Result<Args, String> {
         match tok.as_str() {
             "--metadata-dir" => take(&mut args.metadata_dir)?,
             "--metadata-url" => take(&mut args.metadata_url)?,
-            "--target-name" => take(&mut args.target_name)?,
+            "--target-name" => args.target_names.push(
+                it.next()
+                    .ok_or_else(|| format!("missing value for {tok}"))?,
+            ),
             "--target-dir" => take(&mut args.target_dir)?,
             "--target-base-url" => take(&mut args.target_base_url)?,
             "-v" | "--verbose" => {}
@@ -133,10 +137,9 @@ async fn cmd_refresh(args: &Args) -> Result<()> {
 /// `download`: refresh, resolve the target (walking delegations), verify and
 /// write it into the target dir.
 async fn cmd_download(args: &Args) -> Result<()> {
-    let target_name = args
-        .target_name
-        .as_ref()
-        .ok_or_else(|| Error::Transport("--target-name is required".into()))?;
+    if args.target_names.is_empty() {
+        return Err(Error::Transport("--target-name is required".into()));
+    }
     let target_dir = args
         .target_dir
         .as_ref()
@@ -147,28 +150,31 @@ async fn cmd_download(args: &Args) -> Result<()> {
     let now = jiff::Timestamp::now();
     updater.refresh(now).await?;
 
-    // Resolve the target (walking delegations) so we can check the cache before
-    // fetching the artifact itself.
-    let info = updater
-        .get_targetinfo(target_name, now)
-        .await?
-        .ok_or_else(|| Error::Malformed(format!("unknown target {target_name:?}")))?;
-    let out = target_dir.join(safe_target_filename(target_name));
+    for target_name in &args.target_names {
+        // Resolve each target with the same updater so delegation-cache state is
+        // retained across all requested target lookups.
+        let info = updater
+            .get_targetinfo(target_name, now)
+            .await?
+            .ok_or_else(|| Error::Malformed(format!("unknown target {target_name:?}")))?;
+        let out = target_dir.join(safe_target_filename(target_name));
 
-    // Artifact cache: if we already have a byte-identical copy, don't download
-    // it again (tuf-conformance's test_artifact_cache checks this).
-    if let Ok(existing) = std::fs::read(&out) {
-        if target_bytes_match(&existing, &info) {
-            return Ok(());
+        // Artifact cache: if we already have a byte-identical copy, don't download
+        // it again (tuf-conformance's test_artifact_cache checks this).
+        if let Ok(existing) = std::fs::read(&out) {
+            if target_bytes_match(&existing, &info) {
+                continue;
+            }
         }
-    }
 
-    let bytes = updater.download_target(&info, target_name).await?;
-    if let Some(parent) = out.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| Error::Transport(format!("creating target dir: {e}")))?;
+        let bytes = updater.download_target(&info, target_name).await?;
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| Error::Transport(format!("creating target dir: {e}")))?;
+        }
+        std::fs::write(&out, &bytes)
+            .map_err(|e| Error::Transport(format!("writing target: {e}")))?;
     }
-    std::fs::write(&out, &bytes).map_err(|e| Error::Transport(format!("writing target: {e}")))?;
     Ok(())
 }
 
