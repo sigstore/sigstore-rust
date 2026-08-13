@@ -791,9 +791,13 @@ pub fn verify_with_key<'a>(
 
     // Verify the transparency log entries' consistency against the bundle's
     // other materials and the artifact (CVE-2022-36056 class), mirroring
-    // step 8 of `Verifier::verify`. Without this, a log entry whose body
-    // (hash, signature, verifier) disagrees with the bundle passes silently.
-    crate::verify_impl::verify_tlog_consistency(bundle, &artifact)?;
+    // step 8 of `Verifier::verify`. Pass the caller-supplied key so legacy
+    // intoto entries can bind their logged verifier in managed-key bundles.
+    crate::verify_impl::rekor::verify_tlog_consistency_with_key(
+        bundle,
+        &artifact,
+        Some(public_key),
+    )?;
 
     Ok(result)
 }
