@@ -4,9 +4,7 @@ use crate::{time_range::TimeRange, Error, Result};
 use jiff::Timestamp;
 use rustls_pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
-use sigstore_crypto::{
-    detect_key_type, KeyType, KeyValidity, Keyring, SigningScheme, VerificationKey,
-};
+use sigstore_crypto::{KeyValidity, Keyring, SigningScheme, VerificationKey};
 use sigstore_types::{DerCertificate, DerPublicKey, HashAlgorithm, LogId, LogKeyId, Sha256Hash};
 
 /// TSA certificate with its optional validity period
@@ -181,16 +179,6 @@ fn key_validity(valid_for: Option<ValidityPeriod>) -> Option<KeyValidity> {
     valid_for.map(|period| KeyValidity::new(period.start, period.end))
 }
 
-fn rekor_signing_scheme(public_key: &DerPublicKey) -> Result<SigningScheme> {
-    match detect_key_type(public_key) {
-        KeyType::EcdsaP256 => Ok(SigningScheme::EcdsaP256Sha256),
-        KeyType::Ed25519 => Ok(SigningScheme::Ed25519),
-        KeyType::Unknown => Err(Error::InvalidKey(
-            "unsupported or unrecognized Rekor public key type".to_string(),
-        )),
-    }
-}
-
 impl TrustedRoot {
     /// Parse a trusted root from JSON
     pub fn from_json(json: &str) -> Result<Self> {
@@ -223,21 +211,32 @@ impl TrustedRoot {
         certs
     }
 
-    /// Build a keyring containing all Rekor transparency log keys.
+    /// Build a keyring containing all supported Rekor transparency log keys.
     ///
     /// Key IDs and validity windows come directly from the trusted root. The
     /// keyring applies those windows when callers perform time-aware lookups.
+    /// Unsupported or malformed key entries are skipped so adding a key for a
+    /// newer algorithm does not make otherwise usable trust material fail on
+    /// older clients. Duplicate IDs are rejected deterministically rather than
+    /// making the selected key depend on array order.
     pub fn rekor_keys(&self) -> Result<Keyring> {
         let mut keyring = Keyring::new();
         for tlog in &self.tlogs {
-            let scheme = rekor_signing_scheme(&tlog.public_key.raw_bytes)?;
-            let key = VerificationKey::from_der(&tlog.public_key.raw_bytes, scheme)
-                .map_err(|e| Error::InvalidKey(e.to_string()))?;
-            keyring.add_key_with_validity(
-                key_id(&tlog.log_id.key_id)?,
-                key,
-                key_validity(tlog.public_key.valid_for),
-            );
+            let Ok(key) = VerificationKey::from_spki_auto(&tlog.public_key.raw_bytes) else {
+                tracing::debug!(log_id = %tlog.log_id.key_id, "skipping malformed Rekor key");
+                continue;
+            };
+            let Ok(key_id) = key_id(&tlog.log_id.key_id) else {
+                tracing::debug!(log_id = %tlog.log_id.key_id, "skipping malformed Rekor log ID");
+                continue;
+            };
+            if keyring.get_key(&key_id).is_some() {
+                return Err(Error::InvalidKey(format!(
+                    "duplicate Rekor log ID: {}",
+                    tlog.log_id.key_id
+                )));
+            }
+            keyring.add_key_with_validity(key_id, key, key_validity(tlog.public_key.valid_for));
         }
         Ok(keyring)
     }
@@ -690,10 +689,35 @@ mod tests {
     }
 
     #[test]
-    fn malformed_log_id_is_rejected_when_building_keyring() {
-        let json =
+    fn malformed_or_unsupported_rekor_entries_do_not_poison_keyring() {
+        let malformed_id =
             SAMPLE_TRUSTED_ROOT.replace("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "AQID");
-        let root = TrustedRoot::from_json(&json).unwrap();
+        let root = TrustedRoot::from_json(&malformed_id).unwrap();
+        assert!(root.rekor_keys().unwrap().is_empty());
+
+        let mut value: serde_json::Value = serde_json::from_str(SAMPLE_TRUSTED_ROOT).unwrap();
+        let unsupported = serde_json::json!({
+            "baseUrl": "https://future-rekor.example.com",
+            "hashAlgorithm": "SHA2_256",
+            "publicKey": {
+                "rawBytes": "AQID",
+                "keyDetails": "FUTURE_KEY_TYPE"
+            },
+            "logId": {
+                "keyId": sigstore_crypto::sha256(b"future-key").to_base64()
+            }
+        });
+        value["tlogs"].as_array_mut().unwrap().push(unsupported);
+        let root = TrustedRoot::from_json(&value.to_string()).unwrap();
+        assert_eq!(root.rekor_keys().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn duplicate_rekor_log_ids_are_rejected_deterministically() {
+        let mut value: serde_json::Value = serde_json::from_str(SAMPLE_TRUSTED_ROOT).unwrap();
+        let duplicate = value["tlogs"][0].clone();
+        value["tlogs"].as_array_mut().unwrap().push(duplicate);
+        let root = TrustedRoot::from_json(&value.to_string()).unwrap();
         assert!(matches!(root.rekor_keys(), Err(Error::InvalidKey(_))));
     }
 
