@@ -6,41 +6,12 @@
 use crate::error::{Error, Result};
 use crate::verification::VerificationKey;
 use jiff::Timestamp;
-use sigstore_types::{KeyHint, Sha256Hash, SignatureBytes};
+use sigstore_types::{KeyHint, Sha256Hash, SignatureBytes, TimeRange};
 use std::collections::HashMap;
-
-/// Optional validity window associated with a verification key.
-///
-/// The interval is closed and an absent end is unbounded, matching Sigstore's
-/// `TimeRange` semantics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KeyValidity {
-    /// Inclusive start of the validity window.
-    pub start: Timestamp,
-    /// Inclusive end of the validity window, or no upper bound.
-    pub end: Option<Timestamp>,
-}
-
-impl KeyValidity {
-    /// Create a validity window.
-    pub fn new(start: Timestamp, end: Option<Timestamp>) -> Self {
-        Self { start, end }
-    }
-
-    /// Return whether `time` is within the closed validity window.
-    pub fn contains(&self, time: Timestamp) -> bool {
-        time >= self.start && self.end.map_or(true, |end| time <= end)
-    }
-
-    /// Return whether the validity window has started by `time`.
-    pub fn has_started_by(&self, time: Timestamp) -> bool {
-        time >= self.start
-    }
-}
 
 struct KeyringEntry {
     key: VerificationKey,
-    validity: Option<KeyValidity>,
+    validity: Option<TimeRange>,
 }
 
 /// A keyring containing multiple verification keys.
@@ -69,7 +40,7 @@ impl Keyring {
         &mut self,
         key_id: Sha256Hash,
         key: VerificationKey,
-        validity: Option<KeyValidity>,
+        validity: Option<TimeRange>,
     ) {
         self.keys.insert(key_id, KeyringEntry { key, validity });
     }
@@ -245,7 +216,7 @@ mod tests {
         let start: Timestamp = "2020-01-01T00:00:00Z".parse().unwrap();
         let end: Timestamp = "2021-01-01T00:00:00Z".parse().unwrap();
         let mut keyring = Keyring::new();
-        keyring.add_key_with_validity(key_id, vk, Some(KeyValidity::new(start, Some(end))));
+        keyring.add_key_with_validity(key_id, vk, Some(TimeRange::new(start, Some(end))));
 
         assert!(keyring.get_key_at(&key_id, start).is_some());
         assert!(keyring.get_key_at(&key_id, end).is_some());

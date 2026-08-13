@@ -1,11 +1,13 @@
 //! Trusted root types and parsing
 
-use crate::{time_range::TimeRange, Error, Result};
+use crate::{Error, Result};
 use jiff::Timestamp;
 use rustls_pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
-use sigstore_crypto::{KeyValidity, Keyring, SigningScheme, VerificationKey};
-use sigstore_types::{DerCertificate, DerPublicKey, HashAlgorithm, LogId, LogKeyId, Sha256Hash};
+use sigstore_crypto::{Keyring, SigningScheme, VerificationKey};
+use sigstore_types::{
+    DerCertificate, DerPublicKey, HashAlgorithm, LogId, LogKeyId, Sha256Hash, TimeRange,
+};
 
 /// TSA certificate with its optional validity period
 pub type TsaCertWithValidity = (CertificateDer<'static>, Option<TimeRange>);
@@ -175,10 +177,6 @@ fn key_id(log_id: &LogKeyId) -> Result<Sha256Hash> {
     Ok(Sha256Hash::try_from_slice(&log_id.decode()?)?)
 }
 
-fn key_validity(valid_for: Option<ValidityPeriod>) -> Option<KeyValidity> {
-    valid_for.map(|period| KeyValidity::new(period.start, period.end))
-}
-
 impl TrustedRoot {
     /// Parse a trusted root from JSON
     pub fn from_json(json: &str) -> Result<Self> {
@@ -232,7 +230,7 @@ impl TrustedRoot {
                     tlog.log_id.key_id
                 )));
             }
-            keyring.add_key_with_validity(key_id, key, key_validity(tlog.public_key.valid_for));
+            keyring.add_key_with_validity(key_id, key, tlog.public_key.valid_for);
         }
         Ok(keyring)
     }
@@ -291,7 +289,7 @@ impl TrustedRoot {
             keyring.add_key_with_validity(
                 key_id(&ctlog.log_id.key_id)?,
                 key,
-                key_validity(ctlog.public_key.valid_for),
+                ctlog.public_key.valid_for,
             );
         }
         Ok(keyring)
@@ -792,7 +790,7 @@ mod tests {
     #[test]
     fn test_validity_period_is_a_time_range() {
         // `ValidityPeriod` is the protobuf-specs `TimeRange`; the containment
-        // semantics themselves are covered in `crate::time_range`.
+        // semantics themselves are covered by `sigstore_types::TimeRange`.
         let root = trusted_root_with_tlog_validity(&[(
             "key",
             r#"{"start": "2020-01-01T00:00:00Z", "end": "2021-01-01T00:00:00Z"}"#,

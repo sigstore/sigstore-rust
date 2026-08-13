@@ -34,8 +34,9 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+use sigstore_types::TimeRange;
 
-use crate::{time_range::TimeRange, Error, Result};
+use crate::{Error, Result};
 
 /// Embedded production signing config
 pub const SIGSTORE_PRODUCTION_SIGNING_CONFIG: &str =
@@ -311,7 +312,7 @@ mod tests {
     #[test]
     fn test_service_endpoint_validity_is_a_time_range() {
         // Service validity uses the protobuf-specs `TimeRange`; containment
-        // semantics are covered in `crate::time_range`.
+        // semantics are covered by `sigstore_types::TimeRange`.
         let endpoint: ServiceEndpoint = serde_json::from_str(
             r#"{
                 "url": "https://rekor.example.com",

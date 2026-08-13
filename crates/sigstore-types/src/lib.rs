@@ -11,6 +11,7 @@ pub mod encoding;
 pub mod error;
 pub mod hash;
 pub mod intoto;
+pub mod time_range;
 
 pub use artifact::Artifact;
 pub use bundle::{
@@ -29,3 +30,4 @@ pub use encoding::{
 pub use error::{Error, Result};
 pub use hash::HashAlgorithm;
 pub use intoto::{Digest, Statement, Subject};
+pub use time_range::TimeRange;
