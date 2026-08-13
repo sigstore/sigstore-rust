@@ -30,18 +30,14 @@ pub fn extract_certificate(
     }
 }
 
-/// Extract signature from bundle content (needed for TSA verification)
-pub fn extract_signature(content: &SignatureContent) -> Result<SignatureBytes> {
+/// Extract signature from bundle content (needed for TSA verification).
+///
+/// `DsseEnvelope` holds exactly one signature by construction, so timestamp
+/// verification necessarily authenticates the signature used by the bundle.
+pub fn extract_signature(content: &SignatureContent) -> SignatureBytes {
     match content {
-        SignatureContent::MessageSignature(msg_sig) => Ok(msg_sig.signature.clone()),
-        SignatureContent::DsseEnvelope(envelope) => {
-            if envelope.signatures.is_empty() {
-                return Err(Error::Verification(
-                    "no signatures in DSSE envelope".to_string(),
-                ));
-            }
-            Ok(envelope.signatures[0].sig.clone())
-        }
+        SignatureContent::MessageSignature(msg_sig) => msg_sig.signature.clone(),
+        SignatureContent::DsseEnvelope(envelope) => envelope.signature.sig.clone(),
     }
 }
 
@@ -417,7 +413,7 @@ mod tests {
             "../../test_data/bundles/cosign-v3-blob.sigstore.json"
         ))
         .unwrap();
-        let signature = extract_signature(&bundle.content).unwrap();
+        let signature = extract_signature(&bundle.content);
 
         let times = determine_validation_times(&bundle, &signature, &trusted_root).unwrap();
 
@@ -513,7 +509,7 @@ mod tests {
 
         fn verify_bundle_timestamp(root: &TrustedRoot) -> Result<Option<i64>> {
             let bundle = Bundle::from_json(TSA_BUNDLE).unwrap();
-            let signature = extract_signature(&bundle.content).unwrap();
+            let signature = extract_signature(&bundle.content);
             let timestamps = extract_tsa_timestamps(&bundle, signature.as_bytes(), root)?;
             Ok(timestamps.first().map(|t| t.as_second()))
         }
@@ -670,7 +666,7 @@ mod tests {
         #[test]
         fn selects_signing_authority_among_many_real_authorities() {
             let bundle = Bundle::from_json(GITHUB_TSA_BUNDLE).unwrap();
-            let signature = extract_signature(&bundle.content).unwrap();
+            let signature = extract_signature(&bundle.content);
             let root = TrustedRoot::from_json(GITHUB_TRUSTED_ROOT).unwrap();
             let timestamps = extract_tsa_timestamps(&bundle, signature.as_bytes(), &root)
                 .expect("GitHub bundle timestamp should verify");
