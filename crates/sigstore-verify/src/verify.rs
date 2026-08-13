@@ -499,10 +499,7 @@ fn verify_dsse_artifact_binding(
         Artifact::Bytes(bytes) => {
             let sha256 = hex::encode(sigstore_crypto::sha256(bytes));
             let sha512 = hex::encode(sigstore_crypto::sha512(bytes));
-            statement.subject.iter().any(|subject| {
-                subject.digest.sha256.as_deref() == Some(sha256.as_str())
-                    || subject.digest.sha512.as_deref() == Some(sha512.as_str())
-            })
+            statement.matches_sha256(&sha256) || statement.matches_sha512(&sha512)
         }
         Artifact::Digest(hash) => match hash.len() {
             32 => {
@@ -511,10 +508,7 @@ fn verify_dsse_artifact_binding(
             }
             64 => {
                 let digest = hex::encode(hash);
-                statement
-                    .subject
-                    .iter()
-                    .any(|subject| subject.digest.sha512.as_deref() == Some(digest.as_str()))
+                statement.matches_sha512(&digest)
             }
             length => {
                 return Err(Error::Verification(format!(
