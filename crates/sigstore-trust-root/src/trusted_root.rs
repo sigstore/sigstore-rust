@@ -4,9 +4,10 @@ use crate::{time_range::TimeRange, Error, Result};
 use jiff::Timestamp;
 use rustls_pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
-use sigstore_types::{
-    DerCertificate, DerPublicKey, HashAlgorithm, KeyHint, LogId, LogKeyId, Sha256Hash,
+use sigstore_crypto::{
+    detect_key_type, KeyType, KeyValidity, Keyring, SigningScheme, VerificationKey,
 };
+use sigstore_types::{DerCertificate, DerPublicKey, HashAlgorithm, LogId, LogKeyId, Sha256Hash};
 
 /// TSA certificate with its optional validity period
 pub type TsaCertWithValidity = (CertificateDer<'static>, Option<TimeRange>);
@@ -162,48 +163,6 @@ pub struct CertificateEntry {
 /// the signing config uses for its service validity periods.
 pub type ValidityPeriod = TimeRange;
 
-/// A transparency log key (Rekor or CTFE) from the trusted root.
-///
-/// This is the single parsed representation for transparency key material;
-/// identifier forms needed by specific verification flows are derived from it
-/// via [`LogKey::key_hint`] and [`LogKey::computed_log_id`].
-#[derive(Debug, Clone)]
-pub struct LogKey {
-    /// The log's key ID as declared in the trusted root (the base64-encoded
-    /// SHA-256 hash of the DER-encoded public key).
-    pub log_id: LogKeyId,
-    /// The DER (SPKI)-encoded public key.
-    pub public_key: DerPublicKey,
-}
-
-impl LogKey {
-    /// The checkpoint key hint: the first 4 bytes of the decoded log ID.
-    ///
-    /// Checkpoint (signed note) signatures identify their signing key by this
-    /// hint.
-    pub fn key_hint(&self) -> Result<KeyHint> {
-        let bytes = self.log_id.decode()?;
-        if bytes.len() < 4 {
-            return Err(Error::InvalidKey(format!(
-                "log ID {} is shorter than a 4-byte key hint",
-                self.log_id
-            )));
-        }
-        Ok(KeyHint::try_from_slice(&bytes[..4])?)
-    }
-
-    /// The log ID recomputed from the public key: the SHA-256 hash of the
-    /// DER-encoded key.
-    ///
-    /// SCT verification matches a certificate SCT's `LogID` against this
-    /// computed value rather than the declared [`Self::log_id`], so a trusted
-    /// root whose declared ID disagrees with its key material cannot redirect
-    /// the lookup.
-    pub fn computed_log_id(&self) -> Sha256Hash {
-        sigstore_crypto::sha256(self.public_key.as_bytes())
-    }
-}
-
 /// Whether an instance with the given `valid_for` may be used as verification
 /// material at `now`.
 ///
@@ -212,6 +171,24 @@ impl LogKey {
 /// because historical entries/certificates were created while they were valid.
 fn usable_for_verification(valid_for: Option<&ValidityPeriod>, now: Timestamp) -> bool {
     valid_for.map_or(true, |period| period.has_started_by(now))
+}
+
+fn key_id(log_id: &LogKeyId) -> Result<Sha256Hash> {
+    Ok(Sha256Hash::try_from_slice(&log_id.decode()?)?)
+}
+
+fn key_validity(valid_for: Option<ValidityPeriod>) -> Option<KeyValidity> {
+    valid_for.map(|period| KeyValidity::new(period.start, period.end))
+}
+
+fn rekor_signing_scheme(public_key: &DerPublicKey) -> Result<SigningScheme> {
+    match detect_key_type(public_key) {
+        KeyType::EcdsaP256 => Ok(SigningScheme::EcdsaP256Sha256),
+        KeyType::Ed25519 => Ok(SigningScheme::Ed25519),
+        KeyType::Unknown => Err(Error::InvalidKey(
+            "unsupported or unrecognized Rekor public key type".to_string(),
+        )),
+    }
 }
 
 impl TrustedRoot {
@@ -246,24 +223,23 @@ impl TrustedRoot {
         certs
     }
 
-    /// Get all Rekor transparency log keys
+    /// Build a keyring containing all Rekor transparency log keys.
     ///
-    /// Keys whose `valid_for` window has not started yet are excluded.
-    /// Expired keys are included because they are needed to verify log
-    /// entries that were integrated while the key was valid.
-    pub fn rekor_keys(&self) -> Vec<LogKey> {
-        let now = Timestamp::now();
-        let mut keys = Vec::new();
+    /// Key IDs and validity windows come directly from the trusted root. The
+    /// keyring applies those windows when callers perform time-aware lookups.
+    pub fn rekor_keys(&self) -> Result<Keyring> {
+        let mut keyring = Keyring::new();
         for tlog in &self.tlogs {
-            if !usable_for_verification(tlog.public_key.valid_for.as_ref(), now) {
-                continue;
-            }
-            keys.push(LogKey {
-                log_id: tlog.log_id.key_id.clone(),
-                public_key: tlog.public_key.raw_bytes.clone(),
-            });
+            let scheme = rekor_signing_scheme(&tlog.public_key.raw_bytes)?;
+            let key = VerificationKey::from_der(&tlog.public_key.raw_bytes, scheme)
+                .map_err(|e| Error::InvalidKey(e.to_string()))?;
+            keyring.add_key_with_validity(
+                key_id(&tlog.log_id.key_id)?,
+                key,
+                key_validity(tlog.public_key.valid_for),
+            );
         }
-        keys
+        Ok(keyring)
     }
 
     /// Get a specific Rekor public key by log ID
@@ -305,24 +281,25 @@ impl TrustedRoot {
         Err(Error::KeyNotFound(log_id.to_string()))
     }
 
-    /// Get all Certificate Transparency log keys
+    /// Build a keyring containing all Certificate Transparency log keys.
     ///
-    /// Keys whose `valid_for` window has not started yet are excluded.
-    /// Expired keys are included because they are needed to verify SCTs
-    /// issued while the key was valid.
-    pub fn ctfe_keys(&self) -> Vec<LogKey> {
-        let now = Timestamp::now();
-        let mut keys = Vec::new();
+    /// The SCT supplies the signature scheme, while key IDs and validity
+    /// windows come directly from the trusted root.
+    pub fn ctfe_keys(&self, scheme: SigningScheme) -> Result<Keyring> {
+        let mut keyring = Keyring::new();
         for ctlog in &self.ctlogs {
-            if !usable_for_verification(ctlog.public_key.valid_for.as_ref(), now) {
+            // A trusted root can contain keys for a different algorithm than
+            // this SCT uses. They are not candidates for this keyring.
+            let Ok(key) = VerificationKey::from_der(&ctlog.public_key.raw_bytes, scheme) else {
                 continue;
-            }
-            keys.push(LogKey {
-                log_id: ctlog.log_id.key_id.clone(),
-                public_key: ctlog.public_key.raw_bytes.clone(),
-            });
+            };
+            keyring.add_key_with_validity(
+                key_id(&ctlog.log_id.key_id)?,
+                key,
+                key_validity(ctlog.public_key.valid_for),
+            );
         }
-        keys
+        Ok(keyring)
     }
 
     /// Get all TSA certificates with their validity periods
@@ -491,7 +468,7 @@ mod tests {
                 "keyDetails": "PKIX_ECDSA_P256_SHA_256"
             },
             "logId": {
-                "keyId": "test-key-id"
+                "keyId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
             }
         }],
         "certificateAuthorities": [],
@@ -503,23 +480,19 @@ mod tests {
     fn test_parse_trusted_root() {
         let root = TrustedRoot::from_json(SAMPLE_TRUSTED_ROOT).unwrap();
         assert_eq!(root.tlogs.len(), 1);
-        assert_eq!(
-            root.tlogs[0].log_id.key_id,
-            LogKeyId::new("test-key-id".to_string())
-        );
+        assert_eq!(root.tlogs[0].log_id.key_id, LogKeyId::from_bytes(&[0; 32]));
     }
 
-    fn has_log(keys: &[LogKey], log_id: &str) -> bool {
-        keys.iter()
-            .any(|key| key.log_id == LogKeyId::new(log_id.to_string()))
+    fn test_key_id(label: &str) -> Sha256Hash {
+        sigstore_crypto::sha256(label.as_bytes())
     }
 
     #[test]
     fn test_rekor_keys() {
         let root = TrustedRoot::from_json(SAMPLE_TRUSTED_ROOT).unwrap();
-        let keys = root.rekor_keys();
+        let keys = root.rekor_keys().unwrap();
         assert_eq!(keys.len(), 1);
-        assert!(has_log(&keys, "test-key-id"));
+        assert!(keys.get_key(&Sha256Hash::from_bytes([0; 32])).is_some());
     }
 
     #[test]
@@ -557,6 +530,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, (key_id, validity))| {
+                let key_id = test_key_id(key_id).to_base64();
                 format!(
                     r#"{{
                         "baseUrl": "https://rekor-{i}.example.com",
@@ -598,21 +572,28 @@ mod tests {
             ("future-key", r#"{"start": "2999-01-01T00:00:00Z"}"#),
         ]);
 
-        let keys = root.rekor_keys();
-        assert_eq!(keys.len(), 2);
-        assert!(has_log(&keys, "expired-key"));
-        assert!(has_log(&keys, "current-key"));
-        assert!(!has_log(&keys, "future-key"));
+        let keys = root.rekor_keys().unwrap();
+        assert_eq!(keys.len(), 3);
+        let now = Timestamp::now();
+        assert!(keys
+            .get_key_started_by(&test_key_id("expired-key"), now)
+            .is_some());
+        assert!(keys
+            .get_key_started_by(&test_key_id("current-key"), now)
+            .is_some());
+        assert!(keys
+            .get_key_started_by(&test_key_id("future-key"), now)
+            .is_none());
 
-        // rekor_key_for_log honors the same rule
+        // The compatibility lookup honors the same rule.
         assert!(root
-            .rekor_key_for_log(&LogKeyId::new("expired-key".to_string()))
+            .rekor_key_for_log(&LogKeyId::from_bytes(test_key_id("expired-key").as_bytes()))
             .is_ok());
         assert!(root
-            .rekor_key_for_log(&LogKeyId::new("current-key".to_string()))
+            .rekor_key_for_log(&LogKeyId::from_bytes(test_key_id("current-key").as_bytes()))
             .is_ok());
         assert!(matches!(
-            root.rekor_key_for_log(&LogKeyId::new("future-key".to_string())),
+            root.rekor_key_for_log(&LogKeyId::from_bytes(test_key_id("future-key").as_bytes())),
             Err(Error::KeyNotFound(_))
         ));
     }
@@ -623,7 +604,7 @@ mod tests {
             "windowed-key",
             r#"{"start": "2020-01-01T00:00:00Z", "end": "2021-01-01T00:00:00Z"}"#,
         )]);
-        let key_id = LogKeyId::new("windowed-key".to_string());
+        let key_id = LogKeyId::from_bytes(test_key_id("windowed-key").as_bytes());
 
         // Inside the window
         let inside: Timestamp = "2020-06-01T00:00:00Z".parse().unwrap();
@@ -659,6 +640,8 @@ mod tests {
 
     #[test]
     fn test_ctfe_keys_exclude_not_yet_valid() {
+        let current_id = test_key_id("current-ctlog").to_base64();
+        let future_id = test_key_id("future-ctlog").to_base64();
         let json = format!(
             r#"{{
                 "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
@@ -671,7 +654,7 @@ mod tests {
                             "keyDetails": "PKIX_ECDSA_P256_SHA_256",
                             "validFor": {{"start": "2021-01-01T00:00:00Z"}}
                         }},
-                        "logId": {{ "keyId": "current-ctlog" }}
+                        "logId": {{ "keyId": "{current_id}" }}
                     }},
                     {{
                         "baseUrl": "https://ctfe-future.example.com",
@@ -681,16 +664,22 @@ mod tests {
                             "keyDetails": "PKIX_ECDSA_P256_SHA_256",
                             "validFor": {{"start": "2999-01-01T00:00:00Z"}}
                         }},
-                        "logId": {{ "keyId": "future-ctlog" }}
+                        "logId": {{ "keyId": "{future_id}" }}
                     }}
                 ]
             }}"#
         );
         let root = TrustedRoot::from_json(&json).unwrap();
 
-        let keys = root.ctfe_keys();
-        assert_eq!(keys.len(), 1);
-        assert!(has_log(&keys, "current-ctlog"));
+        let keys = root.ctfe_keys(SigningScheme::EcdsaP256Sha256).unwrap();
+        assert_eq!(keys.len(), 2);
+        let now = Timestamp::now();
+        assert!(keys
+            .get_key_started_by(&test_key_id("current-ctlog"), now)
+            .is_some());
+        assert!(keys
+            .get_key_started_by(&test_key_id("future-ctlog"), now)
+            .is_none());
 
         // Malformed timestamp is rejected when the trusted root is parsed
         let bad_json = json.replace("2999-01-01T00:00:00Z", "garbage");
@@ -701,28 +690,11 @@ mod tests {
     }
 
     #[test]
-    fn test_log_key_derived_identifiers() {
-        use base64::Engine;
-
-        // Log ID matching the spec: base64(SHA-256(DER public key))
-        let key_bytes = base64::engine::general_purpose::STANDARD
-            .decode(TEST_KEY)
-            .unwrap();
-        let computed = sigstore_crypto::sha256(&key_bytes);
-        let key = LogKey {
-            log_id: LogKeyId::from_bytes(computed.as_bytes()),
-            public_key: DerPublicKey::new(key_bytes),
-        };
-
-        assert_eq!(key.computed_log_id(), computed);
-        assert_eq!(key.key_hint().unwrap().as_ref(), &computed.as_bytes()[..4]);
-
-        // A log ID too short to yield a key hint is an error
-        let short = LogKey {
-            log_id: LogKeyId::from_bytes(&[1, 2, 3]),
-            public_key: key.public_key.clone(),
-        };
-        assert!(matches!(short.key_hint(), Err(Error::InvalidKey(_))));
+    fn malformed_log_id_is_rejected_when_building_keyring() {
+        let json =
+            SAMPLE_TRUSTED_ROOT.replace("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "AQID");
+        let root = TrustedRoot::from_json(&json).unwrap();
+        assert!(matches!(root.rekor_keys(), Err(Error::InvalidKey(_))));
     }
 
     #[test]

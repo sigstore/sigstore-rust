@@ -647,13 +647,10 @@ fn public_key_algorithm(public_key: &sigstore_types::DerPublicKey) -> Result<Key
 
 fn verify_public_key_hint(hint: &str, public_key: &sigstore_types::DerPublicKey) -> Result<()> {
     let expected = sigstore_crypto::sha256(public_key.as_bytes());
-    let hint = hint
-        .strip_prefix("SHA256:")
-        .or_else(|| hint.strip_prefix("sha256:"))
-        .unwrap_or(hint);
-
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(hint)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(hint))
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(hint))
         .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(hint))
         .map_err(|_| {
             Error::Verification("public key hint is not a supported SHA-256 key hint".to_string())
@@ -772,6 +769,27 @@ pub fn verify_with_key<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_key_hint_accepts_all_protojson_base64_variants() {
+        let key = sigstore_types::DerPublicKey::from_bytes(b"test public key");
+        let digest = sigstore_crypto::sha256(key.as_bytes());
+        for hint in [
+            base64::engine::general_purpose::STANDARD.encode(digest),
+            base64::engine::general_purpose::STANDARD_NO_PAD.encode(digest),
+            base64::engine::general_purpose::URL_SAFE.encode(digest),
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest),
+        ] {
+            verify_public_key_hint(&hint, &key).unwrap();
+        }
+
+        // Prefixes are not part of the protobuf field's encoding.
+        let prefixed = format!(
+            "sha256:{}",
+            base64::engine::general_purpose::STANDARD.encode(digest)
+        );
+        assert!(verify_public_key_hint(&prefixed, &key).is_err());
+    }
 
     #[test]
     fn test_verification_policy_default() {

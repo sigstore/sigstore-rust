@@ -57,13 +57,6 @@ pub const SUPPORTED_FULCIO_VERSIONS: &[u32] = &[1];
 /// Expected media type for signing config v0.2
 pub const SIGNING_CONFIG_MEDIA_TYPE: &str = "application/vnd.dev.sigstore.signingconfig.v0.2+json";
 
-/// Validity period for a service.
-///
-/// A signing config's `validFor` is an instance of the protobuf-specs
-/// `TimeRange` message, so this is an alias for [`TimeRange`] — the same type
-/// the trusted root uses for its validity periods.
-pub type ServiceValidityPeriod = TimeRange;
-
 /// A service endpoint configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,7 +66,7 @@ pub struct ServiceEndpoint {
     /// Major API version supported by this endpoint
     pub major_api_version: u32,
     /// Validity period for this endpoint
-    pub valid_for: ServiceValidityPeriod,
+    pub valid_for: TimeRange,
     /// Operator of this service
     #[serde(default)]
     pub operator: Option<String>,
@@ -302,13 +295,13 @@ mod tests {
 
     #[test]
     fn test_service_validity() {
-        let valid_period = ServiceValidityPeriod {
+        let valid_period = TimeRange {
             start: "2020-01-01T00:00:00Z".parse().unwrap(),
             end: None,
         };
         assert!(valid_period.is_valid());
 
-        let expired_period = ServiceValidityPeriod {
+        let expired_period = TimeRange {
             start: "2020-01-01T00:00:00Z".parse().unwrap(),
             end: Some("2021-01-01T00:00:00Z".parse().unwrap()),
         };
@@ -317,8 +310,8 @@ mod tests {
 
     #[test]
     fn test_service_endpoint_validity_is_a_time_range() {
-        // `ServiceValidityPeriod` is the protobuf-specs `TimeRange`; the
-        // containment semantics themselves are covered in `crate::time_range`.
+        // Service validity uses the protobuf-specs `TimeRange`; containment
+        // semantics are covered in `crate::time_range`.
         let endpoint: ServiceEndpoint = serde_json::from_str(
             r#"{
                 "url": "https://rekor.example.com",

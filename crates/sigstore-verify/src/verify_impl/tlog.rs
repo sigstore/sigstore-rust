@@ -6,10 +6,10 @@
 use crate::error::{Error, Result};
 use base64::Engine;
 use serde::Serialize;
-use sigstore_crypto::{verify_signature_auto, Checkpoint};
+use sigstore_crypto::Checkpoint;
 use sigstore_trust_root::TrustedRoot;
 use sigstore_types::bundle::InclusionProof;
-use sigstore_types::{Bundle, SignatureBytes, TransparencyLogEntry};
+use sigstore_types::{Bundle, Sha256Hash, SignatureBytes, TransparencyLogEntry};
 
 /// Verify transparency log entries (checkpoints, Merkle inclusion proofs and SETs)
 ///
@@ -172,32 +172,17 @@ pub fn verify_checkpoint(
         )));
     }
 
-    // Get all Rekor keys from the trusted root; checkpoint signatures
-    // identify their key by a 4-byte hint derived from the log ID.
-    //
-    // The hints are derived up front rather than inside the match loop below:
-    // deriving them lazily made a log ID too short to yield a hint matter only
-    // when it happened to precede the matching key, so the same trusted root
-    // could verify or fail depending on the order of its `tlogs` array. Such an
-    // entry can never match a hint, so it is simply skipped.
-    let rekor_keys = trusted_root.rekor_keys();
-    let rekor_keys: Vec<_> = rekor_keys
-        .iter()
-        .filter_map(|key| key.key_hint().ok().map(|hint| (hint, key)))
-        .collect();
-
-    // For each signature in the checkpoint, try to find a matching key and verify
+    // TrustedRoot constructs the keyring from the declared key IDs and keeps
+    // validity metadata alongside each parsed verification key. Four-byte
+    // checkpoint hints may collide, so try every matching key.
+    let rekor_keys = trusted_root
+        .rekor_keys()
+        .map_err(|e| Error::Verification(format!("failed to build Rekor keyring: {e}")))?;
+    let message = checkpoint.signed_data();
+    let now = jiff::Timestamp::now();
     for sig in &checkpoint.signatures {
-        // Find the key with matching key hint
-        for (key_hint, key) in &rekor_keys {
-            if &sig.key_id == key_hint {
-                // Found matching key, verify the signature using automatic key type detection
-                let message = checkpoint.signed_data();
-
-                verify_signature_auto(&key.public_key, &sig.signature, message).map_err(|e| {
-                    Error::Verification(format!("Checkpoint signature verification failed: {}", e))
-                })?;
-
+        for key in rekor_keys.keys_by_hint(&sig.key_id, now) {
+            if key.verify(message, &sig.signature).is_ok() {
                 return Ok(());
             }
         }
@@ -229,19 +214,29 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
     // Find the key for the log ID. When the entry carries an integrated
     // time, require the log key's validity window to cover it: an entry must
     // have been integrated while the log key was valid.
+    let decoded_key_id = entry
+        .log_id
+        .key_id
+        .decode()
+        .map_err(|e| Error::Verification(format!("invalid Rekor log ID: {e}")))?;
+    let key_id = Sha256Hash::try_from_slice(&decoded_key_id)
+        .map_err(|e| Error::Verification(format!("invalid Rekor log ID: {e}")))?;
+    let keyring = trusted_root
+        .rekor_keys()
+        .map_err(|e| Error::Verification(format!("failed to build Rekor keyring: {e}")))?;
     let log_key = if let Some(integrated_ts) = entry.integrated_time {
-        trusted_root
-            .rekor_key_for_log_at(&entry.log_id.key_id, integrated_ts)
-            .map_err(|e| {
-                Error::Verification(format!(
-                    "No log key valid at integrated time {} for log ID {}: {}",
-                    integrated_ts, entry.log_id.key_id, e
-                ))
-            })?
+        keyring.get_key_at(&key_id, integrated_ts).ok_or_else(|| {
+            Error::Verification(format!(
+                "No log key valid at integrated time {} for log ID {}",
+                integrated_ts, entry.log_id.key_id
+            ))
+        })?
     } else {
-        trusted_root
-            .rekor_key_for_log(&entry.log_id.key_id)
-            .map_err(|_| Error::Verification(format!("Unknown log ID: {}", entry.log_id.key_id)))?
+        keyring
+            .get_key_started_by(&key_id, jiff::Timestamp::now())
+            .ok_or_else(|| {
+                Error::Verification(format!("Unknown log ID: {}", entry.log_id.key_id))
+            })?
     };
 
     // Construct the payload (base64-encoded body)
@@ -272,10 +267,9 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
     // Get signature bytes from signed timestamp
     let signature = SignatureBytes::new(promise.signed_entry_timestamp.as_bytes().to_vec());
 
-    // Use automatic key type detection from the SPKI structure,
-    // rather than hardcoding ECDSA P-256 (matches checkpoint verification behavior)
-    verify_signature_auto(&log_key, &signature, &canonical_json)
-        .map_err(|e| Error::Verification(format!("SET verification failed: {}", e)))?;
+    log_key
+        .verify(&canonical_json, &signature)
+        .map_err(|e| Error::Verification(format!("SET verification failed: {e}")))?;
 
     Ok(())
 }

@@ -6,7 +6,7 @@
 
 use crate::error::{Error, Result};
 use const_oid::db::rfc6962::CT_PRECERT_SCTS;
-use sigstore_crypto::{Keyring, SigningScheme, VerificationKey};
+use sigstore_crypto::SigningScheme;
 use sigstore_trust_root::TrustedRoot;
 use sigstore_types::{Sha256Hash, SignatureBytes};
 use tls_codec::{SerializeBytes, TlsByteVecU16, TlsByteVecU24, TlsSerializeBytes, TlsSize};
@@ -200,15 +200,6 @@ pub fn verify_sct(
     // Extract the SCT and calculate issuer key hash
     let (sct, issuer_key_hash) = extract_sct(&cert, issuer_spki_der)?;
 
-    // Get CT log keys from trusted root
-    let ct_keys = trusted_root.ctfe_keys();
-
-    if ct_keys.is_empty() {
-        return Err(Error::Verification(
-            "no CT log keys in trusted root".to_string(),
-        ));
-    }
-
     // Extract signature algorithm and signature bytes for verification
     // Convert the SignatureAndHashAlgorithm to u16
     let sig_alg_bytes = sct.signature.algorithm.tls_serialize().map_err(|e| {
@@ -218,44 +209,32 @@ pub fn verify_sct(
     let scheme = sct_signing_scheme(sig_alg)?;
     let signature = SignatureBytes::new(sct.signature.signature.clone().into_vec());
 
-    // Build a keyring of the trusted CT log keys, indexed by their RFC 6962 log
-    // ID. The index is recomputed from the key material rather than taken from
-    // the trusted root's declared `logId`, so a trusted root whose declared ID
-    // disagrees with its key cannot redirect the lookup.
-    //
-    // Trusted roots legitimately carry CT keys this implementation cannot use
-    // (e.g. staging's raw PKCS#1 RSA key, which is not an SPKI structure). Such
-    // a key could never verify an SCT, so it is left out of the keyring instead
-    // of failing every SCT verification; only an SCT that asks for it fails.
-    let mut keyring = Keyring::new();
-    let mut unusable = Vec::new();
-    for key in &ct_keys {
-        match VerificationKey::from_spki(&key.public_key, scheme) {
-            Ok(verification_key) => keyring.add_key(key.computed_log_id(), verification_key),
-            Err(e) => unusable.push((key.computed_log_id(), e)),
-        }
+    // TrustedRoot constructs the keyring and preserves each CT log's declared
+    // key ID and validity window. RFC 6962 timestamps are milliseconds since
+    // the Unix epoch, so select the key that was valid when the SCT was issued.
+    let keyring = trusted_root
+        .ctfe_keys(scheme)
+        .map_err(|e| Error::Verification(format!("failed to build CT keyring: {e}")))?;
+    if keyring.is_empty() {
+        return Err(Error::Verification(
+            "no CT log keys in trusted root".to_string(),
+        ));
     }
 
-    // Construct the DigitallySigned structure
     let digitally_signed = DigitallySigned::from_embedded_sct(&cert, &sct, issuer_key_hash)?;
     let log_id = digitally_signed.log_id();
+    let issued_at = jiff::Timestamp::from_millisecond(
+        i64::try_from(sct.timestamp)
+            .map_err(|_| Error::Verification("SCT timestamp is out of range".to_string()))?,
+    )
+    .map_err(|e| Error::Verification(format!("invalid SCT timestamp: {e}")))?;
 
-    if keyring.get_key(&log_id).is_none() {
-        return Err(match unusable.iter().find(|(id, _)| *id == log_id) {
-            Some((_, e)) => Error::Verification(format!(
-                "trusted root CT log key {:?} cannot verify this SCT: {}",
-                log_id.to_hex(),
-                e
-            )),
-            None => Error::Verification(format!(
-                "SCT log ID {:?} not found in trusted root CT logs",
-                log_id.to_hex()
-            )),
-        });
-    }
-
-    // Verify the signature
     keyring
-        .verify_with_key_id(&log_id, &digitally_signed.signed_data()?, &signature)
-        .map_err(|e| Error::Verification(format!("SCT signature verification failed: {}", e)))
+        .verify_with_key_id_at(
+            &log_id,
+            issued_at,
+            &digitally_signed.signed_data()?,
+            &signature,
+        )
+        .map_err(|e| Error::Verification(format!("SCT signature verification failed: {e}")))
 }

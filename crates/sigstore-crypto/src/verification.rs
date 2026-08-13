@@ -43,13 +43,7 @@ impl VerificationKey {
     }
 
     /// Create a verification key from a DER-encoded SPKI public key,
-    /// detecting the signing scheme from the SPKI algorithm identifier
-    ///
-    /// Ed25519 and ECDSA P-256 (with SHA-256) keys are supported; these are
-    /// the key types used for transparency log checkpoints and signed entry
-    /// timestamps. Malformed or unsupported keys are rejected with a precise
-    /// error. For other schemes the caller must know the scheme out-of-band
-    /// and use [`VerificationKey::from_spki`].
+    /// detecting the signing scheme from the SPKI algorithm identifier.
     pub fn from_spki_auto(key: &DerPublicKey) -> Result<Self> {
         let spki = SubjectPublicKeyInfoRef::try_from(key.as_bytes())
             .map_err(|e| Error::InvalidKey(format!("Invalid SPKI: {e}")))?;
@@ -79,6 +73,33 @@ impl VerificationKey {
             bytes: spki.subject_public_key.raw_bytes().to_vec(),
             scheme,
         })
+    }
+
+    /// Create a verification key from DER key material.
+    ///
+    /// SPKI is preferred. For RSA schemes this also accepts the bare PKCS#1
+    /// `RSAPublicKey` encoding used by some Sigstore trusted roots.
+    pub fn from_der(key: &DerPublicKey, scheme: SigningScheme) -> Result<Self> {
+        match Self::from_spki(key, scheme) {
+            Ok(key) => Ok(key),
+            Err(_)
+                if matches!(
+                    scheme,
+                    SigningScheme::RsaPssSha256
+                        | SigningScheme::RsaPssSha384
+                        | SigningScheme::RsaPssSha512
+                        | SigningScheme::RsaPkcs1Sha256
+                        | SigningScheme::RsaPkcs1Sha384
+                        | SigningScheme::RsaPkcs1Sha512
+                ) =>
+            {
+                Ok(Self {
+                    bytes: key.as_bytes().to_vec(),
+                    scheme,
+                })
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Get the raw public key bytes
@@ -227,7 +248,7 @@ pub fn verify_signature(
     signature: &SignatureBytes,
     scheme: SigningScheme,
 ) -> Result<()> {
-    VerificationKey::from_spki(public_key, scheme)?.verify(data, signature)
+    VerificationKey::from_der(public_key, scheme)?.verify(data, signature)
 }
 
 /// Verify a signature over prehashed data using the specified scheme
@@ -246,7 +267,7 @@ pub fn verify_signature_prehashed(
     signature: &SignatureBytes,
     scheme: SigningScheme,
 ) -> Result<()> {
-    VerificationKey::from_spki(public_key, scheme)?.verify_prehashed(digest, signature)
+    VerificationKey::from_der(public_key, scheme)?.verify_prehashed(digest, signature)
 }
 
 #[cfg(test)]

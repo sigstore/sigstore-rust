@@ -87,13 +87,13 @@ pub mod tuf;
 
 pub use error::{Error, Result};
 pub use signing_config::{
-    ServiceConfiguration, ServiceEndpoint, ServiceSelector, ServiceValidityPeriod, SigningConfig,
+    ServiceConfiguration, ServiceEndpoint, ServiceSelector, SigningConfig,
     SIGNING_CONFIG_MEDIA_TYPE, SIGSTORE_PRODUCTION_SIGNING_CONFIG, SIGSTORE_STAGING_SIGNING_CONFIG,
     SUPPORTED_FULCIO_VERSIONS, SUPPORTED_REKOR_VERSIONS, SUPPORTED_TSA_VERSIONS,
 };
 pub use time_range::TimeRange;
 pub use trusted_root::{
-    CertificateAuthority, CertificateTransparencyLog, LogKey, SigstoreInstance, TimestampAuthority,
+    CertificateAuthority, CertificateTransparencyLog, SigstoreInstance, TimestampAuthority,
     TransparencyLog, TrustedRoot, ValidityPeriod, SIGSTORE_GITHUB_TRUSTED_ROOT,
     SIGSTORE_PRODUCTION_TRUSTED_ROOT, SIGSTORE_STAGING_TRUSTED_ROOT,
 };

@@ -1112,16 +1112,11 @@ fn production_root_with_unhintable_tlog_at(index: usize) -> TrustedRoot {
     TrustedRoot::from_json(&serde_json::to_string(&root).unwrap()).unwrap()
 }
 
-/// A Rekor log ID too short to yield a checkpoint key hint must produce the
-/// same outcome wherever it sits in the `tlogs` array.
-///
-/// Checkpoint key hints used to be derived lazily inside the key-matching
-/// loop, so such an entry was fatal only when it preceded the matching key and
-/// invisible when it followed it - the same trusted root could verify or fail
-/// purely on array order. An entry with no derivable hint can never match a
-/// checkpoint signature, so it is skipped rather than failing the whole lookup.
+/// A malformed Rekor log ID is rejected deterministically, regardless of its
+/// position in the trusted root. Keyring construction validates full SHA-256
+/// IDs before any checkpoint signature lookup occurs.
 #[test]
-fn test_unhintable_rekor_log_id_is_ignored_regardless_of_position() {
+fn test_malformed_rekor_log_id_is_rejected_regardless_of_position() {
     let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
     let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
     let policy = VerificationPolicy::default();
@@ -1145,12 +1140,10 @@ fn test_unhintable_rekor_log_id_is_ignored_regardless_of_position() {
         &production_root_with_unhintable_tlog_at(tlog_count),
     );
 
-    assert!(
-        first.is_ok() && last.is_ok(),
-        "an entry with no derivable key hint must not affect verification; got first={:?} last={:?}",
-        first.err(),
-        last.err()
-    );
+    let first = first.expect_err("the malformed key ID must be rejected");
+    let last = last.expect_err("the malformed key ID must be rejected");
+    assert_eq!(first.to_string(), last.to_string());
+    assert!(first.to_string().contains("SHA-256 hash must be 32 bytes"));
 }
 
 #[test]
