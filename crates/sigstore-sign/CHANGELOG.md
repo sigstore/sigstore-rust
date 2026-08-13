@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-sign-v0.11.0...sigstore-sign-v0.12.0) - 2026-08-13
+
+### Fixed
+
+- *(types)* [**breaking**] make multi-signature DSSE envelopes unrepresentable (TOB-SIGSTORE-9) ([#170](https://github.com/sigstore/sigstore-rust/pull/170))
+- *(verify)* [**breaking**] remove clock skew, and use `jiff` Timestamp in the interfaces ([#164](https://github.com/sigstore/sigstore-rust/pull/164))
+
 ## [0.10.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-sign-v0.9.0...sigstore-sign-v0.10.0) - 2026-06-29
 
 ### Added

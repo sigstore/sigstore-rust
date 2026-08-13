@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-verify-v0.11.0...sigstore-verify-v0.12.0) - 2026-08-13
+
+### Fixed
+
+- *(types)* [**breaking**] make multi-signature DSSE envelopes unrepresentable (TOB-SIGSTORE-9) ([#170](https://github.com/sigstore/sigstore-rust/pull/170))
+- *(verify)* [**breaking**] remove clock skew, and use `jiff` Timestamp in the interfaces ([#164](https://github.com/sigstore/sigstore-rust/pull/164))
+- *(verify)* [**breaking**] authenticate signature timestamps and bind log entries to the bundle ([#160](https://github.com/sigstore/sigstore-rust/pull/160))
+
+### Other
+
+- *(crypto)* [**breaking**] unify signature verification behind VerificationKey (TOB-SIGSTORE-6) ([#168](https://github.com/sigstore/sigstore-rust/pull/168))
+
 ## [0.11.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-verify-v0.10.0...sigstore-verify-v0.11.0) - 2026-07-08
 
 ### Fixed

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-tuf-v0.11.0...sigstore-tuf-v0.12.0) - 2026-08-13
+
+### Fixed
+
+- *(tuf)* reverify cached delegated roles ([#173](https://github.com/sigstore/sigstore-rust/pull/173))
+- *(tuf)* keep wildcards within path segments ([#174](https://github.com/sigstore/sigstore-rust/pull/174))
+
+### Other
+
+- tuf, crypto: Support ML-DSA ([#142](https://github.com/sigstore/sigstore-rust/pull/142))
+
 ## [0.10.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-tuf-v0.9.0...sigstore-tuf-v0.10.0) - 2026-06-29
 
 ### Added
