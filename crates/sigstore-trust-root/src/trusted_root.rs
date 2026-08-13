@@ -215,21 +215,17 @@ impl TrustedRoot {
     ///
     /// Key IDs and validity windows come directly from the trusted root. The
     /// keyring applies those windows when callers perform time-aware lookups.
-    /// Unsupported or malformed key entries are skipped so adding a key for a
-    /// newer algorithm does not make otherwise usable trust material fail on
-    /// older clients. Duplicate IDs are rejected deterministically rather than
-    /// making the selected key depend on array order.
+    /// Unsupported key material is skipped so adding a key for a newer
+    /// algorithm does not make otherwise usable trust material fail on older
+    /// clients. Malformed or duplicate IDs are rejected deterministically
+    /// rather than making the result depend on array order.
     pub fn rekor_keys(&self) -> Result<Keyring> {
         let mut keyring = Keyring::new();
         for tlog in &self.tlogs {
             let Ok(key) = VerificationKey::from_spki_auto(&tlog.public_key.raw_bytes) else {
-                tracing::debug!(log_id = %tlog.log_id.key_id, "skipping malformed Rekor key");
                 continue;
             };
-            let Ok(key_id) = key_id(&tlog.log_id.key_id) else {
-                tracing::debug!(log_id = %tlog.log_id.key_id, "skipping malformed Rekor log ID");
-                continue;
-            };
+            let key_id = key_id(&tlog.log_id.key_id)?;
             if keyring.get_key(&key_id).is_some() {
                 return Err(Error::InvalidKey(format!(
                     "duplicate Rekor log ID: {}",
@@ -689,12 +685,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_or_unsupported_rekor_entries_do_not_poison_keyring() {
-        let malformed_id =
-            SAMPLE_TRUSTED_ROOT.replace("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "AQID");
-        let root = TrustedRoot::from_json(&malformed_id).unwrap();
-        assert!(root.rekor_keys().unwrap().is_empty());
-
+    fn unsupported_rekor_entries_do_not_poison_keyring() {
         let mut value: serde_json::Value = serde_json::from_str(SAMPLE_TRUSTED_ROOT).unwrap();
         let unsupported = serde_json::json!({
             "baseUrl": "https://future-rekor.example.com",
@@ -710,6 +701,14 @@ mod tests {
         value["tlogs"].as_array_mut().unwrap().push(unsupported);
         let root = TrustedRoot::from_json(&value.to_string()).unwrap();
         assert_eq!(root.rekor_keys().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn malformed_rekor_log_ids_are_rejected() {
+        let json =
+            SAMPLE_TRUSTED_ROOT.replace("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "AQID");
+        let root = TrustedRoot::from_json(&json).unwrap();
+        assert!(root.rekor_keys().is_err());
     }
 
     #[test]
