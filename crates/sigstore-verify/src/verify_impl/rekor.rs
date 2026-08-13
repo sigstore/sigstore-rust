@@ -7,13 +7,25 @@ use crate::error::{Error, Result};
 use base64::Engine;
 use sigstore_rekor::body::RekorEntryBody;
 use sigstore_types::bundle::VerificationMaterialContent;
-use sigstore_types::{Bundle, HashAlgorithm, SignatureContent, TransparencyLogEntry};
+use sigstore_types::{
+    Bundle, DerCertificate, DerPublicKey, HashAlgorithm, SignatureContent, TransparencyLogEntry,
+};
 use x509_cert::der::{Decode, Encode};
 
 /// Verify that all log entries are consistent with the bundle's content and artifact
 pub fn verify_tlog_consistency(
     bundle: &Bundle,
     artifact: &sigstore_types::Artifact<'_>,
+) -> Result<()> {
+    verify_tlog_consistency_with_key(bundle, artifact, None)
+}
+
+/// Verify log-entry consistency when managed-key verification supplies the
+/// public key that the bundle references only by hint.
+pub(crate) fn verify_tlog_consistency_with_key(
+    bundle: &Bundle,
+    artifact: &sigstore_types::Artifact<'_>,
+    managed_key: Option<&DerPublicKey>,
 ) -> Result<()> {
     for entry in &bundle.verification_material.tlog_entries {
         match &bundle.content {
@@ -42,7 +54,7 @@ pub fn verify_tlog_consistency(
                     }
                 },
                 "intoto" => match entry.kind_version.version.as_str() {
-                    "0.0.2" => verify_intoto_v002(entry, envelope, bundle)?,
+                    "0.0.2" => verify_intoto_v002(entry, envelope, bundle, managed_key)?,
                     version => {
                         return Err(Error::Verification(format!(
                             "unsupported intoto entry version: {}",
@@ -177,6 +189,7 @@ fn verify_intoto_v002(
     entry: &TransparencyLogEntry,
     envelope: &sigstore_types::DsseEnvelope,
     bundle: &Bundle,
+    managed_key: Option<&DerPublicKey>,
 ) -> Result<()> {
     let body = RekorEntryBody::from_base64_json(
         &entry.canonicalized_body.to_base64(),
@@ -221,18 +234,28 @@ fn verify_intoto_v002(
         )));
     }
 
-    let bundle_cert = match &bundle.verification_material.content {
-        VerificationMaterialContent::X509CertificateChain { certificates } => {
-            certificates.first().map(|cert| &cert.raw_bytes)
-        }
-        VerificationMaterialContent::Certificate(cert) => Some(&cert.raw_bytes),
-        VerificationMaterialContent::PublicKey { .. } => None,
+    enum ExpectedVerifier<'a> {
+        Certificate(&'a DerCertificate),
+        PublicKey(&'a DerPublicKey),
     }
-    .ok_or_else(|| {
-        Error::Verification(
-            "intoto Rekor signature cannot be bound to a bundle signing certificate".to_string(),
-        )
-    })?;
+
+    let expected_verifier = match &bundle.verification_material.content {
+        VerificationMaterialContent::X509CertificateChain { certificates } => certificates
+            .first()
+            .map(|cert| ExpectedVerifier::Certificate(&cert.raw_bytes))
+            .ok_or_else(|| Error::Verification("bundle certificate chain is empty".to_string()))?,
+        VerificationMaterialContent::Certificate(cert) => {
+            ExpectedVerifier::Certificate(&cert.raw_bytes)
+        }
+        VerificationMaterialContent::PublicKey { .. } => {
+            ExpectedVerifier::PublicKey(managed_key.ok_or_else(|| {
+                Error::Verification(
+                    "intoto Rekor signature cannot be bound without the managed public key"
+                        .to_string(),
+                )
+            })?)
+        }
+    };
 
     let [rekor_sig] = rekor_envelope.signatures.as_slice() else {
         return Err(Error::Verification(format!(
@@ -253,24 +276,26 @@ fn verify_intoto_v002(
     }
 
     let verifier_matches = match rekor_sig.to_certificate() {
-        Ok(rekor_cert) => bundle_cert.as_bytes() == rekor_cert.as_bytes(),
+        Ok(rekor_cert) => match expected_verifier {
+            ExpectedVerifier::Certificate(bundle_cert) => {
+                bundle_cert.as_bytes() == rekor_cert.as_bytes()
+            }
+            ExpectedVerifier::PublicKey(bundle_key) => {
+                certificate_public_key(&rekor_cert)?.as_bytes() == bundle_key.as_bytes()
+            }
+        },
         Err(_) => {
             let rekor_key = rekor_sig
                 .to_public_key()
                 .map_err(|e| Error::Verification(e.to_string()))?;
-            let cert = x509_cert::Certificate::from_der(bundle_cert.as_bytes()).map_err(|e| {
-                Error::Verification(format!("failed to parse bundle certificate: {e}"))
-            })?;
-            let cert_key = cert
-                .tbs_certificate
-                .subject_public_key_info
-                .to_der()
-                .map_err(|e| {
-                    Error::Verification(format!(
-                        "failed to encode bundle certificate public key: {e}"
-                    ))
-                })?;
-            rekor_key.as_bytes() == cert_key
+            match expected_verifier {
+                ExpectedVerifier::Certificate(bundle_cert) => {
+                    rekor_key.as_bytes() == certificate_public_key(bundle_cert)?.as_bytes()
+                }
+                ExpectedVerifier::PublicKey(bundle_key) => {
+                    rekor_key.as_bytes() == bundle_key.as_bytes()
+                }
+            }
         }
     };
     if !verifier_matches {
@@ -280,6 +305,21 @@ fn verify_intoto_v002(
     }
 
     Ok(())
+}
+
+fn certificate_public_key(certificate: &DerCertificate) -> Result<DerPublicKey> {
+    let certificate = x509_cert::Certificate::from_der(certificate.as_bytes())
+        .map_err(|e| Error::Verification(format!("failed to parse signing certificate: {e}")))?;
+    let spki = certificate
+        .tbs_certificate
+        .subject_public_key_info
+        .to_der()
+        .map_err(|e| {
+            Error::Verification(format!(
+                "failed to encode signing certificate public key: {e}"
+            ))
+        })?;
+    Ok(DerPublicKey::new(spki))
 }
 
 #[cfg(test)]
@@ -310,6 +350,39 @@ mod tests {
     #[test]
     fn canonical_intoto_entry_matches_bundle() {
         verify_consistency(&bundle()).unwrap();
+    }
+
+    #[test]
+    fn canonical_intoto_entry_binds_managed_public_key() {
+        let mut bundle = bundle();
+        let certificate = match &bundle.verification_material.content {
+            VerificationMaterialContent::Certificate(cert) => cert.raw_bytes.clone(),
+            VerificationMaterialContent::X509CertificateChain { certificates } => {
+                certificates[0].raw_bytes.clone()
+            }
+            VerificationMaterialContent::PublicKey { .. } => {
+                panic!("fixture must use a certificate")
+            }
+        };
+        let public_key = certificate_public_key(&certificate).unwrap();
+        bundle.verification_material.content = VerificationMaterialContent::PublicKey {
+            hint: sigstore_crypto::sha256(public_key.as_bytes()).to_base64(),
+        };
+        let digest = [0u8; 32];
+        verify_tlog_consistency_with_key(
+            &bundle,
+            &Artifact::from_digest(&digest),
+            Some(&public_key),
+        )
+        .unwrap();
+
+        let wrong_key = DerPublicKey::new(vec![1, 2, 3]);
+        assert!(verify_tlog_consistency_with_key(
+            &bundle,
+            &Artifact::from_digest(&digest),
+            Some(&wrong_key),
+        )
+        .is_err());
     }
 
     #[test]
