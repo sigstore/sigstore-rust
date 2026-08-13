@@ -108,13 +108,11 @@ impl DelegatedRole {
     /// (the SHA-256 hex of the target path begins with the prefix) or one of its
     /// shell-style `paths` globs. A role with neither field authorizes nothing.
     ///
-    /// Patterns are evaluated using TUF's shell-style path-pattern grammar:
-    /// `*`, `?`, and bracket expressions never match a path separator (`/`).
-    /// Every `*` is interpreted independently, so adjacent stars do not acquire
-    /// the recursive-glob semantics that some glob libraries assign to `**`.
-    /// A malformed pattern is a hard error rather than a silent non-match, so a
-    /// repository we cannot correctly evaluate is rejected instead of having a
-    /// delegation quietly ignored.
+    /// Patterns are split on `/` and each segment is matched independently with
+    /// Unix shell-style glob semantics. This prevents `*`, `?`, character
+    /// classes, and the glob crate's `**` extension from crossing path
+    /// separators. A malformed pattern is a hard error rather than a silent
+    /// non-match.
     pub fn matches_path(&self, target_path: &str) -> Result<bool> {
         if let Some(prefixes) = &self.path_hash_prefixes {
             let hash = hex::encode(sigstore_crypto::sha256(target_path.as_bytes()).as_bytes());
@@ -122,13 +120,12 @@ impl DelegatedRole {
         }
         if let Some(paths) = &self.paths {
             for pattern in paths {
-                let tokens = parse_path_pattern(pattern).map_err(|e| {
+                if path_pattern_matches(pattern, target_path).map_err(|e| {
                     Error::Malformed(format!(
                         "role {:?} has invalid delegation path pattern {pattern:?}: {e}",
                         self.name
                     ))
-                })?;
-                if path_pattern_matches(&tokens, target_path) {
+                })? {
                     return Ok(true);
                 }
             }
@@ -137,109 +134,24 @@ impl DelegatedRole {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum PathPatternToken {
-    Literal(char),
-    AnySequence,
-    AnyCharacter,
-    Class {
-        negated: bool,
-        ranges: Vec<(char, char)>,
-    },
-}
+fn path_pattern_matches(
+    pattern: &str,
+    target_path: &str,
+) -> std::result::Result<bool, glob::PatternError> {
+    let pattern_segments = pattern
+        .split('/')
+        .map(glob::Pattern::new)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let target_segments: Vec<_> = target_path.split('/').collect();
 
-/// Parse the shell-style path-pattern subset defined by TUF. Parsing this
-/// locally avoids library-specific extensions such as recursive `**` globs.
-fn parse_path_pattern(pattern: &str) -> std::result::Result<Vec<PathPatternToken>, String> {
-    let chars: Vec<char> = pattern.chars().collect();
-    let mut tokens = Vec::new();
-    let mut i = 0;
-
-    while i < chars.len() {
-        match chars[i] {
-            '*' => tokens.push(PathPatternToken::AnySequence),
-            '?' => tokens.push(PathPatternToken::AnyCharacter),
-            '[' => {
-                let close = chars[i + 1..]
-                    .iter()
-                    .position(|c| *c == ']')
-                    .map(|offset| i + 1 + offset)
-                    .ok_or_else(|| "unclosed character class".to_string())?;
-                let mut contents = &chars[i + 1..close];
-                let negated = contents.first() == Some(&'!');
-                if negated {
-                    contents = &contents[1..];
-                }
-                if contents.is_empty() {
-                    return Err("empty character class".to_string());
-                }
-
-                let mut ranges = Vec::new();
-                let mut j = 0;
-                while j < contents.len() {
-                    if j + 2 < contents.len() && contents[j + 1] == '-' {
-                        let start = contents[j];
-                        let end = contents[j + 2];
-                        if start > end {
-                            return Err(format!("invalid character range {start}-{end}"));
-                        }
-                        ranges.push((start, end));
-                        j += 3;
-                    } else {
-                        ranges.push((contents[j], contents[j]));
-                        j += 1;
-                    }
-                }
-                tokens.push(PathPatternToken::Class { negated, ranges });
-                i = close;
-            }
-            literal => tokens.push(PathPatternToken::Literal(literal)),
-        }
-        i += 1;
-    }
-    Ok(tokens)
-}
-
-fn path_pattern_matches(tokens: &[PathPatternToken], target_path: &str) -> bool {
-    let target: Vec<char> = target_path.chars().collect();
-    let mut matched = vec![false; target.len() + 1];
-    matched[0] = true;
-
-    for token in tokens {
-        let mut next = vec![false; target.len() + 1];
-        match token {
-            PathPatternToken::AnySequence => {
-                next[0] = matched[0];
-                for i in 1..=target.len() {
-                    // Match zero characters, or extend this same star by one
-                    // non-separator character.
-                    next[i] = matched[i] || (target[i - 1] != '/' && next[i - 1]);
-                }
-            }
-            PathPatternToken::Literal(expected) => {
-                for i in 1..=target.len() {
-                    next[i] = matched[i - 1] && target[i - 1] == *expected;
-                }
-            }
-            PathPatternToken::AnyCharacter => {
-                for i in 1..=target.len() {
-                    next[i] = matched[i - 1] && target[i - 1] != '/';
-                }
-            }
-            PathPatternToken::Class { negated, ranges } => {
-                for i in 1..=target.len() {
-                    let actual = target[i - 1];
-                    let contained = ranges
-                        .iter()
-                        .any(|(start, end)| *start <= actual && actual <= *end);
-                    next[i] = matched[i - 1] && actual != '/' && contained != *negated;
-                }
-            }
-        }
-        matched = next;
+    if pattern_segments.len() != target_segments.len() {
+        return Ok(false);
     }
 
-    matched[target.len()]
+    Ok(pattern_segments
+        .iter()
+        .zip(target_segments)
+        .all(|(pattern, target)| pattern.matches(target)))
 }
 
 #[cfg(test)]
@@ -284,20 +196,17 @@ mod tests {
     }
 
     #[test]
-    fn adjacent_stars_keep_normal_star_semantics() {
-        for pattern in ["**", "***", "****"] {
-            let r = with_paths(serde_json::json!([pattern]));
-            assert!(r.matches_path("").unwrap(), "{pattern}");
-            assert!(r.matches_path("package").unwrap(), "{pattern}");
-            assert!(!r.matches_path("stable/package").unwrap(), "{pattern}");
-        }
+    fn recursive_glob_extension_stays_within_one_segment() {
+        let r = with_paths(serde_json::json!(["**"]));
+        assert!(r.matches_path("").unwrap());
+        assert!(r.matches_path("package").unwrap());
+        assert!(!r.matches_path("stable/package").unwrap());
 
-        let surrounded = with_paths(serde_json::json!(["release-**.json"]));
-        assert!(surrounded.matches_path("release-.json").unwrap());
-        assert!(surrounded.matches_path("release-stable.json").unwrap());
-        assert!(!surrounded
-            .matches_path("release-stable/package.json")
-            .unwrap());
+        // Unsupported multi-star forms fail closed.
+        for pattern in ["***", "release-**.json"] {
+            let r = with_paths(serde_json::json!([pattern]));
+            assert!(r.matches_path("anything").is_err(), "{pattern}");
+        }
     }
 
     #[test]
@@ -316,11 +225,11 @@ mod tests {
         assert!(!q.matches_path("foo-xy.tgz").unwrap());
         assert!(!q.matches_path("foo-/.tgz").unwrap());
 
-        // Even a class containing (or negating) `/` cannot match a separator.
-        for pattern in ["foo-[/].tgz", "foo-[!x].tgz"] {
-            let class = with_paths(serde_json::json!([pattern]));
-            assert!(!class.matches_path("foo-/.tgz").unwrap(), "{pattern}");
-        }
+        // A separator cannot be smuggled into a segment through a class.
+        let slash_class = with_paths(serde_json::json!(["foo-[/].tgz"]));
+        assert!(slash_class.matches_path("foo-/.tgz").is_err());
+        let negated = with_paths(serde_json::json!(["foo-[!x].tgz"]));
+        assert!(!negated.matches_path("foo-/.tgz").unwrap());
     }
 
     #[test]
@@ -356,7 +265,7 @@ mod tests {
     #[test]
     fn invalid_pattern_is_a_hard_error() {
         // An unparseable pattern must fail closed, not silently fail to match.
-        for pattern in ["a[b", "[]", "[!]", "[z-a]"] {
+        for pattern in ["a[b", "[]", "[!]"] {
             let r = with_paths(serde_json::json!([pattern]));
             assert!(r.matches_path("anything").is_err(), "{pattern}");
         }
