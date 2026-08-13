@@ -35,7 +35,12 @@ pub(crate) fn verify_tlog_consistency_with_key(
             SignatureContent::DsseEnvelope(envelope) => match entry.kind_version.kind.as_str() {
                 "hashedrekord" => match entry.kind_version.version.as_str() {
                     "0.0.2" => {
-                        super::hashedrekord::verify_hashedrekord_entry(entry, bundle, artifact)?;
+                        super::hashedrekord::verify_hashedrekord_entry(
+                            entry,
+                            bundle,
+                            artifact,
+                            managed_key,
+                        )?;
                     }
                     version => {
                         return Err(Error::Verification(format!(
@@ -72,7 +77,12 @@ pub(crate) fn verify_tlog_consistency_with_key(
             SignatureContent::MessageSignature(_) => match entry.kind_version.kind.as_str() {
                 "hashedrekord" => match entry.kind_version.version.as_str() {
                     "0.0.1" | "0.0.2" => {
-                        super::hashedrekord::verify_hashedrekord_entry(entry, bundle, artifact)?;
+                        super::hashedrekord::verify_hashedrekord_entry(
+                            entry,
+                            bundle,
+                            artifact,
+                            managed_key,
+                        )?;
                     }
                     version => {
                         return Err(Error::Verification(format!(

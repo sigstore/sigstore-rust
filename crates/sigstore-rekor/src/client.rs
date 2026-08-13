@@ -1,5 +1,6 @@
 //! Rekor client for transparency log operations
 
+use crate::body::RekorEntryBody;
 use crate::entry::{
     DsseEntry, HashedRekord, HashedRekordV2, LogEntry, LogEntryResponse, LogInfo, RekorApiVersion,
     SearchIndex,
@@ -416,12 +417,15 @@ impl RekorV2Client {
     /// Rekor v2 returns the protobuf `TransparencyLogEntry` JSON representation
     /// used directly by Sigstore bundles. No v1 compatibility conversion is
     /// performed.
-    pub async fn create_entry(&self, entry: HashedRekordV2) -> Result<TransparencyLogEntry> {
+    pub async fn create_entry(
+        &self,
+        entry_request: HashedRekordV2,
+    ) -> Result<TransparencyLogEntry> {
         let url = format!("{}/api/v2/log/entries", self.url);
         let response = self
             .client
             .post(&url)
-            .json(&entry)
+            .json(&entry_request)
             .send()
             .await
             .map_err(|e| Error::Http(e.to_string()))?;
@@ -441,7 +445,7 @@ impl RekorV2Client {
             .map_err(|e| Error::Http(e.to_string()))?;
         let entry: TransparencyLogEntry = serde_json::from_str(&response_text)
             .map_err(|e| Error::InvalidResponse(format!("invalid v2 log entry JSON: {e}")))?;
-        validate_v2_entry(&entry)?;
+        validate_v2_entry(&entry, &entry_request)?;
         Ok(entry)
     }
 
@@ -584,13 +588,44 @@ impl RekorClientBuilder {
     }
 }
 
-fn validate_v2_entry(entry: &TransparencyLogEntry) -> Result<()> {
+fn validate_v2_entry(entry: &TransparencyLogEntry, request: &HashedRekordV2) -> Result<()> {
     if entry.kind_version.kind != "hashedrekord" || entry.kind_version.version != "0.0.2" {
         return Err(Error::InvalidResponse(format!(
             "expected hashedrekord/0.0.2, received {}/{}",
             entry.kind_version.kind, entry.kind_version.version
         )));
     }
+    let body = RekorEntryBody::from_base64_json(
+        &entry.canonicalized_body.to_base64(),
+        &entry.kind_version.kind,
+        &entry.kind_version.version,
+    )?;
+    let RekorEntryBody::HashedRekordV002(body) = body else {
+        return Err(Error::InvalidResponse(
+            "Rekor v2 response body is not hashedrekord/0.0.2".to_string(),
+        ));
+    };
+    let logged = body.spec.hashed_rekord_v002;
+    let requested = &request.request;
+    let verifier_matches = match (
+        &logged.signature.verifier.x509_certificate,
+        &logged.signature.verifier.public_key,
+        &requested.signature.verifier.x509_certificate,
+        &requested.signature.verifier.public_key,
+    ) {
+        (Some(logged), None, Some(requested), None) => logged.raw_bytes == requested.content,
+        (None, Some(logged), None, Some(requested)) => logged.raw_bytes == requested.content,
+        _ => false,
+    };
+    if logged.data.digest.as_slice() != requested.digest.as_bytes()
+        || logged.signature.content != requested.signature.content
+        || !verifier_matches
+    {
+        return Err(Error::InvalidResponse(
+            "Rekor v2 response body does not match the submitted entry".to_string(),
+        ));
+    }
+
     if entry.integrated_time.is_some() {
         return Err(Error::InvalidResponse(
             "Rekor v2 response contains a nonzero integrated time".to_string(),

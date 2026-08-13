@@ -77,6 +77,17 @@ impl PublicKeyContent {
             crate::error::Error::InvalidResponse(format!("failed to parse certificate PEM: {}", e))
         })
     }
+
+    /// Parse the PEM content and return a DER SubjectPublicKeyInfo public key.
+    pub fn to_public_key(&self) -> Result<DerPublicKey, crate::error::Error> {
+        let pem_bytes = self.content.as_bytes();
+        let pem_str = String::from_utf8(pem_bytes.to_vec()).map_err(|e| {
+            crate::error::Error::InvalidResponse(format!("PEM not valid UTF-8: {}", e))
+        })?;
+        DerPublicKey::from_pem(&pem_str).map_err(|e| {
+            crate::error::Error::InvalidResponse(format!("failed to parse public key PEM: {}", e))
+        })
+    }
 }
 
 // ============================================================================

@@ -18,7 +18,7 @@ const VALID_ENTRY: &str = r#"{
     "hashes":[],
     "checkpoint":{"envelope":"example.com/log\n8\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n\n"}
   },
-  "canonicalizedBody":"e30="
+  "canonicalizedBody":"eyJzcGVjIjp7Imhhc2hlZFJla29yZFYwMDIiOnsiZGF0YSI6eyJkaWdlc3QiOiJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFPSJ9LCJzaWduYXR1cmUiOnsiY29udGVudCI6ImMybG5ibUYwZFhKbCIsInZlcmlmaWVyIjp7ImtleURldGFpbHMiOiJQS0lYX0VDRFNBX1AyNTZfU0hBXzI1NiIsIng1MDlDZXJ0aWZpY2F0ZSI6eyJyYXdCeXRlcyI6Ik1BQT0ifX19fX19"
 }"#;
 
 fn serve_once(status: &str, content_type: &str, body: &[u8]) -> (String, mpsc::Receiver<String>) {
@@ -118,6 +118,24 @@ async fn create_entry_rejects_malformed_or_incomplete_v2_responses() {
             "unexpected error: {error}"
         );
     }
+}
+
+#[tokio::test]
+async fn create_entry_rejects_a_response_for_a_different_submission() {
+    let (url, _received) = serve_once("201 Created", "application/json", VALID_ENTRY.as_bytes());
+    let different = HashedRekordV2::new_with_certificate(
+        &Sha256Hash::from_bytes([2; 32]),
+        &SignatureBytes::from_bytes(b"other signature"),
+        &DerCertificate::new(vec![0x30, 0x00]),
+        RekorV2KeyDetails::PkixEcdsaP256Sha256,
+    );
+    let error = RekorV2Client::new(url)
+        .create_entry(different)
+        .await
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("does not match the submitted entry"));
 }
 
 #[tokio::test]
