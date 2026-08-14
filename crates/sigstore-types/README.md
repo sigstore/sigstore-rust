@@ -30,7 +30,7 @@ let bundle: Bundle = serde_json::from_str(bundle_json)?;
 let checkpoint = Checkpoint::from_text(checkpoint_text)?;
 
 // Create an artifact from bytes
-let artifact = Artifact::Bytes(b"hello world");
+let artifact = Artifact::Blob(b"hello world");
 
 // Create an artifact from a pre-computed SHA-256 digest
 // (useful for large files where you don't want to load the entire file into memory)

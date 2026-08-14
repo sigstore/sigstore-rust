@@ -76,12 +76,20 @@ pub(crate) fn verify_hashedrekord_entry(
 /// Compute the SHA-256 digest from an artifact for Rekor inclusion proof
 fn compute_artifact_digest(artifact: &Artifact<'_>) -> Result<Sha256Hash> {
     match artifact {
-        Artifact::Bytes(bytes) => Ok(sigstore_crypto::sha256(bytes)),
-        Artifact::Digest(hash) => Sha256Hash::try_from_slice(hash).map_err(|_| {
-            Error::Verification(
-                "Rekor entry verification requires a 32-byte SHA-256 digest".to_string(),
-            )
-        }),
+        Artifact::Blob(bytes) => Ok(sigstore_crypto::sha256(bytes)),
+        Artifact::Digest(digest) => {
+            if digest.algorithm() != sigstore_types::HashAlgorithm::Sha2256 {
+                return Err(Error::Verification(format!(
+                    "Rekor entry verification requires SHA-256, got {}",
+                    digest.algorithm()
+                )));
+            }
+            Sha256Hash::try_from_slice(digest.as_bytes()).map_err(|_| {
+                Error::Verification(
+                    "Rekor entry verification requires a 32-byte SHA-256 digest".to_string(),
+                )
+            })
+        }
     }
 }
 

@@ -3,12 +3,13 @@
 use crate::error::{Error, Result};
 use crate::hash::Sha256Hasher;
 use aws_lc_rs::{
+    digest::{Digest, SHA256},
     rand::SystemRandom,
     signature::{EcdsaKeyPair, KeyPair as AwsKeyPair, ECDSA_P256_SHA256_ASN1_SIGNING},
 };
 use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, SECP_256_R_1};
 use der::{asn1::BitString, Encode as _};
-use sigstore_types::{DerPublicKey, Sha256Hash, SignatureBytes};
+use sigstore_types::{DerPublicKey, HashAlgorithm, Sha256Hash, SignatureBytes};
 use spki::{AlgorithmIdentifier, SubjectPublicKeyInfo};
 
 /// Supported signing schemes
@@ -77,6 +78,22 @@ impl SigningScheme {
                 | SigningScheme::MlDsa65
                 | SigningScheme::MlDsa87
         )
+    }
+
+    /// Hash algorithm used by prehashed variants of this scheme.
+    pub fn hash_algorithm(&self) -> Option<HashAlgorithm> {
+        match self {
+            Self::EcdsaP256Sha256
+            | Self::EcdsaP384Sha256
+            | Self::RsaPssSha256
+            | Self::RsaPkcs1Sha256 => Some(HashAlgorithm::Sha2256),
+            Self::EcdsaP256Sha384
+            | Self::EcdsaP384Sha384
+            | Self::RsaPssSha384
+            | Self::RsaPkcs1Sha384 => Some(HashAlgorithm::Sha2384),
+            Self::RsaPssSha512 | Self::RsaPkcs1Sha512 => Some(HashAlgorithm::Sha2512),
+            Self::Ed25519 | Self::MlDsa44 | Self::MlDsa65 | Self::MlDsa87 => None,
+        }
     }
 }
 
@@ -195,6 +212,21 @@ impl KeyPair {
         }
     }
 
+    /// Sign a caller-supplied SHA-256 digest.
+    ///
+    /// This attests to the digest supplied by the caller; the original message
+    /// is not available for the library to hash or otherwise inspect.
+    pub fn sign_digest(&self, digest: &Sha256Hash) -> Result<SignatureBytes> {
+        let digest = Digest::import_less_safe(digest.as_bytes(), &SHA256)
+            .map_err(|_| Error::Signing("invalid SHA-256 digest".to_string()))?;
+        match self {
+            KeyPair::EcdsaP256(kp) => {
+                let sig = kp.sign_digest(&digest)?;
+                Ok(SignatureBytes::new(sig.as_ref().to_vec()))
+            }
+        }
+    }
+
     /// Get the signing scheme for this key pair
     pub fn default_scheme(&self) -> SigningScheme {
         match self {
@@ -248,6 +280,22 @@ mod tests {
         let data = b"test data to sign";
         let sig = kp.sign(data).unwrap();
         assert!(!sig.is_empty());
+    }
+
+    #[test]
+    fn test_sign_digest_verifies_as_signature_over_message() {
+        use crate::verification::VerificationKey;
+
+        let kp = KeyPair::generate_ecdsa_p256().unwrap();
+        let message = b"caller supplied digest";
+        let digest = crate::hash::sha256(message);
+        let sig = kp.sign_digest(&digest).unwrap();
+        let vk = VerificationKey::from_spki(
+            &kp.public_key_der().unwrap(),
+            SigningScheme::EcdsaP256Sha256,
+        )
+        .unwrap();
+        vk.verify(message, &sig).unwrap();
     }
 
     #[test]

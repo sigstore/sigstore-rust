@@ -13,7 +13,7 @@ pub mod hash;
 pub mod intoto;
 pub mod time_range;
 
-pub use artifact::Artifact;
+pub use artifact::{Artifact, ArtifactDigest};
 pub use bundle::{
     Bundle, BundleVersion, CheckpointData, InclusionPromise, InclusionProof, KindVersion, LogId,
     MediaType, MessageDigest, MessageSignature, SignatureContent, TransparencyLogEntry,
