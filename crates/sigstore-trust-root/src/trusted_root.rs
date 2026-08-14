@@ -220,7 +220,7 @@ impl TrustedRoot {
     pub fn rekor_keys(&self) -> Result<Keyring> {
         let mut keyring = Keyring::new();
         for tlog in &self.tlogs {
-            let Ok(key) = VerificationKey::from_spki_auto(&tlog.public_key.raw_bytes) else {
+            let Ok(key) = VerificationKey::from_spki(&tlog.public_key.raw_bytes) else {
                 continue;
             };
             let key_id = key_id(&tlog.log_id.key_id)?;

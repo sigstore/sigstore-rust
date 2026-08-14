@@ -172,7 +172,7 @@ mod tests {
         let kp = KeyPair::generate_ecdsa_p256().unwrap();
         let spki = kp.public_key_der().unwrap();
         let key_id = sha256(spki.as_bytes());
-        let vk = VerificationKey::from_spki(&spki, kp.default_scheme()).unwrap();
+        let vk = VerificationKey::from_spki_with_scheme(&spki, kp.default_scheme()).unwrap();
         (kp, key_id, vk)
     }
 

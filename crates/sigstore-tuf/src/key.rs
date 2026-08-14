@@ -138,7 +138,7 @@ impl Key {
             });
         };
 
-        VerificationKey::from_spki(&der, scheme).map_err(Error::from)
+        VerificationKey::from_spki_with_scheme(&der, scheme).map_err(Error::from)
     }
 
     /// Verify a signature over `data`.

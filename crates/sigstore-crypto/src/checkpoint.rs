@@ -46,7 +46,7 @@ impl CheckpointVerifyExt for Checkpoint {
         // The signed data is the checkpoint text (without the signatures part)
         let signed_data = self.signed_data();
 
-        VerificationKey::from_spki_auto(public_key)?
+        VerificationKey::from_spki(public_key)?
             .verify(signed_data, &signature.signature)
             .map_err(|e| Error::Checkpoint(format!("Signature verification failed: {}", e)))
     }
