@@ -114,17 +114,19 @@ async fn main() {
     let artifact_path = &positional[0];
     let output_path = output.unwrap_or_else(|| format!("{}.sigstore.json", artifact_path));
 
-    // Read artifact
-    let artifact = match fs::read(artifact_path) {
-        Ok(data) => data,
+    // Stream the artifact instead of loading it into memory.
+    let artifact = match fs::File::open(artifact_path) {
+        Ok(file) => file,
         Err(e) => {
-            eprintln!("Error reading artifact '{}': {}", artifact_path, e);
+            eprintln!("Error opening artifact '{}': {}", artifact_path, e);
             process::exit(1);
         }
     };
 
     println!("Signing artifact: {}", artifact_path);
-    println!("  Size: {} bytes", artifact.len());
+    if let Ok(metadata) = artifact.metadata() {
+        println!("  Size: {} bytes", metadata.len());
+    }
 
     // Create signing context with appropriate API version
     let tuf_config = if let Some(ref url) = instance {
@@ -189,7 +191,7 @@ async fn main() {
     let signer = context.signer(identity_token);
 
     println!("\nSigning...");
-    let bundle = match signer.sign(&artifact).await {
+    let bundle = match signer.sign_reader(artifact).await {
         Ok(b) => b,
         Err(e) => {
             eprintln!("Error signing artifact: {}", e);

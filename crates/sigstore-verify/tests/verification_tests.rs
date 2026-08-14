@@ -6,7 +6,7 @@ use sigstore_trust_root::{SigstoreInstance, TrustedRoot, SIGSTORE_PRODUCTION_TRU
 use sigstore_types::{LogIndex, Sha256Hash};
 use sigstore_verify::bundle::{validate_bundle, validate_bundle_with_options, ValidationOptions};
 use sigstore_verify::types::Bundle;
-use sigstore_verify::{verify, VerificationPolicy, Verifier};
+use sigstore_verify::{verify, verify_async_reader, verify_reader, VerificationPolicy, Verifier};
 use x509_cert::der::Decode;
 
 /// Extract the expected artifact digest from a bundle
@@ -1050,6 +1050,37 @@ fn test_verify_cosign_v3_blob_bundle() {
 
     let result = verify(artifact, &bundle, &policy, &production_root());
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
+}
+
+#[test]
+fn test_verify_cosign_bundle_from_sync_reader() {
+    let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
+    let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
+    let policy = VerificationPolicy::default().require_issuer("https://github.com/login/oauth");
+
+    verify_reader(
+        std::io::Cursor::new(artifact),
+        &bundle,
+        &policy,
+        &production_root(),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn test_verify_cosign_bundle_from_async_reader() {
+    let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
+    let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
+    let policy = VerificationPolicy::default().require_issuer("https://github.com/login/oauth");
+
+    verify_async_reader(
+        futures::io::Cursor::new(artifact),
+        &bundle,
+        &policy,
+        &production_root(),
+    )
+    .await
+    .unwrap();
 }
 
 /// Replace `bundle`'s tlog entries with the first entry of `donor`.

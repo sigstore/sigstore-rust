@@ -13,7 +13,7 @@ pub mod x509;
 
 pub use checkpoint::{compute_key_hint, Checkpoint, CheckpointSignature, CheckpointVerifyExt};
 pub use error::{Error, Result};
-pub use hash::{sha256, sha256_reader, sha384, sha512, Sha256Hasher};
+pub use hash::{sha256, sha256_reader, sha384, sha512, ArtifactHasher, Sha256Hasher};
 pub use keyring::Keyring;
 pub use signing::{KeyAlgorithm, KeyPair, SigningScheme};
 pub use verification::{verify_signature, verify_signature_prehashed, VerificationKey};

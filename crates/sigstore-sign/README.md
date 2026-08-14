@@ -48,6 +48,13 @@ let bundle = signer.sign(artifact).await?;
 let digest = Sha256Hash::from_hex("b94d27b9...")?;
 let bundle = signer.sign(digest).await?;
 
+// Or stream without loading the artifact into memory
+let file = std::fs::File::open("large-artifact.tar.gz")?;
+let bundle = signer.sign_reader(file).await?;
+
+// Runtime-independent async readers are supported as well
+let bundle = signer.sign_async_reader(async_reader).await?;
+
 // Sign an in-toto attestation (DSSE envelope)
 let subject = AttestationSubject::new("artifact.tar.gz", digest);
 let attestation = Attestation::new("https://slsa.dev/provenance/v1")

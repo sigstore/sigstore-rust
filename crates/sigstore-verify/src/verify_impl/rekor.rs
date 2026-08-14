@@ -3,6 +3,7 @@
 //! This module handles validation of different Rekor entry types against
 //! bundle content to ensure consistency.
 
+use crate::artifact::PreparedArtifact;
 use crate::error::{Error, Result};
 use base64::Engine;
 use sigstore_rekor::body::RekorEntryBody;
@@ -10,10 +11,7 @@ use sigstore_types::bundle::VerificationMaterialContent;
 use sigstore_types::{Bundle, SignatureContent, TransparencyLogEntry};
 
 /// Verify that all log entries are consistent with the bundle's content and artifact
-pub fn verify_tlog_consistency(
-    bundle: &Bundle,
-    artifact: &sigstore_types::Artifact<'_>,
-) -> Result<()> {
+pub fn verify_tlog_consistency(bundle: &Bundle, artifact: &PreparedArtifact<'_>) -> Result<()> {
     for entry in &bundle.verification_material.tlog_entries {
         match &bundle.content {
             // DSSE envelope handling depends on Rekor version:
