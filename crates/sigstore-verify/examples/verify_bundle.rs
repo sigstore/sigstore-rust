@@ -152,7 +152,10 @@ async fn main() {
     // Load trusted root (staging or production Sigstore instance)
     let trusted_root = if let Some(url) = instance {
         println!("  Using: custom instance ({})", url);
-        let config = sigstore_trust_root::tuf::TufConfig::custom(&url);
+        let config = sigstore_trust_root::tuf::TufConfig::custom(
+            &url,
+            sigstore_trust_root::tuf::TufBootstrap::UnsafeCachedRoot,
+        );
         match TrustedRoot::from_tuf(config).await {
             Ok(root) => root,
             Err(e) => {

@@ -25,12 +25,12 @@
 //! For custom TUF repositories:
 //!
 //! ```ignore
-//! use sigstore_trust_root::{TrustedRoot, TufConfig};
+//! use sigstore_trust_root::{TrustedRoot, TufBootstrap, TufConfig};
 //!
 //! # async fn example() -> Result<(), sigstore_trust_root::Error> {
 //! let config = TufConfig::custom(
 //!     "https://sigstore.github.io/root-signing/",
-//!     include_bytes!("path/to/root.json"),
+//!     TufBootstrap::trusted(include_bytes!("path/to/root.json")),
 //! );
 //! let root = TrustedRoot::from_tuf(config).await?;
 //! # Ok(())
@@ -96,91 +96,82 @@ fn url_to_dirname(url: &str) -> String {
 
 const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
 
-/// Configuration for TUF client
+/// Where trust in a TUF repository begins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TufBootstrap {
+    /// Root metadata trusted by the application.
+    TrustedRoot(Vec<u8>),
+    /// Trust `root.json` in the writable cache as the bootstrap root.
+    ///
+    /// This is intended for generic clients where a user established trust on
+    /// an earlier run. It is unsafe against anyone who can modify the cache:
+    /// such an attacker can replace the root and control the repository.
+    UnsafeCachedRoot,
+}
+
+impl TufBootstrap {
+    /// Construct a trusted bootstrap from root metadata bytes.
+    pub fn trusted(root_json: impl AsRef<[u8]>) -> Self {
+        Self::TrustedRoot(root_json.as_ref().to_vec())
+    }
+}
+
+/// Configuration for the TUF client. Fields are private so repository access,
+/// caching, and bootstrap trust can only be selected explicitly.
 #[derive(Debug, Clone)]
 pub struct TufConfig {
-    /// Base URL for the TUF repository
-    pub url: String,
-    /// Path to local cache directory (optional, derived from URL if not set)
-    pub cache_dir: Option<PathBuf>,
-    /// Whether to disable local caching
-    pub disable_cache: bool,
-    /// Whether to prohibit network requests and use only the verified cache.
-    pub offline: bool,
-    /// Custom TUF root.json for bootstrapping trust (None = use embedded for known URLs)
-    root_json: Option<Vec<u8>>,
+    url: String,
+    cache_dir: Option<PathBuf>,
+    disable_cache: bool,
+    offline: bool,
+    bootstrap: TufBootstrap,
 }
 
 impl Default for TufConfig {
     fn default() -> Self {
-        Self {
-            url: DEFAULT_TUF_URL.to_string(),
-            cache_dir: None,
-            disable_cache: false,
-            offline: false,
-            root_json: None,
-        }
+        Self::production()
     }
 }
 
 impl TufConfig {
-    /// Create configuration for production Sigstore instance
+    fn known(url: &str, root_json: &[u8]) -> Self {
+        Self {
+            url: url.to_string(),
+            cache_dir: None,
+            disable_cache: false,
+            offline: false,
+            bootstrap: TufBootstrap::trusted(root_json),
+        }
+    }
+
+    /// Create configuration for production Sigstore with its embedded root.
     pub fn production() -> Self {
-        Self::default()
+        Self::known(DEFAULT_TUF_URL, PRODUCTION_TUF_ROOT)
     }
 
-    /// Create configuration for staging Sigstore instance
+    /// Create configuration for staging Sigstore with its embedded root.
     pub fn staging() -> Self {
-        Self {
-            url: STAGING_TUF_URL.to_string(),
-            ..Default::default()
-        }
+        Self::known(STAGING_TUF_URL, STAGING_TUF_ROOT)
     }
 
-    /// Create configuration for GitHub's artifact attestation Sigstore instance
+    /// Create configuration for GitHub artifact attestations with its embedded root.
     pub fn github() -> Self {
-        Self {
-            url: GITHUB_TUF_URL.to_string(),
-            ..Default::default()
-        }
+        Self::known(GITHUB_TUF_URL, GITHUB_TUF_ROOT)
     }
 
-    /// Create configuration for a custom TUF repository
+    /// Create configuration for a custom repository with an explicit bootstrap policy.
     ///
-    /// # Arguments
-    ///
-    /// * `url` - Base URL of the TUF repository
-    /// * `root_json` - Contents of root.json for bootstrapping trust
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use sigstore_trust_root::{TrustedRoot, TufConfig};
-    ///
-    /// # async fn example() -> Result<(), sigstore_trust_root::Error> {
-    /// // For the root-signing test repository
-    /// let config = TufConfig::custom(
-    ///     "https://sigstore.github.io/root-signing/",
-    ///     include_bytes!("path/to/root.json"),
-    /// );
-    /// let root = TrustedRoot::from_tuf(config).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn custom(url: impl Into<String>) -> Self {
+    /// Prefer [`TufBootstrap::trusted`].
+    /// [`TufBootstrap::UnsafeCachedRoot`] is an explicit opt-in for generic
+    /// clients whose local cache is itself their source of trust.
+    pub fn custom(url: impl Into<String>, bootstrap: TufBootstrap) -> Self {
         Self {
             url: url.into(),
             cache_dir: None,
             disable_cache: false,
             offline: false,
-            root_json: None,
+            bootstrap,
         }
-    }
-
-    /// Provide a custom root.json for bootstrapping trust
-    pub fn with_root(mut self, root_json: impl AsRef<[u8]>) -> Self {
-        self.root_json = Some(root_json.as_ref().to_vec());
-        self
     }
 
     /// Create configuration for a custom TUF repository, loading root.json from a file
@@ -193,7 +184,7 @@ impl TufConfig {
     /// # Example
     ///
     /// ```no_run
-    /// use sigstore_trust_root::{TrustedRoot, TufConfig};
+    /// use sigstore_trust_root::{TrustedRoot, TufBootstrap, TufConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let config = TufConfig::custom_from_file(
@@ -209,7 +200,7 @@ impl TufConfig {
         root_path: impl AsRef<Path>,
     ) -> std::io::Result<Self> {
         let root_json = std::fs::read(root_path)?;
-        Ok(Self::custom(url).with_root(root_json))
+        Ok(Self::custom(url, TufBootstrap::trusted(root_json)))
     }
 
     /// Set the cache directory
@@ -228,9 +219,8 @@ impl TufConfig {
     ///
     /// In offline mode no network requests are made. The local TUF cache is
     /// served, but **only** after re-running the full TUF verification
-    /// workflow (root → timestamp → snapshot → targets) against the pinned
-    /// root of trust — an explicitly configured [`with_root`](Self::with_root)
-    /// root or the embedded root for known Sigstore instances — and checking
+    /// workflow (root → timestamp → snapshot → targets) against the configured
+    /// [`TufBootstrap`] policy and checking
     /// each target against the length and hashes pinned in the verified
     /// metadata. The cache directory is writable and therefore untrusted
     /// input; raw cached bytes are never returned (TOB-SIGSTORE-10).
@@ -306,52 +296,26 @@ impl TufClient {
         Ok(results)
     }
 
-    /// Get the *pinned* TUF root.json for this configuration: an explicitly
-    /// configured root ([`TufConfig::with_root`]) or the embedded root for a
-    /// known Sigstore URL.
-    ///
-    /// Unlike [`Self::get_root_json`], this never reads from the cache
-    /// directory, so the result is trustworthy even when the cache is
-    /// attacker-writable — it is the only acceptable trust anchor for offline
-    /// verification of cached metadata.
-    fn pinned_root_json(&self) -> Option<Vec<u8>> {
-        if let Some(ref root) = self.config.root_json {
-            return Some(root.clone());
-        }
-
-        // Fall back to embedded roots for known URLs
-        let normalized_url = self.config.url.trim_end_matches('/');
-        if normalized_url == DEFAULT_TUF_URL {
-            Some(PRODUCTION_TUF_ROOT.to_vec())
-        } else if normalized_url == STAGING_TUF_URL {
-            Some(STAGING_TUF_ROOT.to_vec())
-        } else if normalized_url == GITHUB_TUF_URL {
-            Some(GITHUB_TUF_ROOT.to_vec())
-        } else {
-            None
-        }
-    }
-
-    /// Get the TUF root.json bytes for this configuration
+    /// Resolve the bootstrap root according to the application's explicit
+    /// trust policy. This decision is identical online and offline.
     fn get_root_json(&self) -> Result<Vec<u8>> {
-        if let Some(root) = self.pinned_root_json() {
-            return Ok(root);
-        }
-
-        // A TUF root was not provided or embedded: Use a cached one if found
-        if !self.config.disable_cache {
-            if let Ok(cache_dir) = self.get_cache_dir() {
-                let cached_path = cache_dir.join("root.json");
-                if let Ok(bytes) = std::fs::read(&cached_path) {
-                    return Ok(bytes);
+        match &self.config.bootstrap {
+            TufBootstrap::TrustedRoot(root) => Ok(root.clone()),
+            TufBootstrap::UnsafeCachedRoot => {
+                if self.config.disable_cache {
+                    return Err(Error::Tuf(
+                        "TufBootstrap::UnsafeCachedRoot requires caching to be enabled".into(),
+                    ));
                 }
+                let path = self.get_cache_dir()?.join("root.json");
+                std::fs::read(&path).map_err(|e| {
+                    Error::Tuf(format!(
+                        "could not read explicitly trusted cached TUF root '{}': {e}",
+                        path.display()
+                    ))
+                })
             }
         }
-
-        Err(Error::Tuf(format!(
-            "No root.json provided for custom URL: {}. Use .with_root() or initialize trust first.",
-            self.config.url
-        )))
     }
 
     /// Build a `sigstore-tuf` updater and run the TUF refresh workflow
@@ -383,10 +347,10 @@ impl TufClient {
 
     /// Build an updater that re-runs the full TUF verification workflow
     /// (root → timestamp → snapshot → targets) entirely from the local cache,
-    /// with no network access, anchored to the pinned root of trust.
+    /// with no network access, anchored according to [`TufBootstrap`].
     ///
-    /// The cache is treated as untrusted input: every cached metadata file is
-    /// re-verified against the pinned root — signature thresholds, version
+    /// Every cached metadata file is re-verified against that bootstrap root —
+    /// signature thresholds, version
     /// anti-rollback, and expiry — and targets served through the returned
     /// updater are checked against the length and hashes pinned in the
     /// verified targets metadata.
@@ -396,13 +360,7 @@ impl TufClient {
                 "offline mode requires a local TUF cache, but caching is disabled".into(),
             ));
         }
-        let root_bytes = self.pinned_root_json().ok_or_else(|| {
-            Error::Tuf(format!(
-                "no pinned TUF root for {}; refusing to verify the cache against \
-                 a root taken from the (writable) cache itself",
-                self.config.url
-            ))
-        })?;
+        let root_bytes = self.get_root_json()?;
         let cache_dir = self.get_cache_dir()?;
         let store = FileStore::new(&cache_dir);
         let mut updater = Updater::new(StoreRepository::new(store.clone()), &root_bytes)
@@ -482,13 +440,13 @@ impl TrustedRoot {
     /// # Example: Custom TUF Repository
     ///
     /// ```ignore
-    /// use sigstore_trust_root::{TrustedRoot, TufConfig};
+    /// use sigstore_trust_root::{TrustedRoot, TufBootstrap, TufConfig};
     ///
     /// # async fn example() -> Result<(), sigstore_trust_root::Error> {
     /// // For the root-signing test repository
     /// let config = TufConfig::custom(
     ///     "https://sigstore.github.io/root-signing/",
-    ///     include_bytes!("path/to/root.json"),
+    ///     TufBootstrap::trusted(include_bytes!("path/to/root.json")),
     /// );
     /// let root = TrustedRoot::from_tuf(config).await?;
     /// # Ok(())
@@ -707,7 +665,7 @@ mod tests {
         assert!(config.cache_dir.is_none());
         assert!(!config.disable_cache);
         assert!(!config.offline);
-        assert!(config.root_json.is_none());
+        assert_eq!(config.bootstrap, TufBootstrap::trusted(PRODUCTION_TUF_ROOT));
     }
 
     #[test]
@@ -725,9 +683,9 @@ mod tests {
     #[test]
     fn test_tuf_config_custom() {
         let root_json = b"test root json";
-        let config = TufConfig::custom("https://custom.tuf/").with_root(root_json);
+        let config = TufConfig::custom("https://custom.tuf/", TufBootstrap::trusted(root_json));
         assert_eq!(config.url, "https://custom.tuf/");
-        assert_eq!(config.root_json, Some(root_json.to_vec()));
+        assert_eq!(config.bootstrap, TufBootstrap::trusted(root_json));
     }
 
     #[test]
@@ -771,23 +729,33 @@ mod tests {
     #[test]
     fn test_tuf_config_get_root_json_custom() {
         let root_json = b"custom root";
-        let config = TufConfig::custom("https://custom.tuf/").with_root(root_json);
+        let config = TufConfig::custom("https://custom.tuf/", TufBootstrap::trusted(root_json));
         assert_eq!(TufClient::new(config).get_root_json().unwrap(), root_json);
     }
 
     #[test]
-    fn test_tuf_config_get_root_json_unknown_url_errors() {
-        let config = TufConfig {
-            url: "https://unknown.tuf/".to_string(),
-            cache_dir: None,
-            disable_cache: false,
-            offline: false,
-            root_json: None,
-        };
+    fn test_unsafe_cached_root_is_an_explicit_bootstrap_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("root.json"), b"locally trusted root").unwrap();
+        let config = TufConfig::custom("https://custom.tuf/", TufBootstrap::UnsafeCachedRoot)
+            .with_cache_dir(tmp.path().to_path_buf());
+
+        assert_eq!(
+            TufClient::new(config).get_root_json().unwrap(),
+            b"locally trusted root"
+        );
+    }
+
+    #[test]
+    fn test_unsafe_cached_root_errors_when_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = TufConfig::custom("https://custom.tuf/", TufBootstrap::UnsafeCachedRoot)
+            .with_cache_dir(tmp.path().to_path_buf());
+
         let err = TufClient::new(config).get_root_json().unwrap_err();
         assert!(err
             .to_string()
-            .contains("No root.json provided for custom URL"));
+            .contains("explicitly trusted cached TUF root"));
     }
 
     #[test]
@@ -824,8 +792,7 @@ mod tests {
     #[tokio::test]
     async fn test_custom_url_offline_fails_without_cache() {
         // Offline mode requires a cache for every repository.
-        let config = TufConfig::custom("https://custom.tuf/")
-            .with_root(b"root")
+        let config = TufConfig::custom("https://custom.tuf/", TufBootstrap::trusted(b"root"))
             .offline()
             .without_cache();
         let client = TufClient::new(config);
@@ -961,8 +928,23 @@ mod tests {
         let content = b"verified offline target content";
         let root = signed_cache::write(tmp.path(), content, signed_cache::FAR_FUTURE);
 
-        let config = TufConfig::custom("https://offline.example/")
-            .with_root(&root)
+        let config = TufConfig::custom("https://offline.example/", TufBootstrap::trusted(&root))
+            .offline()
+            .with_cache_dir(tmp.path().to_path_buf());
+        let client = TufClient::new(config);
+
+        let bytes = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap();
+        assert_eq!(bytes, content);
+    }
+
+    #[tokio::test]
+    async fn test_offline_mode_supports_explicit_unsafe_cached_bootstrap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let content = b"verified using the explicitly trusted cache root";
+        let root = signed_cache::write(tmp.path(), content, signed_cache::FAR_FUTURE);
+        std::fs::write(tmp.path().join("root.json"), root).unwrap();
+
+        let config = TufConfig::custom("https://offline.example/", TufBootstrap::UnsafeCachedRoot)
             .offline()
             .with_cache_dir(tmp.path().to_path_buf());
         let client = TufClient::new(config);
@@ -984,8 +966,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = TufConfig::custom("https://offline.example/")
-            .with_root(&root)
+        let config = TufConfig::custom("https://offline.example/", TufBootstrap::trusted(&root))
             .offline()
             .with_cache_dir(tmp.path().to_path_buf());
         let client = TufClient::new(config);
@@ -1005,8 +986,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = signed_cache::write(tmp.path(), b"stale", signed_cache::IN_THE_PAST);
 
-        let config = TufConfig::custom("https://offline.example/")
-            .with_root(&root)
+        let config = TufConfig::custom("https://offline.example/", TufBootstrap::trusted(&root))
             .offline()
             .with_cache_dir(tmp.path().to_path_buf());
         let client = TufClient::new(config);
@@ -1024,8 +1004,7 @@ mod tests {
         let root = signed_cache::write(tmp.path(), content, signed_cache::IN_THE_PAST);
         let validation_time: jiff::Timestamp = "2000-01-01T00:00:00Z".parse().unwrap();
 
-        let config = TufConfig::custom("https://offline.example/")
-            .with_root(&root)
+        let config = TufConfig::custom("https://offline.example/", TufBootstrap::trusted(&root))
             .offline()
             .with_cache_dir(tmp.path().to_path_buf());
         let client = TufClient::new(config);

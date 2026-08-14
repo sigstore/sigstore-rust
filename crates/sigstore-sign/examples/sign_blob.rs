@@ -129,7 +129,10 @@ async fn main() {
     // Create signing context with appropriate API version
     let tuf_config = if let Some(ref url) = instance {
         println!("  Using: custom instance ({})", url);
-        let config = sigstore_trust_root::tuf::TufConfig::custom(url);
+        let config = sigstore_trust_root::tuf::TufConfig::custom(
+            url,
+            sigstore_trust_root::tuf::TufBootstrap::UnsafeCachedRoot,
+        );
         sigstore_trust_root::SigningConfig::from_tuf(config)
             .await
             .unwrap_or_else(|e| {

@@ -61,15 +61,21 @@ let root = TrustedRoot::from_embedded(SigstoreInstance::GitHub)?;
 ### Custom TUF Repository
 
 ```rust
-use sigstore_trust_root::{TrustedRoot, TufConfig};
+use sigstore_trust_root::{TrustedRoot, TufBootstrap, TufConfig};
 
 // Fetch from a custom TUF repository (e.g., for testing)
 let config = TufConfig::custom(
     "https://sigstore.github.io/root-signing/",
-    include_bytes!("path/to/root.json"),
+    TufBootstrap::trusted(include_bytes!("path/to/root.json")),
 );
 let root = TrustedRoot::from_tuf(config).await?;
 ```
+
+Generic clients may instead opt into trusting the cached root on subsequent
+runs with `TufBootstrap::UnsafeCachedRoot`. This is deliberately not the
+default: anyone who can replace that writable cache can replace the root of
+trust and control the repository. Network access and bootstrap trust are
+independent, so either bootstrap policy can also be used with `.offline()`.
 
 ## Cargo Features
 
