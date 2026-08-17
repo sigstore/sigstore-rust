@@ -391,13 +391,6 @@ impl Updater {
         Ok(None)
     }
 
-    /// Look up a target by path in the trusted **top-level** targets metadata
-    /// only (no delegation walk). Use [`Updater::get_targetinfo`] to search
-    /// delegated roles.
-    pub fn find_target(&self, target_path: &str) -> Option<&TargetFile> {
-        self.trusted.targets_role("targets")?.target(target_path)
-    }
-
     /// Return a cached, already-verified copy of `target` from the attached
     /// store, or `None` when there is no store, no cached file, or the cached
     /// bytes no longer match the pinned length and hash.
