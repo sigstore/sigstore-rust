@@ -266,7 +266,7 @@ mod tests {
         assert_eq!(digest, crate::hash::sha256(message));
 
         // The signature verifies as ECDSA-SHA256 over the full message.
-        let key = VerificationKey::from_spki(
+        let key = VerificationKey::from_spki_with_scheme(
             &kp.public_key_der().unwrap(),
             SigningScheme::EcdsaP256Sha256,
         )
