@@ -290,7 +290,7 @@ mod tests {
         let message = b"caller supplied digest";
         let digest = crate::hash::sha256(message);
         let sig = kp.sign_digest(&digest).unwrap();
-        let vk = VerificationKey::from_spki(
+        let vk = VerificationKey::from_spki_with_scheme(
             &kp.public_key_der().unwrap(),
             SigningScheme::EcdsaP256Sha256,
         )
