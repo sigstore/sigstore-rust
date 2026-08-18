@@ -12,15 +12,17 @@ This workspace provides a modular Rust implementation of the Sigstore ecosystem,
 |-------|-------------|
 | [`sigstore-sign`](crates/sigstore-sign) | High-level signing API |
 | [`sigstore-verify`](crates/sigstore-verify) | High-level verification API |
-| [`sigstore-bundle`](crates/sigstore-bundle) | Sigstore bundle format handling |
-| [`sigstore-types`](crates/sigstore-types) | Core types and data structures |
-| [`sigstore-crypto`](crates/sigstore-crypto) | Cryptographic primitives |
-| [`sigstore-merkle`](crates/sigstore-merkle) | RFC 6962 Merkle tree verification |
-| [`sigstore-rekor`](crates/sigstore-rekor) | Rekor transparency log client |
-| [`sigstore-fulcio`](crates/sigstore-fulcio) | Fulcio certificate authority client |
-| [`sigstore-oidc`](crates/sigstore-oidc) | OpenID Connect authentication |
-| [`sigstore-tsa`](crates/sigstore-tsa) | RFC 3161 timestamp authority client |
 | [`sigstore-trust-root`](crates/sigstore-trust-root) | Trusted root management |
+| [`sigstore-bundle`](crates/sigstore-bundle) | Sigstore bundle format handling |
+| [`sigstore-oidc`](crates/sigstore-oidc) | OpenID Connect authentication |
+| [`sigstore-fulcio`](crates/sigstore-fulcio) | Fulcio certificate authority client |
+| [`sigstore-rekor`](crates/sigstore-rekor) | Rekor transparency log client |
+| [`sigstore-tsa`](crates/sigstore-tsa) | RFC 3161 timestamp authority client |
+| [`sigstore-tuf`](crates/sigstore-tuf) | The Update Framework (TUF) client |
+| [`sigstore-cache`](crates/sigstore-cache) | Flexible caching support |
+| [`sigstore-merkle`](crates/sigstore-merkle) | RFC 6962 Merkle tree verification |
+| [`sigstore-crypto`](crates/sigstore-crypto) | Cryptographic primitives |
+| [`sigstore-types`](crates/sigstore-types) | Core types and data structures |
 
 ## Installation
 
@@ -119,20 +121,19 @@ cargo run -p sigstore-verify --example verify_bundle -- \
 ## Architecture
 
 ```text
-┌─────────────────────────────────────────────────────────────────┐
-│                    Application Layer                            │
-├────────────────────────┬────────────────────────────────────────┤
-│     sigstore-sign      │           sigstore-verify              │
-├────────────────────────┴────────────────────────────────────────┤
-│                      sigstore-bundle                            │
-├─────────────┬─────────────┬─────────────┬───────────────────────┤
-│sigstore-oidc│sigstore-    │sigstore-    │  sigstore-trust-root  │
-│             │fulcio       │rekor        │                       │
-├─────────────┴──┬──────────┴────────┬────┴───────────────────────┤
-│  sigstore-tsa  │  sigstore-merkle  │  sigstore-crypto           │
-├────────────────┴─────────────────-─┴────────────────────────────┤
-│                      sigstore-types                             │
-└─────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│                           Application Layer                           │
+├───────────────────────┬───────────────────────┬───────────────────────┤
+│     sigstore-sign     │    sigstore-verify    │  sigstore-trust-root  │
+├───────────────────────┴───────────────┬───────┴───────────────────────┤
+│            sigstore-bundle            │         sigstore-oidc         │
+├─────────────────┬─────────────────┬───┴─────────────┬─────────────────┤
+│ sigstore-fulcio │ sigstore-rekor  │  sigstore-tsa   │  sigstore-tuf   │
+├─────────────────┴─────┬───────────┴───────────┬─────┴─────────────────┤
+│    sigstore-crypto    │    sigstore-merkle    │    sigstore-cache     │
+├───────────────────────┴───────────────────────┴───────────────────────┤
+│                            sigstore-types                             │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
 ## How Sigstore Works
