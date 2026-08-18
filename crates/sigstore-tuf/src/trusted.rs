@@ -69,11 +69,6 @@ impl TrustedMetadataSet {
         self.snapshot.as_ref().map(|m| &m.signed)
     }
 
-    /// The trusted top-level targets payload, if one has been loaded.
-    pub fn targets(&self) -> Option<&Targets> {
-        self.targets.get("targets").map(|m| &m.signed)
-    }
-
     /// Incorporate a candidate newer root.
     ///
     /// Enforces:

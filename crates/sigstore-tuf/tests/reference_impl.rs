@@ -90,7 +90,11 @@ async fn full_refresh_and_read_targets() {
     assert_eq!(f2, b"This is an another example target file.");
 
     // `custom` metadata round-trips.
-    let info = updater.find_target("file1.txt").unwrap();
+    let info = updater
+        .get_targetinfo("file1.txt", now())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         info.custom.as_ref().unwrap()["file_permissions"],
         serde_json::json!("0644")
@@ -107,7 +111,12 @@ async fn resolves_target_through_delegation() {
     updater.refresh(now()).await.unwrap();
 
     assert!(
-        updater.find_target("file3.txt").is_none(),
+        updater
+            .trusted()
+            .targets_role("targets")
+            .unwrap()
+            .target("file3.txt")
+            .is_none(),
         "file3.txt should not be in top-level targets"
     );
     let info = updater

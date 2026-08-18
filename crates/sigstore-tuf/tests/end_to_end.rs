@@ -394,7 +394,12 @@ async fn full_refresh_resolves_delegated_target_and_caches() {
 
     // The target lives only in the delegated role, so the top-level lookup
     // misses but the delegation walk finds it.
-    assert!(updater.find_target("delegated/file.txt").is_none());
+    assert!(updater
+        .trusted()
+        .targets_role("targets")
+        .unwrap()
+        .target("delegated/file.txt")
+        .is_none());
     let info = updater
         .get_targetinfo("delegated/file.txt", now())
         .await
