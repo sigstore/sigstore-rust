@@ -436,22 +436,19 @@ impl Verifier {
 
 fn compute_artifact_digest_algo(artifact: &Artifact<'_>, algo: HashAlgorithm) -> Result<Vec<u8>> {
     match artifact {
-        Artifact::Bytes(bytes) => match algo {
+        Artifact::Blob(bytes) => match algo {
             HashAlgorithm::Sha2256 => Ok(sigstore_crypto::sha256(bytes).as_bytes().to_vec()),
             HashAlgorithm::Sha2384 => Ok(sigstore_crypto::sha384(bytes)),
             HashAlgorithm::Sha2512 => Ok(sigstore_crypto::sha512(bytes)),
         },
-        Artifact::Digest(hash) => {
-            let expected_len = algo.digest_size();
-            if hash.len() != expected_len {
+        Artifact::Digest(digest) => {
+            if digest.algorithm() != algo {
                 return Err(Error::Verification(format!(
-                    "expected digest length {} for {:?}, got {}",
-                    expected_len,
-                    algo,
-                    hash.len()
+                    "verification requires an {algo} artifact digest, got {}",
+                    digest.algorithm()
                 )));
             }
-            Ok(hash.to_vec())
+            Ok(digest.as_bytes().to_vec())
         }
     }
 }
@@ -527,17 +524,36 @@ fn verify_signature_over_artifact(
     artifact: &Artifact<'_>,
 ) -> Result<()> {
     let result = match artifact {
-        Artifact::Bytes(bytes) => {
+        Artifact::Blob(bytes) => {
             sigstore_crypto::verify_signature(public_key, bytes, signature, scheme)
         }
-        Artifact::Digest(hash) => {
+        Artifact::Digest(digest) => {
             if !scheme.supports_prehashed() {
                 return Err(Error::Verification(format!(
                     "cannot verify signature with digest-only - scheme {} does not support prehashed mode",
                     scheme.name()
                 )));
             }
-            sigstore_crypto::verify_signature_prehashed(public_key, hash, signature, scheme)
+            let expected = scheme.hash_algorithm().ok_or_else(|| {
+                Error::Verification(format!(
+                    "cannot verify signature with digest-only - scheme {} has no external digest algorithm",
+                    scheme.name()
+                ))
+            })?;
+            if digest.algorithm() != expected {
+                return Err(Error::Verification(format!(
+                    "signature scheme {} requires an {} artifact digest, got {}",
+                    scheme.name(),
+                    expected,
+                    digest.algorithm()
+                )));
+            }
+            sigstore_crypto::verify_signature_prehashed(
+                public_key,
+                digest.as_bytes(),
+                signature,
+                scheme,
+            )
         }
     };
     result.map_err(|e| Error::Verification(format!("signature verification failed: {}", e)))

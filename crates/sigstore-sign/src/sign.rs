@@ -14,8 +14,8 @@ use sigstore_trust_root::{
 };
 use sigstore_tsa::TimestampClient;
 use sigstore_types::{
-    Artifact, Bundle, DerCertificate, DsseEnvelope, DsseSignature, KeyId, PayloadBytes, Sha256Hash,
-    SignatureBytes, Statement, Subject, TimestampToken,
+    Artifact, Bundle, DerCertificate, DsseEnvelope, DsseSignature, HashAlgorithm, KeyId,
+    PayloadBytes, Sha256Hash, SignatureBytes, Statement, Subject, TimestampToken,
 };
 
 /// Number of bytes hashed between yields to the async executor.
@@ -292,10 +292,9 @@ impl Signer {
     /// This creates a hashedrekord bundle that includes a signature over the artifact.
     /// The artifact can be provided as raw bytes or as an `Artifact` enum.
     ///
-    /// **Note:** For hashedrekord bundles, the raw artifact bytes are required to create
-    /// the signature. If you only have a pre-computed digest and don't need to sign the
-    /// raw bytes, use [`sign_attestation`](Self::sign_attestation) instead to create a
-    /// DSSE/in-toto attestation bundle.
+    /// A pre-computed digest is trusted as the identity of the artifact and
+    /// signed directly in prehashed mode; the library cannot check it against
+    /// bytes it was not given.
     ///
     /// # Executor behavior
     ///
@@ -325,31 +324,32 @@ impl Signer {
     pub async fn sign<'a>(&self, artifact: impl Into<Artifact<'a>>) -> Result<Bundle> {
         let artifact = artifact.into();
 
-        // For hashedrekord bundles, we need the raw bytes to sign
-        let bytes = match &artifact {
-            Artifact::Bytes(b) => *b,
-            Artifact::Digest(_) => {
-                return Err(Error::Signing(
-                    "Cannot create hashedrekord bundle with only a digest. \
-                     The raw artifact bytes are required to create the signature. \
-                     Use sign_attestation() to create a DSSE bundle with just a digest."
-                        .to_string(),
-                ));
-            }
-        };
-
         // 1. Generate ephemeral key pair
         let key_pair = self.generate_ephemeral_keypair()?;
 
         // 2. Get signing certificate from Fulcio
         let leaf_cert_der = self.request_certificate(&key_pair).await?;
 
-        // 3. + 4. Hash the artifact cooperatively (yielding to the executor
-        // between chunks so unbounded input cannot starve other tasks) and
-        // sign the digest. Signing the precomputed digest is equivalent to
-        // ECDSA-SHA256 over the raw bytes but is O(1) in the artifact size.
-        let hasher = sha256_yielding(bytes).await;
-        let (artifact_hash, signature) = key_pair.sign_prehashed(hasher)?;
+        // 3. + 4. Hash blobs cooperatively, or explicitly attest to the typed
+        // digest supplied by the caller, then sign in prehashed mode.
+        let (artifact_hash, signature) = match artifact {
+            Artifact::Blob(blob) => {
+                let hasher = sha256_yielding(blob).await;
+                key_pair.sign_prehashed(hasher)?
+            }
+            Artifact::Digest(digest) => {
+                if digest.algorithm() != HashAlgorithm::Sha2256 {
+                    return Err(Error::Signing(format!(
+                        "hashedrekord signing requires a SHA-256 artifact digest, got {}",
+                        digest.algorithm()
+                    )));
+                }
+                let hash = Sha256Hash::try_from_slice(digest.as_bytes())
+                    .map_err(|e| Error::Signing(e.to_string()))?;
+                let signature = key_pair.sign_digest(&hash)?;
+                (hash, signature)
+            }
+        };
 
         // 5. Create Rekor entry (with certificate, not just public key)
         let tlog_entry = self

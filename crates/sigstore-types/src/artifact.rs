@@ -1,118 +1,131 @@
-//! Artifact types for signing and verification
-//!
-//! This module provides types for representing artifacts to be signed or verified.
-//! Artifacts can be provided as raw bytes or as pre-computed digests, allowing
-//! for efficient handling of large files without loading them entirely into memory.
+//! Artifact inputs for signing and verification.
 
-use crate::{DigestBytes, Sha256Hash};
-use std::borrow::Cow;
+use crate::{DigestBytes, Error, HashAlgorithm, Sha256Hash};
 
-/// An artifact to be signed or verified
+/// A typed, pre-computed artifact digest.
 ///
-/// This enum allows flexible input for signing and verification operations:
-/// - `Bytes`: Raw artifact bytes (hash will be computed internally)
-/// - `Digest`: Pre-computed digest (no raw bytes needed)
-///
-/// The digest is stored as a [`Cow`] so it can either borrow from the caller
-/// (zero-copy, the common case) or own its bytes when an owned value is
-/// converted into an `Artifact` (e.g. `Artifact::from(some_sha256_hash)`).
-///
-/// # Example
-///
-/// ```
-/// use sigstore_types::{Artifact, Sha256Hash};
-///
-/// // From raw bytes
-/// let artifact = Artifact::from(b"hello world".as_slice());
-///
-/// // From a pre-computed digest (borrowed, zero-copy)
-/// let digest = Sha256Hash::from_hex(
-///     "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
-/// ).unwrap();
-/// let artifact = Artifact::from(&digest);
-/// ```
-#[derive(Debug, Clone)]
-pub enum Artifact<'a> {
-    /// Raw artifact bytes (hash will be computed)
-    Bytes(&'a [u8]),
-    /// Pre-computed digest bytes
-    Digest(Cow<'a, [u8]>),
+/// Carrying the algorithm with the bytes prevents a SHA-384 or SHA-512 value
+/// from being silently interpreted as SHA-256 (or vice versa).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactDigest {
+    algorithm: HashAlgorithm,
+    value: DigestBytes,
 }
 
-impl<'a> Artifact<'a> {
-    /// Create an artifact from raw bytes
-    pub fn from_bytes(bytes: &'a [u8]) -> Self {
-        Artifact::Bytes(bytes)
+impl ArtifactDigest {
+    /// Construct a digest and validate that its length matches `algorithm`.
+    pub fn new(algorithm: HashAlgorithm, value: impl Into<DigestBytes>) -> Result<Self, Error> {
+        let value = value.into();
+        if value.as_bytes().len() != algorithm.digest_size() {
+            return Err(Error::Validation(format!(
+                "{} digest must be {} bytes, got {}",
+                algorithm,
+                algorithm.digest_size(),
+                value.as_bytes().len()
+            )));
+        }
+        Ok(Self { algorithm, value })
     }
 
-    /// Create an artifact from a pre-computed digest (borrowed, zero-copy)
-    pub fn from_digest(digest: &'a [u8]) -> Self {
-        Artifact::Digest(Cow::Borrowed(digest))
-    }
-
-    /// Check if this artifact has raw bytes available
-    pub fn has_bytes(&self) -> bool {
-        matches!(self, Artifact::Bytes(_))
-    }
-
-    /// Get the raw bytes if available
-    pub fn bytes(&self) -> Option<&[u8]> {
-        match self {
-            Artifact::Bytes(bytes) => Some(bytes),
-            Artifact::Digest(_) => None,
+    /// Construct a SHA-256 artifact digest.
+    pub fn sha256(value: Sha256Hash) -> Self {
+        Self {
+            algorithm: HashAlgorithm::Sha2256,
+            value: value.into(),
         }
     }
 
-    /// Get the pre-computed digest bytes if available
-    pub fn pre_computed_digest(&self) -> Option<&[u8]> {
+    pub fn algorithm(&self) -> HashAlgorithm {
+        self.algorithm
+    }
+
+    pub fn value(&self) -> &DigestBytes {
+        &self.value
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.value.as_bytes()
+    }
+}
+
+impl From<Sha256Hash> for ArtifactDigest {
+    fn from(value: Sha256Hash) -> Self {
+        Self::sha256(value)
+    }
+}
+
+impl From<&Sha256Hash> for ArtifactDigest {
+    fn from(value: &Sha256Hash) -> Self {
+        Self::sha256(*value)
+    }
+}
+
+/// Material supplied as the subject of signing or verification.
+#[derive(Debug, Clone)]
+pub enum Artifact<'a> {
+    /// Complete artifact bytes.
+    Blob(&'a [u8]),
+    /// A typed pre-computed digest. The original bytes are unavailable.
+    Digest(ArtifactDigest),
+}
+
+impl<'a> Artifact<'a> {
+    pub fn from_blob(blob: &'a [u8]) -> Self {
+        Self::Blob(blob)
+    }
+
+    pub fn from_digest(digest: impl Into<ArtifactDigest>) -> Self {
+        Self::Digest(digest.into())
+    }
+
+    pub fn blob(&self) -> Option<&[u8]> {
         match self {
-            Artifact::Bytes(_) => None,
-            Artifact::Digest(hash) => Some(hash.as_ref()),
+            Self::Blob(blob) => Some(blob),
+            Self::Digest(_) => None,
+        }
+    }
+
+    pub fn digest(&self) -> Option<&ArtifactDigest> {
+        match self {
+            Self::Blob(_) => None,
+            Self::Digest(digest) => Some(digest),
         }
     }
 }
 
 impl<'a> From<&'a [u8]> for Artifact<'a> {
-    fn from(bytes: &'a [u8]) -> Self {
-        Artifact::Bytes(bytes)
+    fn from(value: &'a [u8]) -> Self {
+        Self::Blob(value)
     }
 }
 
 impl<'a> From<&'a Vec<u8>> for Artifact<'a> {
-    fn from(bytes: &'a Vec<u8>) -> Self {
-        Artifact::Bytes(bytes.as_slice())
+    fn from(value: &'a Vec<u8>) -> Self {
+        Self::Blob(value)
     }
 }
 
 impl<'a, const N: usize> From<&'a [u8; N]> for Artifact<'a> {
-    fn from(bytes: &'a [u8; N]) -> Self {
-        Artifact::Bytes(bytes.as_slice())
+    fn from(value: &'a [u8; N]) -> Self {
+        Self::Blob(value)
     }
 }
 
-impl<'a> From<&'a Sha256Hash> for Artifact<'a> {
-    fn from(hash: &'a Sha256Hash) -> Self {
-        Artifact::Digest(Cow::Borrowed(hash.as_bytes()))
-    }
-}
-
-impl<'a> From<&'a DigestBytes> for Artifact<'a> {
-    fn from(digest: &'a DigestBytes) -> Self {
-        Artifact::Digest(Cow::Borrowed(digest.as_bytes()))
+impl From<ArtifactDigest> for Artifact<'static> {
+    fn from(value: ArtifactDigest) -> Self {
+        Self::Digest(value)
     }
 }
 
 impl From<Sha256Hash> for Artifact<'static> {
-    fn from(hash: Sha256Hash) -> Self {
-        // Owned digest: copies the 32 bytes into the `Cow`. Prefer the
-        // borrowing `From<&Sha256Hash>` when the hash outlives the `Artifact`.
-        Artifact::Digest(Cow::Owned(hash.as_bytes().to_vec()))
+    fn from(value: Sha256Hash) -> Self {
+        Self::Digest(value.into())
     }
 }
 
-impl From<DigestBytes> for Artifact<'static> {
-    fn from(digest: DigestBytes) -> Self {
-        Artifact::Digest(Cow::Owned(digest.as_bytes().to_vec()))
+impl From<&Sha256Hash> for Artifact<'static> {
+    fn from(value: &Sha256Hash) -> Self {
+        Self::Digest(value.into())
     }
 }
 
@@ -121,35 +134,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_artifact_from_bytes() {
-        let bytes = b"hello world";
-        let artifact = Artifact::from(bytes.as_slice());
-        assert!(artifact.has_bytes());
-        assert_eq!(artifact.bytes(), Some(bytes.as_slice()));
+    fn digest_rejects_wrong_length() {
+        assert!(ArtifactDigest::new(HashAlgorithm::Sha2384, &[0_u8; 32][..]).is_err());
     }
 
     #[test]
-    fn test_artifact_from_digest() {
-        let digest = Sha256Hash::from_hex(
-            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
-        )
-        .unwrap();
-        let artifact = Artifact::from(digest);
-        assert!(!artifact.has_bytes());
-        assert_eq!(artifact.bytes(), None);
-        assert_eq!(
-            artifact.pre_computed_digest(),
-            Some(digest.as_bytes().as_slice())
-        );
-    }
-
-    #[test]
-    fn test_artifact_from_digest_bytes() {
-        let raw_bytes = vec![5u8; 32];
-        let digest = DigestBytes::from_bytes(raw_bytes.clone());
-        let artifact = Artifact::from(&digest);
-        assert!(!artifact.has_bytes());
-        assert_eq!(artifact.bytes(), None);
-        assert_eq!(artifact.pre_computed_digest(), Some(raw_bytes.as_slice()));
+    fn sha256_conversion_is_typed() {
+        let hash = Sha256Hash::from_bytes([7; 32]);
+        let artifact = Artifact::from(hash);
+        let digest = artifact.digest().unwrap();
+        assert_eq!(digest.algorithm(), HashAlgorithm::Sha2256);
+        assert_eq!(digest.as_bytes(), hash.as_bytes());
     }
 }
