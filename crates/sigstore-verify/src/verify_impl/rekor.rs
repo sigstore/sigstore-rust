@@ -300,7 +300,7 @@ fn certificate_public_key(certificate: &DerCertificate) -> Result<DerPublicKey> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sigstore_types::{Artifact, Bundle, CanonicalizedBody};
+    use sigstore_types::{Artifact, Bundle, CanonicalizedBody, Sha256Hash};
 
     const CANONICAL_INTOTO_BUNDLE: &str =
         include_str!("../../test_data/bundles/sigstore.js@2.0.0-provenance.sigstore.json");
@@ -319,7 +319,7 @@ mod tests {
 
     fn verify_consistency(bundle: &Bundle) -> Result<()> {
         let digest = [0u8; 32];
-        verify_tlog_consistency(bundle, &Artifact::from_digest(&digest))
+        verify_tlog_consistency(bundle, &Artifact::from(Sha256Hash::from_bytes(digest)))
     }
 
     #[test]
@@ -346,7 +346,7 @@ mod tests {
         let digest = [0u8; 32];
         verify_tlog_consistency_with_key(
             &bundle,
-            &Artifact::from_digest(&digest),
+            &Artifact::from(Sha256Hash::from_bytes(digest)),
             Some(&public_key),
         )
         .unwrap();
@@ -354,7 +354,7 @@ mod tests {
         let wrong_key = DerPublicKey::new(vec![1, 2, 3]);
         assert!(verify_tlog_consistency_with_key(
             &bundle,
-            &Artifact::from_digest(&digest),
+            &Artifact::from(Sha256Hash::from_bytes(digest)),
             Some(&wrong_key),
         )
         .is_err());
