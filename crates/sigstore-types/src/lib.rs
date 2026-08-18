@@ -12,6 +12,7 @@ pub mod error;
 pub mod hash;
 pub mod intoto;
 pub mod time_range;
+pub mod tsa_authority;
 
 pub use artifact::Artifact;
 pub use bundle::{
@@ -31,3 +32,4 @@ pub use error::{Error, Result};
 pub use hash::HashAlgorithm;
 pub use intoto::{Digest, Statement, Subject};
 pub use time_range::TimeRange;
+pub use tsa_authority::TsaAuthority;

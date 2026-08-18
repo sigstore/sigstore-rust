@@ -78,48 +78,32 @@ pub fn extract_tsa_timestamps(
 }
 
 /// Verify a single RFC 3161 timestamp token against the configured timestamp
-/// authorities, binding temporal authorization to the authority that signed it
-/// (TOB-SIGSTORE-11).
+/// authorities.
 ///
-/// Each authority is tried in isolation: the CMS signer certificate must be
-/// that authority's leaf and the chain must terminate at that authority's
-/// root. On success, ONLY that authority's window is consulted (via
-/// [`TsaAuthority::authorizes`]; an absent window is unrestricted). A token
-/// whose signing authority's window excludes the signed time is NOT rescued
-/// by another authority's window: it is only accepted if some authority both
-/// cryptographically verified it and temporally authorizes it.
+/// Each authority is tried in isolation via
+/// [`sigstore_tsa::verify_timestamp_for_authority`], whose success already
+/// implies both cryptographic authentication by that authority AND temporal
+/// authorization by that same authority's window (TOB-SIGSTORE-11), so the
+/// first success wins. A token whose signing authority's window excludes the
+/// signed time is NOT rescued by another authority's window.
 fn verify_timestamp_against_authorities(
     ts_bytes: &[u8],
     signature_bytes: &[u8],
     authorities: &[TsaAuthority],
 ) -> Result<jiff::Timestamp> {
-    use sigstore_tsa::{verify_timestamp_response, VerifyOpts as TsaVerifyOpts};
-
     // Signed time of a token that some authority authenticated but whose
     // window excludes it, kept for error reporting.
     let mut rejected_time = None;
     let mut last_error: Option<String> = None;
 
     for authority in authorities {
-        let opts = TsaVerifyOpts::new()
-            .with_root(authority.root.clone())
-            .with_intermediates(authority.intermediates.clone())
-            .with_tsa_certificates(vec![authority.leaf.clone()]);
-
-        let result = match verify_timestamp_response(ts_bytes, signature_bytes, opts) {
-            Ok(result) => result,
-            Err(e) => {
-                last_error = Some(e.to_string());
-                continue;
+        match sigstore_tsa::verify_timestamp_for_authority(ts_bytes, signature_bytes, authority) {
+            Ok(time) => return Ok(time),
+            Err(sigstore_tsa::Error::TimestampOutsideValidity { time }) => {
+                rejected_time = Some(time);
             }
-        };
-
-        // The token is cryptographically bound to this authority: consult
-        // only this authority's validity window.
-        if authority.authorizes(result.time) {
-            return Ok(result.time);
+            Err(e) => last_error = Some(e.to_string()),
         }
-        rejected_time = Some(result.time);
     }
 
     if let Some(time) = rejected_time {

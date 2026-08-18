@@ -56,6 +56,16 @@ pub enum Error {
     /// Timestamp parsing error
     #[error("Timestamp parsing error: {0}")]
     Parse(String),
+
+    /// The token is authentic, but its signed time falls outside the
+    /// validity window of the timestamp authority that signed it
+    #[error(
+        "timestamp {time} is outside the validity period of the timestamp authority that signed it"
+    )]
+    TimestampOutsideValidity {
+        /// The authenticated signed time of the token
+        time: jiff::Timestamp,
+    },
 }
 
 /// Result type for TSA operations

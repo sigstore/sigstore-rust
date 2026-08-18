@@ -13,6 +13,7 @@ use cms::signed_data::{SignedData, SignerIdentifier};
 use const_oid::ObjectIdentifier;
 use jiff::Timestamp;
 use rustls_pki_types::CertificateDer;
+use sigstore_types::TsaAuthority;
 use x509_cert::Certificate;
 
 // Re-export webpki from rustls-webpki
@@ -29,9 +30,15 @@ const OID_EC_PUBLIC_KEY: ObjectIdentifier = const_oid::db::rfc5912::ID_EC_PUBLIC
 const OID_SECP256R1: ObjectIdentifier = const_oid::db::rfc5912::SECP_256_R_1;
 const OID_SECP384R1: ObjectIdentifier = const_oid::db::rfc5912::SECP_384_R_1;
 
-/// Verification options for RFC 3161 timestamps
+/// Verification options for RFC 3161 timestamps.
+///
+/// Crate-private on purpose: an opts bag lets certificates and validity
+/// windows be mixed across authorities, which is exactly the misuse behind
+/// TOB-SIGSTORE-11. The public entry point is
+/// [`verify_timestamp_for_authority`], which consumes a [`TsaAuthority`] as
+/// one unsplittable unit.
 #[derive(Debug, Clone)]
-pub struct VerifyOpts<'a> {
+pub(crate) struct VerifyOpts<'a> {
     /// Root certificates for chain verification
     pub roots: Vec<CertificateDer<'a>>,
 
@@ -64,18 +71,6 @@ impl<'a> VerifyOpts<'a> {
         self
     }
 
-    /// Add multiple root certificates
-    pub fn with_roots(mut self, roots: Vec<CertificateDer<'a>>) -> Self {
-        self.roots = roots;
-        self
-    }
-
-    /// Add an intermediate certificate
-    pub fn with_intermediate(mut self, intermediate: CertificateDer<'a>) -> Self {
-        self.intermediates.push(intermediate);
-        self
-    }
-
     /// Add multiple intermediate certificates
     pub fn with_intermediates(mut self, intermediates: Vec<CertificateDer<'a>>) -> Self {
         self.intermediates = intermediates;
@@ -95,9 +90,10 @@ impl Default for VerifyOpts<'_> {
     }
 }
 
-/// Result of timestamp verification
+/// Result of raw timestamp verification: cryptographically authenticated,
+/// but not yet temporally authorized by any authority's `valid_for` window.
 #[derive(Debug, Clone)]
-pub struct TimestampResult {
+pub(crate) struct TimestampResult {
     /// The timestamp from the TSA
     pub time: Timestamp,
 }
@@ -197,7 +193,10 @@ pub fn parse_timestamp_token(timestamp_token_bytes: &[u8]) -> Result<(TstInfo, S
 /// # Returns
 ///
 /// Returns `Ok(TimestampResult)` if verification succeeds, otherwise returns an error.
-pub fn verify_timestamp_response(
+///
+/// Note: the returned time is NOT temporally authorized. Public consumers go
+/// through [`verify_timestamp_for_authority`], which cannot skip that step.
+pub(crate) fn verify_timestamp_response(
     timestamp_token_bytes: &[u8],
     signature_bytes: &[u8],
     opts: VerifyOpts<'_>,
@@ -239,6 +238,51 @@ pub fn verify_timestamp_response(
     tracing::debug!("TSA certificate chain validation completed successfully");
 
     Ok(TimestampResult { time: timestamp })
+}
+
+/// Verify an RFC 3161 timestamp token against a single timestamp authority.
+///
+/// An `Ok` time is simultaneously:
+///
+/// 1. **cryptographically authenticated** by `authority`: the CMS signer
+///    certificate must be the authority's leaf, and the chain must terminate
+///    at the authority's root, using only the authority's own intermediates;
+/// 2. **temporally authorized** by the same authority: the signed time must
+///    fall within its `valid_for` window (an absent window is unrestricted).
+///
+/// The two checks are inseparable by construction, so temporal authorization
+/// can never come from an authority other than the one that signed the token
+/// (TOB-SIGSTORE-11). A token whose signing authority's window excludes its
+/// signed time fails with [`Error::TimestampOutsideValidity`]; callers
+/// trying several authorities can use that variant to distinguish "wrong
+/// authority" from "right authority, wrong time".
+pub fn verify_timestamp_for_authority(
+    timestamp_token_bytes: &[u8],
+    signature_bytes: &[u8],
+    authority: &TsaAuthority,
+) -> Result<Timestamp> {
+    let opts = VerifyOpts::new()
+        .with_root(CertificateDer::from(authority.root.as_bytes()))
+        .with_intermediates(
+            authority
+                .intermediates
+                .iter()
+                .map(|cert| CertificateDer::from(cert.as_bytes()))
+                .collect(),
+        )
+        .with_tsa_certificates(vec![CertificateDer::from(authority.leaf.as_bytes())]);
+
+    let result = verify_timestamp_response(timestamp_token_bytes, signature_bytes, opts)?;
+
+    let authorized = authority
+        .valid_for
+        .as_ref()
+        .map_or(true, |window| window.contains(result.time));
+    if !authorized {
+        return Err(Error::TimestampOutsideValidity { time: result.time });
+    }
+
+    Ok(result.time)
 }
 
 /// Verify the message imprint matches the signature bytes
@@ -837,6 +881,104 @@ mod tests {
         }
     }
 
+    /// Build a [`TsaAuthority`] from the fixture trusted root's single TSA
+    /// entry (chain is leaf-first, root last), with the given window.
+    fn fixture_authority(valid_for: Option<sigstore_types::TimeRange>) -> TsaAuthority {
+        use sigstore_types::DerCertificate;
+
+        let root: serde_json::Value = serde_json::from_str(VALID_TRUSTED_ROOT).unwrap();
+        let chain = root["timestampAuthorities"][0]["certChain"]["certificates"]
+            .as_array()
+            .unwrap();
+        let der = |index: usize| {
+            let raw = chain[index]["rawBytes"].as_str().unwrap();
+            DerCertificate::new(STANDARD.decode(raw).unwrap())
+        };
+        TsaAuthority {
+            leaf: der(0),
+            intermediates: (1..chain.len() - 1).map(der).collect(),
+            root: der(chain.len() - 1),
+            valid_for,
+        }
+    }
+
+    /// The fixture token's signed time, obtained through an unrestricted
+    /// authority (absent `valid_for` window).
+    fn authority_token_time() -> Timestamp {
+        verify_timestamp_for_authority(
+            &extract_timestamp_token(VALID_BUNDLE),
+            &extract_signature(VALID_BUNDLE),
+            &fixture_authority(None),
+        )
+        .expect("fixture token should verify under an unrestricted authority")
+    }
+
+    fn window_around(
+        time: Timestamp,
+        start_offset: i64,
+        end_offset: i64,
+    ) -> sigstore_types::TimeRange {
+        let at = |offset: i64| Timestamp::from_second(time.as_second() + offset).unwrap();
+        sigstore_types::TimeRange::new(at(start_offset), Some(at(end_offset)))
+    }
+
+    #[test]
+    fn test_authority_verification_accepts_token_within_window() {
+        let time = authority_token_time();
+        let authority = fixture_authority(Some(window_around(time, -3600, 3600)));
+
+        let result = verify_timestamp_for_authority(
+            &extract_timestamp_token(VALID_BUNDLE),
+            &extract_signature(VALID_BUNDLE),
+            &authority,
+        );
+        assert_eq!(result.unwrap(), time);
+    }
+
+    #[test]
+    fn test_authority_verification_rejects_token_outside_window() {
+        // The window check cannot be skipped: an authenticated token whose
+        // signing authority's window excludes it is a typed error carrying
+        // the authenticated time.
+        let time = authority_token_time();
+        let authority = fixture_authority(Some(window_around(time, -7200, -3600)));
+
+        let result = verify_timestamp_for_authority(
+            &extract_timestamp_token(VALID_BUNDLE),
+            &extract_signature(VALID_BUNDLE),
+            &authority,
+        );
+        match result.unwrap_err() {
+            Error::TimestampOutsideValidity { time: rejected } => assert_eq!(rejected, time),
+            other => panic!("Expected TimestampOutsideValidity, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_authority_verification_rejects_token_signed_by_other_leaf() {
+        // An authority whose leaf is not the CMS signer must fail closed even
+        // though the token chains to the same root: its window is never
+        // consulted (a covering window cannot rescue the token).
+        let time = authority_token_time();
+        let mut authority = fixture_authority(Some(window_around(time, -3600, 3600)));
+        authority.leaf = authority.root.clone();
+
+        let result = verify_timestamp_for_authority(
+            &extract_timestamp_token(VALID_BUNDLE),
+            &extract_signature(VALID_BUNDLE),
+            &authority,
+        );
+        match result.unwrap_err() {
+            Error::SignatureVerificationError(msg) => {
+                assert!(
+                    msg.contains("does not match any provided TSA certificate"),
+                    "unexpected message: {msg}"
+                );
+            }
+            other => panic!("Expected SignatureVerificationError, got: {:?}", other),
+        }
+    }
+
     #[test]
     fn test_verify_timestamp_payload_mismatch() {
         // This bundle has a valid timestamp but it doesn't match the signature
@@ -974,46 +1116,6 @@ mod tests {
             "GitHub SHA-384 timestamp should verify: {:?}",
             result
         );
-    }
-
-    #[test]
-    fn test_verify_opts_builder() {
-        // Test the VerifyOpts builder pattern
-        let root = CertificateDer::from(vec![1, 2, 3]);
-        let intermediate = CertificateDer::from(vec![4, 5, 6]);
-        let tsa_certs = vec![
-            CertificateDer::from(vec![7, 8, 9]),
-            CertificateDer::from(vec![10, 11, 12]),
-        ];
-
-        let opts = VerifyOpts::new()
-            .with_root(root.clone())
-            .with_intermediate(intermediate.clone())
-            .with_tsa_certificates(tsa_certs);
-
-        assert_eq!(opts.roots.len(), 1);
-        assert_eq!(opts.intermediates.len(), 1);
-        assert_eq!(opts.tsa_certificates.len(), 2);
-    }
-
-    #[test]
-    fn test_verify_opts_with_multiple_certs() {
-        // Test adding multiple certificates at once
-        let roots = vec![
-            CertificateDer::from(vec![1, 2, 3]),
-            CertificateDer::from(vec![4, 5, 6]),
-        ];
-        let intermediates = vec![
-            CertificateDer::from(vec![7, 8, 9]),
-            CertificateDer::from(vec![10, 11, 12]),
-        ];
-
-        let opts = VerifyOpts::new()
-            .with_roots(roots)
-            .with_intermediates(intermediates);
-
-        assert_eq!(opts.roots.len(), 2);
-        assert_eq!(opts.intermediates.len(), 2);
     }
 
     #[test]

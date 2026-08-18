@@ -7,31 +7,8 @@ use serde::{Deserialize, Serialize};
 use sigstore_crypto::{Keyring, SigningScheme, VerificationKey};
 use sigstore_types::{
     DerCertificate, DerPublicKey, HashAlgorithm, LogId, LogKeyId, Sha256Hash, TimeRange,
+    TsaAuthority,
 };
-
-/// A single timestamp authority usable for verification: its certificate
-/// chain split into leaf, intermediates and root, together with the
-/// authority's `valid_for` window.
-#[derive(Debug, Clone)]
-pub struct TsaAuthority {
-    /// The TSA signing certificate (the first certificate in the chain).
-    pub leaf: CertificateDer<'static>,
-    /// Certificates between the leaf and the root, if any.
-    pub intermediates: Vec<CertificateDer<'static>>,
-    /// The trust anchor (the last certificate in the chain).
-    pub root: CertificateDer<'static>,
-    /// The authority's validity window, if constrained.
-    pub valid_for: Option<TimeRange>,
-}
-
-impl TsaAuthority {
-    /// Whether this authority temporally authorizes a timestamp it signed.
-    pub fn authorizes(&self, time: Timestamp) -> bool {
-        self.valid_for
-            .as_ref()
-            .map_or(true, |period| period.contains(time))
-    }
-}
 
 /// A trusted root bundle containing all trust anchors
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -319,8 +296,10 @@ impl TrustedRoot {
     /// Get each timestamp authority usable for verification.
     ///
     /// Each authority's chain is kept separate so cryptographic verification
-    /// and temporal authorization always use the same authority. Authorities
-    /// with empty chains or validity windows that have not started are skipped;
+    /// and temporal authorization always use the same authority (verify a
+    /// timestamp against one via
+    /// `sigstore_tsa::verify_timestamp_for_authority`). Authorities with
+    /// empty chains or validity windows that have not started are skipped;
     /// expired authorities remain available for historical verification.
     pub fn tsa_authorities(&self) -> Vec<TsaAuthority> {
         let now = Timestamp::now();
@@ -337,12 +316,12 @@ impl TrustedRoot {
                 .get(1..certs.len() - 1)
                 .unwrap_or_default()
                 .iter()
-                .map(|cert| CertificateDer::from(cert.raw_bytes.as_bytes()).into_owned())
+                .map(|cert| cert.raw_bytes.clone())
                 .collect();
             authorities.push(TsaAuthority {
-                leaf: CertificateDer::from(leaf.raw_bytes.as_bytes()).into_owned(),
+                leaf: leaf.raw_bytes.clone(),
                 intermediates,
-                root: CertificateDer::from(root.raw_bytes.as_bytes()).into_owned(),
+                root: root.raw_bytes.clone(),
                 valid_for: tsa.valid_for,
             });
         }
@@ -715,14 +694,18 @@ mod tests {
         assert_eq!(authorities.len(), 1);
 
         let authority = &authorities[0];
-        assert_eq!(authority.leaf.as_ref(), &[0, 0, 0]);
+        assert_eq!(authority.leaf.as_bytes(), &[0, 0, 0]);
         assert!(authority.intermediates.is_empty());
-        assert_eq!(authority.root.as_ref(), &[0, 0, 0]);
-        assert!(authority.authorizes("2025-01-01T00:00:00Z".parse().unwrap()));
-        assert!(!authority.authorizes("2019-01-01T00:00:00Z".parse().unwrap()));
-        // Closed interval: the end bound is inside the window.
-        assert!(authority.authorizes("2030-01-01T00:00:00Z".parse().unwrap()));
-        assert!(!authority.authorizes("2030-01-01T00:00:01Z".parse().unwrap()));
+        assert_eq!(authority.root.as_bytes(), &[0, 0, 0]);
+        // The window is carried through verbatim; enforcement lives in
+        // `sigstore_tsa::verify_timestamp_for_authority`.
+        assert_eq!(
+            authority.valid_for,
+            Some(TimeRange::new(
+                "2020-01-01T00:00:00Z".parse().unwrap(),
+                Some("2030-01-01T00:00:00Z".parse().unwrap()),
+            ))
+        );
     }
 
     #[test]
