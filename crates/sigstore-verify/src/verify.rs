@@ -496,27 +496,24 @@ fn verify_dsse_artifact_binding(
         ));
     }
     let matches = match artifact {
-        Artifact::Bytes(bytes) => {
+        Artifact::Blob(bytes) => {
             let sha256 = hex::encode(sigstore_crypto::sha256(bytes));
             let sha512 = hex::encode(sigstore_crypto::sha512(bytes));
             statement.matches_sha256(&sha256) || statement.matches_sha512(&sha512)
         }
-        Artifact::Digest(hash) => match hash.len() {
-            32 => {
-                let digest = hex::encode(hash);
-                statement.matches_sha256(&digest)
+        Artifact::Digest(digest) => {
+            let value = hex::encode(digest.as_bytes());
+            match digest.algorithm() {
+                HashAlgorithm::Sha2256 => statement.matches_sha256(&value),
+                HashAlgorithm::Sha2512 => statement.matches_sha512(&value),
+                algorithm => {
+                    return Err(Error::Verification(format!(
+                        "unsupported pre-computed artifact digest algorithm: {}",
+                        algorithm
+                    )))
+                }
             }
-            64 => {
-                let digest = hex::encode(hash);
-                statement.matches_sha512(&digest)
-            }
-            length => {
-                return Err(Error::Verification(format!(
-                    "unsupported pre-computed artifact digest length: {}",
-                    length
-                )))
-            }
-        },
+        }
     };
 
     if !matches {
