@@ -15,9 +15,9 @@ pub(crate) struct PreparedArtifact<'a> {
 }
 
 fn required_hashers(bundle: &Bundle) -> Vec<ArtifactHasher> {
-    // SHA-256 binds DSSE subjects and hashedrekord entries. MessageSignature
-    // may additionally select SHA-384 or SHA-512 for signature verification.
-    let mut algorithms = vec![HashAlgorithm::Sha2256];
+    // SHA-256 binds hashedrekord entries, while in-toto subjects can use
+    // SHA-256 or SHA-512. MessageSignature may additionally select SHA-384.
+    let mut algorithms = vec![HashAlgorithm::Sha2256, HashAlgorithm::Sha2512];
     if let SignatureContent::MessageSignature(signature) = &bundle.content {
         if let Some(digest) = &signature.message_digest {
             if !algorithms.contains(&digest.algorithm) {

@@ -501,11 +501,8 @@ fn verify_dsse_envelope_signature(
 /// Only in-toto statements are supported: any other payload type has no
 /// defined relationship to the artifact, so verification fails closed rather
 /// than accepting an arbitrary artifact alongside a validly-signed envelope.
-/// The artifact's SHA-256 digest must match at least one subject of the
-/// statement, and the statement must have at least one subject.
-///
-/// Note: in-toto supports multiple digest algorithms (e.g. sha512), but
-/// Sigstore currently mandates SHA-256 for attestation subjects.
+/// A supported artifact digest (SHA-256 or SHA-512) must match at least one
+/// subject of the statement, and the statement must have at least one subject.
 fn verify_dsse_artifact_binding(
     envelope: &sigstore_types::DsseEnvelope,
     artifact: &PreparedArtifact<'_>,
@@ -517,11 +514,6 @@ fn verify_dsse_artifact_binding(
         )));
     }
 
-    let artifact_hash = compute_artifact_digest_algo(artifact, HashAlgorithm::Sha2256)?;
-    let artifact_hash_hex = sigstore_types::Sha256Hash::try_from_slice(&artifact_hash)
-        .map_err(|_| Error::Verification("invalid SHA-256 hash length".to_string()))?
-        .to_hex();
-
     let payload_str = std::str::from_utf8(envelope.payload.as_bytes())
         .map_err(|e| Error::Verification(format!("payload is not valid UTF-8: {}", e)))?;
     let statement: Statement = serde_json::from_str(payload_str)
@@ -532,7 +524,17 @@ fn verify_dsse_artifact_binding(
             "in-toto statement has no subjects: cannot bind artifact to attestation".to_string(),
         ));
     }
-    if !statement.matches_sha256(&artifact_hash_hex) {
+    let sha256_matches = artifact
+        .digest(HashAlgorithm::Sha2256)
+        .map(|digest| statement.matches_sha256(&hex::encode(digest)))
+        .unwrap_or(false);
+    let sha512_matches = artifact
+        .digest(HashAlgorithm::Sha2512)
+        .map(|digest| statement.matches_sha512(&hex::encode(digest)))
+        .unwrap_or(false);
+    let matches = sha256_matches || sha512_matches;
+
+    if !matches {
         return Err(Error::Verification(
             "artifact hash does not match any subject in attestation".to_string(),
         ));
@@ -854,9 +856,13 @@ fn verify_with_key_prepared(
 
     // Verify the transparency log entries' consistency against the bundle's
     // other materials and the artifact (CVE-2022-36056 class), mirroring
-    // step 8 of `Verifier::verify`. Without this, a log entry whose body
-    // (hash, signature, verifier) disagrees with the bundle passes silently.
-    crate::verify_impl::verify_tlog_consistency(bundle, &artifact)?;
+    // step 8 of `Verifier::verify`. Pass the caller-supplied key so legacy
+    // intoto entries can bind their logged verifier in managed-key bundles.
+    crate::verify_impl::rekor::verify_tlog_consistency_with_key(
+        bundle,
+        &artifact,
+        Some(public_key),
+    )?;
 
     Ok(result)
 }

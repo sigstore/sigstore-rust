@@ -3,7 +3,7 @@
 //! These tests validate the complete verification flow using real bundles.
 
 use sigstore_trust_root::{SigstoreInstance, TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
-use sigstore_types::{LogIndex, Sha256Hash};
+use sigstore_types::{ArtifactDigest, DigestBytes, HashAlgorithm, LogIndex, Sha256Hash};
 use sigstore_verify::bundle::{validate_bundle, validate_bundle_with_options, ValidationOptions};
 use sigstore_verify::types::Bundle;
 use sigstore_verify::{verify, verify_async_reader, verify_reader, VerificationPolicy, Verifier};
@@ -639,6 +639,30 @@ fn test_github_actions_provenance_bundle() {
         san_ext.is_some(),
         "Certificate should have Subject Alternative Name extension"
     );
+}
+
+/// Exercise complete verification of the canonical Rekor intoto/0.0.2 body,
+/// which stores payloadHash and payloadType rather than the proposed payload.
+#[test]
+fn test_verify_github_actions_provenance_bundle() {
+    let bundle =
+        Bundle::from_json(SIGSTORE_JS_PROVENANCE).expect("Failed to parse provenance bundle");
+    let artifact_digest = ArtifactDigest::new(
+        HashAlgorithm::Sha2512,
+        DigestBytes::from_bytes(
+            hex::decode("46d4e2f74c4877316640000a6fdf8a8b59f1e0847667973e9859f774dd31b8f1e0937813b777fb66a2ac67d50540fe34640966eee9fc2ccca387082b4c85cd3c")
+                .unwrap(),
+        ),
+    )
+    .unwrap();
+
+    let result = verify(
+        artifact_digest,
+        &bundle,
+        &VerificationPolicy::default(),
+        &production_root(),
+    );
+    assert!(result.is_ok(), "Verification failed: {:?}", result.err());
 }
 
 /// Test bundle with OtherName SAN type
