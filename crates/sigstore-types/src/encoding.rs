@@ -90,27 +90,31 @@ pub mod hex_bytes {
     }
 }
 
-/// Serde helper for i64 fields serialized as strings
-///
-/// JSON bundles use strings for large integers. This helper serializes
-/// i64 values as strings and parses them back.
-pub mod string_i64 {
+/// Serde helper for u64 fields serialized as strings.
+pub mod string_u64 {
     use serde::{Deserialize, Deserializer, Serializer};
 
-    pub fn serialize<S>(value: &i64, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         serializer.serialize_str(&value.to_string())
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<i64, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<u64, D::Error>
     where
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        s.parse::<i64>()
-            .map_err(|_| serde::de::Error::custom(format!("invalid integer: {}", s)))
+        let value = s
+            .parse::<u64>()
+            .map_err(|_| serde::de::Error::custom(format!("invalid unsigned integer: {s}")))?;
+        if value > i64::MAX as u64 {
+            return Err(serde::de::Error::custom(format!(
+                "unsigned integer exceeds protobuf int64: {value}"
+            )));
+        }
+        Ok(value)
     }
 }
 
@@ -440,41 +444,31 @@ impl std::fmt::Display for EntryUuid {
     }
 }
 
-/// Transparency log index
+/// A non-negative transparency-log index representable by protobuf `int64`.
 ///
-/// Represents a log index in the transparency log. Per the protobuf spec,
-/// this is an int64. For JSON serialization, we serialize as an integer but
-/// accept both integers and strings for backwards compatibility.
+/// Negative and overflowing values are rejected during deserialization, so
+/// consumers never need to validate the sign before using an index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct LogIndex(i64);
+pub struct LogIndex(u64);
 
 impl LogIndex {
-    pub fn new(index: i64) -> Self {
-        LogIndex(index)
+    pub fn new(index: u64) -> Self {
+        assert!(index <= i64::MAX as u64, "log index exceeds protobuf int64");
+        Self(index)
     }
 
-    pub fn value(&self) -> i64 {
+    pub fn value(self) -> u64 {
         self.0
     }
 
-    pub fn as_u64(&self) -> Option<u64> {
-        if self.0 >= 0 {
-            Some(self.0 as u64)
-        } else {
-            None
-        }
-    }
-}
-
-impl From<i64> for LogIndex {
-    fn from(index: i64) -> Self {
-        LogIndex::new(index)
+    pub fn as_i64(self) -> i64 {
+        self.0 as i64
     }
 }
 
 impl From<u64> for LogIndex {
     fn from(index: u64) -> Self {
-        LogIndex::new(index as i64)
+        Self::new(index)
     }
 }
 
@@ -514,6 +508,8 @@ impl<'de> Deserialize<'de> for LogIndex {
             where
                 E: de::Error,
             {
+                let value = u64::try_from(value)
+                    .map_err(|_| de::Error::custom(format!("negative log index: {value}")))?;
                 Ok(LogIndex::new(value))
             }
 
@@ -521,17 +517,22 @@ impl<'de> Deserialize<'de> for LogIndex {
             where
                 E: de::Error,
             {
-                Ok(LogIndex::new(value as i64))
+                if value > i64::MAX as u64 {
+                    return Err(de::Error::custom(format!(
+                        "log index exceeds protobuf int64: {value}"
+                    )));
+                }
+                Ok(LogIndex::new(value))
             }
 
             fn visit_str<E>(self, value: &str) -> std::result::Result<LogIndex, E>
             where
                 E: de::Error,
             {
-                value
-                    .parse::<i64>()
-                    .map(LogIndex::new)
-                    .map_err(|_| de::Error::custom(format!("invalid log index: {}", value)))
+                let index = value
+                    .parse::<u64>()
+                    .map_err(|_| de::Error::custom(format!("invalid log index: {value}")))?;
+                self.visit_u64(index)
             }
         }
 
@@ -1135,6 +1136,18 @@ mod tests {
         assert_eq!(log_id.as_str(), "01020304");
         assert_eq!(log_id.decode().unwrap(), bytes);
         assert_eq!(log_id.to_base64().unwrap(), "AQIDBA==");
+    }
+
+    #[test]
+    fn log_index_deserializes_only_non_negative_protobuf_int64_values() {
+        assert_eq!(
+            serde_json::from_str::<LogIndex>("\"42\"").unwrap().value(),
+            42
+        );
+        assert_eq!(serde_json::from_str::<LogIndex>("42").unwrap().value(), 42);
+        assert!(serde_json::from_str::<LogIndex>("-1").is_err());
+        assert!(serde_json::from_str::<LogIndex>("\"-1\"").is_err());
+        assert!(serde_json::from_str::<LogIndex>("9223372036854775808").is_err());
     }
 
     #[test]

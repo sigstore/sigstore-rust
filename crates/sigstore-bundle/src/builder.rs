@@ -133,7 +133,7 @@ impl BundleV03 {
 
 /// Helper to create a transparency log entry.
 pub struct TlogEntryBuilder {
-    log_index: i64,
+    log_index: u64,
     log_id: String,
     kind: String,
     kind_version: String,
@@ -222,7 +222,7 @@ impl TlogEntryBuilder {
     }
 
     /// Set the log index.
-    pub fn log_index(mut self, index: i64) -> Self {
+    pub fn log_index(mut self, index: u64) -> Self {
         self.log_index = index;
         self
     }
@@ -251,14 +251,14 @@ impl TlogEntryBuilder {
     /// * `checkpoint` - The checkpoint envelope
     pub fn inclusion_proof(
         mut self,
-        log_index: i64,
+        log_index: u64,
         root_hash: Sha256Hash,
-        tree_size: i64,
+        tree_size: u64,
         hashes: Vec<Sha256Hash>,
         checkpoint: String,
     ) -> Self {
         self.inclusion_proof = Some(InclusionProof {
-            log_index: LogIndex::from(log_index),
+            log_index: LogIndex::new(log_index),
             root_hash,
             tree_size,
             hashes,
@@ -272,7 +272,7 @@ impl TlogEntryBuilder {
     /// Build the transparency log entry.
     pub fn build(self) -> TransparencyLogEntry {
         TransparencyLogEntry {
-            log_index: LogIndex::from(self.log_index),
+            log_index: LogIndex::new(self.log_index),
             log_id: LogId {
                 key_id: LogKeyId::new(self.log_id),
             },

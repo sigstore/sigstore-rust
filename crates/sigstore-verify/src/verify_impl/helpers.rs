@@ -120,16 +120,17 @@ fn verify_timestamp_against_authorities(
     )))
 }
 
-/// Check if bundle contains V2 tlog entries (hashedrekord/dsse v0.0.2)
-/// V2 entries have no integrated time and require RFC3161 timestamps
+/// Check whether the bundle contains a Rekor v2 entry.
+///
+/// Rekor v2 currently defines only `hashedrekord/0.0.2`. A `0.0.2` version on
+/// another entry kind does not imply Rekor v2 semantics.
 pub fn has_v2_tlog_entries(bundle: &Bundle) -> bool {
     bundle
         .verification_material
         .tlog_entries
         .iter()
         .any(|entry| {
-            entry.kind_version.version == "0.0.2"
-                && matches!(entry.kind_version.kind.as_str(), "hashedrekord" | "dsse")
+            entry.kind_version.kind == "hashedrekord" && entry.kind_version.version == "0.0.2"
         })
 }
 

@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 use sigstore_types::{
-    CanonicalizedBody, CheckpointData, DerCertificate, EntryUuid, HashAlgorithm, HexLogId,
-    InclusionPromise, KindVersion, LogId, PemContent, Sha256Hash, SignatureBytes, SignedTimestamp,
+    CanonicalizedBody, DerCertificate, DerPublicKey, EntryUuid, HashAlgorithm, HexLogId,
+    PemContent, Sha256Hash, SignatureBytes, SignedTimestamp,
 };
 use std::collections::HashMap;
 
@@ -14,8 +14,8 @@ pub enum RekorApiVersion {
     /// Available at: <https://rekor.sigstore.dev>
     #[default]
     V1,
-    /// V2 API - uses hashedrekord 0.0.2 and dsse 0.0.2
-    /// Returns inclusion proofs with checkpoints
+    /// V2 API - uses hashedrekord 0.0.2 for both artifacts and DSSE envelopes
+    /// Returns inclusion proofs with checkpoints and requires RFC 3161 timestamps
     /// Available at: <https://log2025-1.rekor.sigstore.dev> (as of Oct 2025)
     /// Note: V2 uses a different URL than V1!
     V2,
@@ -60,7 +60,7 @@ pub struct LogEntry {
     #[serde(rename = "logID")]
     pub log_id: HexLogId,
     /// Log index
-    pub log_index: i64,
+    pub log_index: u64,
     /// Verification data
     #[serde(default)]
     pub verification: Option<Verification>,
@@ -82,7 +82,7 @@ pub struct Verification {
 ///
 /// Note: This is different from `sigstore_types::InclusionProof` which is the
 /// bundle format with typed fields. This uses raw strings as returned by the
-/// Rekor V1 API (hex-encoded hashes, i64 indices).
+/// Rekor V1 API (hex-encoded hashes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RekorInclusionProof {
@@ -91,11 +91,11 @@ pub struct RekorInclusionProof {
     /// Hashes in the proof path (hex-encoded in V1 API)
     pub hashes: Vec<String>,
     /// Log index
-    pub log_index: i64,
+    pub log_index: u64,
     /// Root hash (hex-encoded in V1 API)
     pub root_hash: String,
     /// Tree size
-    pub tree_size: i64,
+    pub tree_size: u64,
 }
 
 /// Log info response
@@ -109,7 +109,7 @@ pub struct LogInfo {
     /// Tree ID
     pub tree_i_d: String,
     /// Tree size
-    pub tree_size: i64,
+    pub tree_size: u64,
     /// Inactive shards
     #[serde(default)]
     pub inactive_shards: Vec<InactiveShard>,
@@ -126,7 +126,7 @@ pub struct InactiveShard {
     /// Tree ID
     pub tree_i_d: String,
     /// Tree size
-    pub tree_size: i64,
+    pub tree_size: u64,
 }
 
 /// Response from creating a log entry (map of UUID to LogEntry)
@@ -339,156 +339,95 @@ pub struct HashedRekordSignatureV2 {
     pub verifier: HashedRekordVerifierV2,
 }
 
-/// Verifier in HashedRekord V2
+/// Signature algorithms accepted by the Rekor v2 hashedrekord service.
+///
+/// The current request API accepts a SHA-256 digest, so it exposes only the
+/// matching algorithm. Supporting additional algorithms requires carrying
+/// their SHA-384 or SHA-512 digests instead of merely changing this value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RekorV2KeyDetails {
+    #[serde(rename = "PKIX_ECDSA_P256_SHA_256")]
+    PkixEcdsaP256Sha256,
+}
+
+/// Verifier in a Rekor v2 hashedrekord request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HashedRekordVerifierV2 {
-    /// Key details (enum value as string)
-    pub key_details: String,
-    /// X.509 certificate
+    pub key_details: RekorV2KeyDetails,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub x509_certificate: Option<HashedRekordPublicKeyV2>,
-    /// Public key (alternative to certificate)
+    pub x509_certificate: Option<HashedRekordCertificateV2>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_key: Option<HashedRekordPublicKeyV2>,
 }
 
-/// Public key/Certificate in HashedRekord V2
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HashedRekordPublicKeyV2 {
-    /// Raw bytes (DER-encoded certificate)
+pub struct HashedRekordCertificateV2 {
     #[serde(rename = "rawBytes")]
     pub content: DerCertificate,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HashedRekordPublicKeyV2 {
+    #[serde(rename = "rawBytes")]
+    pub content: DerPublicKey,
+}
+
 impl HashedRekordV2 {
-    /// Create a new HashedRekordV2 entry with a certificate
-    ///
-    /// The certificate (obtained from Fulcio) contains the identity binding that
-    /// verifiers need to validate.
-    ///
-    /// # Arguments
-    /// * `artifact_hash` - SHA256 hash of the artifact
-    /// * `signature` - Signature bytes
-    /// * `certificate` - DER-encoded X.509 certificate from Fulcio
-    pub fn new(
+    /// Create a request authenticated by an X.509 certificate.
+    pub fn new_with_certificate(
         artifact_hash: &Sha256Hash,
         signature: &SignatureBytes,
         certificate: &DerCertificate,
+        key_details: RekorV2KeyDetails,
+    ) -> Self {
+        Self::new(
+            artifact_hash,
+            signature,
+            HashedRekordVerifierV2 {
+                key_details,
+                x509_certificate: Some(HashedRekordCertificateV2 {
+                    content: certificate.clone(),
+                }),
+                public_key: None,
+            },
+        )
+    }
+
+    /// Create a request authenticated by a self-managed public key.
+    pub fn new_with_public_key(
+        artifact_hash: &Sha256Hash,
+        signature: &SignatureBytes,
+        public_key: &DerPublicKey,
+        key_details: RekorV2KeyDetails,
+    ) -> Self {
+        Self::new(
+            artifact_hash,
+            signature,
+            HashedRekordVerifierV2 {
+                key_details,
+                x509_certificate: None,
+                public_key: Some(HashedRekordPublicKeyV2 {
+                    content: public_key.clone(),
+                }),
+            },
+        )
+    }
+
+    fn new(
+        artifact_hash: &Sha256Hash,
+        signature: &SignatureBytes,
+        verifier: HashedRekordVerifierV2,
     ) -> Self {
         Self {
             request: HashedRekordRequestV002 {
                 digest: *artifact_hash,
                 signature: HashedRekordSignatureV2 {
                     content: signature.clone(),
-                    verifier: HashedRekordVerifierV2 {
-                        // Assuming ECDSA P-256 SHA-256 for now as per conformance tests
-                        key_details: "PKIX_ECDSA_P256_SHA_256".to_string(),
-                        x509_certificate: Some(HashedRekordPublicKeyV2 {
-                            content: certificate.clone(),
-                        }),
-                        public_key: None,
-                    },
+                    verifier,
                 },
             },
         }
-    }
-}
-
-/// DSSE entry for creating new log entries (V2)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DsseEntryV2 {
-    #[serde(rename = "dsseRequestV002")]
-    pub request: DsseRequestV002,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DsseRequestV002 {
-    /// The DSSE envelope
-    pub envelope: sigstore_types::DsseEnvelope,
-    /// Verifiers (certificates) for the signatures
-    pub verifiers: Vec<DsseVerifierV2>,
-}
-
-/// Verifier in DSSE V2 (same structure as HashedRekord V2)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DsseVerifierV2 {
-    /// Key details (enum value as string)
-    pub key_details: String,
-    /// X.509 certificate
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub x509_certificate: Option<HashedRekordPublicKeyV2>,
-    /// Public key (alternative to certificate)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_key: Option<HashedRekordPublicKeyV2>,
-}
-
-impl DsseEntryV2 {
-    /// Create a new DsseEntryV2 from an envelope and certificate
-    ///
-    /// # Arguments
-    /// * `envelope` - The DSSE envelope containing signatures
-    /// * `certificate` - DER-encoded X.509 certificate from Fulcio
-    pub fn new(envelope: &sigstore_types::DsseEnvelope, certificate: &DerCertificate) -> Self {
-        Self {
-            request: DsseRequestV002 {
-                envelope: envelope.clone(),
-                verifiers: vec![DsseVerifierV2 {
-                    // Assuming ECDSA P-256 SHA-256 for now as per conformance tests
-                    key_details: "PKIX_ECDSA_P256_SHA_256".to_string(),
-                    x509_certificate: Some(HashedRekordPublicKeyV2 {
-                        content: certificate.clone(),
-                    }),
-                    public_key: None,
-                }],
-            },
-        }
-    }
-}
-
-/// V2 Log Entry response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LogEntryV2 {
-    pub log_index: String,
-    pub log_id: LogId,
-    pub kind_version: KindVersion,
-    pub integrated_time: String,
-    pub inclusion_promise: Option<InclusionPromise>,
-    pub inclusion_proof: Option<InclusionProofV2>,
-    pub canonicalized_body: CanonicalizedBody,
-}
-
-/// Inclusion proof V2 (similar to bundle InclusionProof but with String log_index)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InclusionProofV2 {
-    pub log_index: String,
-    pub root_hash: Sha256Hash,
-    pub tree_size: String,
-    #[serde(with = "sha256_hash_vec")]
-    pub hashes: Vec<Sha256Hash>,
-    pub checkpoint: CheckpointData,
-}
-
-/// Serde helper for `Vec<Sha256Hash>`
-mod sha256_hash_vec {
-    use super::Sha256Hash;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S>(hashes: &[Sha256Hash], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        hashes.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Sha256Hash>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Vec::<Sha256Hash>::deserialize(deserializer)
     }
 }
 
@@ -515,6 +454,35 @@ mod tests {
             entry.spec.signature.content,
             SignatureBytes::from_bytes(b"signature")
         );
+    }
+
+    #[test]
+    fn v2_serializes_typed_certificate_and_public_key_verifiers() {
+        let digest = Sha256Hash::from_bytes([0; 32]);
+        let signature = SignatureBytes::from_bytes(b"signature");
+        let certificate = HashedRekordV2::new_with_certificate(
+            &digest,
+            &signature,
+            &DerCertificate::new(vec![1, 2]),
+            RekorV2KeyDetails::PkixEcdsaP256Sha256,
+        );
+        let certificate_json = serde_json::to_value(certificate).unwrap();
+        let verifier = &certificate_json["hashedRekordRequestV002"]["signature"]["verifier"];
+        assert_eq!(verifier["keyDetails"], "PKIX_ECDSA_P256_SHA_256");
+        assert_eq!(verifier["x509Certificate"]["rawBytes"], "AQI=");
+        assert!(verifier.get("publicKey").is_none());
+
+        let public_key = HashedRekordV2::new_with_public_key(
+            &digest,
+            &signature,
+            &DerPublicKey::new(vec![3, 4]),
+            RekorV2KeyDetails::PkixEcdsaP256Sha256,
+        );
+        let public_key_json = serde_json::to_value(public_key).unwrap();
+        let verifier = &public_key_json["hashedRekordRequestV002"]["signature"]["verifier"];
+        assert_eq!(verifier["keyDetails"], "PKIX_ECDSA_P256_SHA_256");
+        assert_eq!(verifier["publicKey"]["rawBytes"], "AwQ=");
+        assert!(verifier.get("x509Certificate").is_none());
     }
 
     #[test]

@@ -7,7 +7,7 @@
 use crate::checkpoint::Checkpoint;
 use crate::dsse::DsseEnvelope;
 use crate::encoding::{
-    string_i64, string_timestamp_opt, CanonicalizedBody, DerCertificate, DigestBytes, LogIndex,
+    string_timestamp_opt, string_u64, CanonicalizedBody, DerCertificate, DigestBytes, LogIndex,
     LogKeyId, Sha256Hash, SignatureBytes, SignedTimestamp, TimestampToken,
 };
 use crate::error::{Error, Result};
@@ -289,8 +289,8 @@ pub struct InclusionProof {
     /// Root hash of the tree
     pub root_hash: Sha256Hash,
     /// Tree size at time of proof
-    #[serde(with = "string_i64")]
-    pub tree_size: i64,
+    #[serde(with = "string_u64")]
+    pub tree_size: u64,
     /// Hashes in the inclusion proof path. May be empty for single-entry trees.
     #[serde(default, with = "sha256_hash_vec")]
     pub hashes: Vec<Sha256Hash>,
@@ -425,7 +425,7 @@ mod tests {
             "canonicalizedBody": "e30="
         }"#;
         let entry: TransparencyLogEntry = serde_json::from_str(json).unwrap();
-        assert_eq!(entry.log_index.as_u64(), Some(0));
+        assert_eq!(entry.log_index.value(), 0);
     }
 
     #[test]
@@ -437,8 +437,18 @@ mod tests {
             "checkpoint": {"envelope": "test\n1\nAAA=\n\n— test AAAA\n"}
         }"#;
         let proof: InclusionProof = serde_json::from_str(json).unwrap();
-        assert_eq!(proof.log_index.as_u64(), Some(0));
+        assert_eq!(proof.log_index.value(), 0);
         assert!(proof.hashes.is_empty());
+    }
+
+    #[test]
+    fn test_inclusion_proof_rejects_negative_tree_size() {
+        let json = r#"{
+            "rootHash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "treeSize": "-1",
+            "checkpoint": {"envelope": ""}
+        }"#;
+        assert!(serde_json::from_str::<InclusionProof>(json).is_err());
     }
 
     #[test]
@@ -451,11 +461,11 @@ mod tests {
 
         // Verify tlog entry parsed with default logIndex
         let entry = &bundle.verification_material.tlog_entries[0];
-        assert_eq!(entry.log_index.as_u64(), Some(0));
+        assert_eq!(entry.log_index.value(), 0);
 
         // Verify inclusion proof parsed without logIndex and hashes
         let proof = entry.inclusion_proof.as_ref().unwrap();
-        assert_eq!(proof.log_index.as_u64(), Some(0));
+        assert_eq!(proof.log_index.value(), 0);
         assert!(proof.hashes.is_empty());
 
         // Verify DSSE envelope with subject missing name

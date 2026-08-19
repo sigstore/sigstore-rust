@@ -7,7 +7,10 @@ use sigstore_bundle::{BundleV03, TlogEntryBuilder};
 use sigstore_crypto::{KeyPair, Sha256Hasher, SigningScheme};
 use sigstore_fulcio::FulcioClient;
 use sigstore_oidc::IdentityToken;
-use sigstore_rekor::{DsseEntry, HashedRekord, HashedRekordV2, RekorApiVersion, RekorClient};
+use sigstore_rekor::{
+    DsseEntry, HashedRekord, HashedRekordV2, RekorApiVersion, RekorClient, RekorV2Client,
+    RekorV2KeyDetails,
+};
 use sigstore_trust_root::{
     SigningConfig as TufSigningConfig, SIGSTORE_PRODUCTION_SIGNING_CONFIG,
     SIGSTORE_STAGING_SIGNING_CONFIG,
@@ -16,6 +19,7 @@ use sigstore_tsa::TimestampClient;
 use sigstore_types::{
     Artifact, Bundle, DerCertificate, DsseEnvelope, DsseSignature, HashAlgorithm, KeyId,
     PayloadBytes, Sha256Hash, SignatureBytes, Statement, Subject, TimestampToken,
+    TransparencyLogEntry,
 };
 
 /// Number of bytes hashed between yields to the async executor.
@@ -116,11 +120,11 @@ pub struct SigningConfig {
     pub fulcio_url: String,
     /// Rekor URL
     pub rekor_url: String,
-    /// TSA URL (optional)
+    /// TSA URL. Optional for Rekor v1 and required for Rekor v2.
     pub tsa_url: Option<String>,
     /// Signing scheme to use
     pub signing_scheme: SigningScheme,
-    /// Rekor API version to use (defaults to V2)
+    /// Rekor API version to use (defaults to v1).
     pub rekor_api_version: RekorApiVersion,
     /// OIDC provider URL (optional)
     pub oidc_url: Option<String>,
@@ -223,6 +227,16 @@ impl SigningConfig {
         self.rekor_url = version.default_url().to_string();
         self
     }
+
+    /// Validate that the configured services can produce a verifiable bundle.
+    pub fn validate(&self) -> Result<()> {
+        if self.rekor_api_version == RekorApiVersion::V2 && self.tsa_url.is_none() {
+            return Err(Error::Config(
+                "Rekor v2 requires an RFC 3161 timestamp authority".to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Context for signing operations
@@ -322,6 +336,7 @@ impl Signer {
     /// # }
     /// ```
     pub async fn sign<'a>(&self, artifact: impl Into<Artifact<'a>>) -> Result<Bundle> {
+        self.validate_configuration()?;
         let artifact = artifact.into();
 
         // 1. Generate ephemeral key pair
@@ -356,7 +371,7 @@ impl Signer {
             .create_rekor_entry(&artifact_hash, &signature, &leaf_cert_der)
             .await?;
 
-        // 6. Get timestamp from TSA (optional)
+        // 6. Get timestamp from TSA (required for Rekor v2)
         let timestamp = if let Some(tsa_url) = &self.tsa_url {
             Some(self.request_timestamp(tsa_url, &signature).await?)
         } else {
@@ -366,7 +381,7 @@ impl Signer {
         // 7. Build bundle
         let mut bundle =
             BundleV03::with_certificate_and_signature(leaf_cert_der, signature, artifact_hash)
-                .with_tlog_entry(tlog_entry.build());
+                .with_tlog_entry(tlog_entry);
 
         if let Some(ts) = timestamp {
             bundle = bundle.with_rfc3161_timestamp(ts);
@@ -411,33 +426,31 @@ impl Signer {
         artifact_hash: &Sha256Hash,
         signature: &SignatureBytes,
         certificate: &DerCertificate,
-    ) -> Result<TlogEntryBuilder> {
-        // Create Rekor client
-        let rekor = RekorClient::new(&self.rekor_url);
-
-        // Use V1 or V2 API based on configuration
-        let (log_entry, version) =
-            match self.rekor_api_version {
-                RekorApiVersion::V1 => {
-                    let hashed_rekord = HashedRekord::new(artifact_hash, signature, certificate);
-                    let entry = rekor.create_entry(hashed_rekord).await.map_err(|e| {
-                        Error::Signing(format!("Failed to create Rekor entry: {}", e))
-                    })?;
-                    (entry, "0.0.1")
-                }
-                RekorApiVersion::V2 => {
-                    let hashed_rekord = HashedRekordV2::new(artifact_hash, signature, certificate);
-                    let entry = rekor.create_entry_v2(hashed_rekord).await.map_err(|e| {
-                        Error::Signing(format!("Failed to create Rekor entry: {}", e))
-                    })?;
-                    (entry, "0.0.2")
-                }
-            };
-
-        // Build TlogEntry from the log entry response
-        let tlog_builder = TlogEntryBuilder::from_log_entry(&log_entry, "hashedrekord", version);
-
-        Ok(tlog_builder)
+    ) -> Result<TransparencyLogEntry> {
+        match self.rekor_api_version {
+            RekorApiVersion::V1 => {
+                let rekor = RekorClient::new(&self.rekor_url);
+                let request = HashedRekord::new(artifact_hash, signature, certificate);
+                let entry = rekor
+                    .create_entry(request)
+                    .await
+                    .map_err(|e| Error::Signing(format!("Failed to create Rekor entry: {e}")))?;
+                Ok(TlogEntryBuilder::from_log_entry(&entry, "hashedrekord", "0.0.1").build())
+            }
+            RekorApiVersion::V2 => {
+                let rekor = RekorV2Client::new(&self.rekor_url);
+                let request = HashedRekordV2::new_with_certificate(
+                    artifact_hash,
+                    signature,
+                    certificate,
+                    self.rekor_v2_key_details()?,
+                );
+                rekor
+                    .create_entry(request)
+                    .await
+                    .map_err(|e| Error::Signing(format!("Failed to create Rekor entry: {e}")))
+            }
+        }
     }
 
     /// Request a timestamp from the Timestamp Authority
@@ -505,6 +518,7 @@ impl Signer {
     /// synchronously on the current task; statements are expected to be small
     /// (metadata, not artifact contents).
     pub async fn sign_raw_statement(&self, statement_bytes: &[u8]) -> Result<Bundle> {
+        self.validate_configuration()?;
         // Generate ephemeral key, get a signing certificate for it
         let key_pair = self.generate_ephemeral_keypair()?;
         let leaf_cert_der = self.request_certificate(&key_pair).await?;
@@ -536,7 +550,7 @@ impl Signer {
             .create_dsse_rekor_entry(&dsse_envelope, &leaf_cert_der)
             .await?;
 
-        // Get timestamp from TSA (optional)
+        // Get timestamp from TSA (required for Rekor v2)
         let timestamp = if let Some(tsa_url) = &self.tsa_url {
             Some(self.request_timestamp(tsa_url, &signature).await?)
         } else {
@@ -545,7 +559,7 @@ impl Signer {
 
         // Build bundle with DSSE envelope
         let mut bundle = BundleV03::with_certificate_and_dsse(leaf_cert_der, dsse_envelope)
-            .with_tlog_entry(tlog_entry.build());
+            .with_tlog_entry(tlog_entry);
 
         if let Some(ts) = timestamp {
             bundle = bundle.with_rfc3161_timestamp(ts);
@@ -559,38 +573,50 @@ impl Signer {
         &self,
         envelope: &DsseEnvelope,
         certificate: &DerCertificate,
-    ) -> Result<TlogEntryBuilder> {
-        // Create Rekor client
-        let rekor = RekorClient::new(&self.rekor_url);
-
-        // Use V1 or V2 API based on configuration
-        let (log_entry, kind, version) = match self.rekor_api_version {
+    ) -> Result<TransparencyLogEntry> {
+        match self.rekor_api_version {
             RekorApiVersion::V1 => {
-                let dsse_entry = DsseEntry::new(envelope, certificate);
-                let entry = rekor.create_dsse_entry(dsse_entry).await.map_err(|e| {
-                    Error::Signing(format!("Failed to create DSSE Rekor entry: {}", e))
+                let rekor = RekorClient::new(&self.rekor_url);
+                let request = DsseEntry::new(envelope, certificate);
+                let entry = rekor.create_dsse_entry(request).await.map_err(|e| {
+                    Error::Signing(format!("Failed to create DSSE Rekor entry: {e}"))
                 })?;
-                (entry, "dsse", "0.0.1")
+                Ok(TlogEntryBuilder::from_log_entry(&entry, "dsse", "0.0.1").build())
             }
             RekorApiVersion::V2 => {
+                let rekor = RekorV2Client::new(&self.rekor_url);
                 let hash = sha256_pae_yielding(&envelope.payload_type, envelope.payload.as_bytes())
                     .await
                     .finalize();
-
-                let signature = &envelope.signature.sig;
-
-                let hashed_rekord = HashedRekordV2::new(&hash, signature, certificate);
-                let entry = rekor.create_entry_v2(hashed_rekord).await.map_err(|e| {
-                    Error::Signing(format!("Failed to create Rekor entry for DSSE: {}", e))
-                })?;
-                (entry, "hashedrekord", "0.0.2")
+                let request = HashedRekordV2::new_with_certificate(
+                    &hash,
+                    &envelope.signature.sig,
+                    certificate,
+                    self.rekor_v2_key_details()?,
+                );
+                rekor.create_entry(request).await.map_err(|e| {
+                    Error::Signing(format!("Failed to create Rekor entry for DSSE: {e}"))
+                })
             }
-        };
+        }
+    }
 
-        // Build TlogEntry from the log entry response
-        let tlog_builder = TlogEntryBuilder::from_log_entry(&log_entry, kind, version);
+    fn validate_configuration(&self) -> Result<()> {
+        if self.rekor_api_version == RekorApiVersion::V2 && self.tsa_url.is_none() {
+            return Err(Error::Config(
+                "Rekor v2 requires an RFC 3161 timestamp authority".to_string(),
+            ));
+        }
+        Ok(())
+    }
 
-        Ok(tlog_builder)
+    fn rekor_v2_key_details(&self) -> Result<RekorV2KeyDetails> {
+        match self.signing_scheme {
+            SigningScheme::EcdsaP256Sha256 => Ok(RekorV2KeyDetails::PkixEcdsaP256Sha256),
+            scheme => Err(Error::Config(format!(
+                "signing scheme {scheme:?} has no unambiguous Rekor v2 keyDetails value"
+            ))),
+        }
     }
 }
 
@@ -704,6 +730,19 @@ mod tests {
         let config = SigningConfig::default();
         assert!(config.fulcio_url.contains("sigstore.dev"));
         assert!(config.rekor_url.contains("sigstore.dev"));
+    }
+
+    #[test]
+    fn rekor_v2_requires_a_timestamp_authority() {
+        let mut config = SigningConfig::default().with_rekor_version(RekorApiVersion::V2);
+        config.tsa_url = None;
+        let error = config.validate().unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Rekor v2 requires an RFC 3161 timestamp authority"));
+
+        config.tsa_url = Some("https://timestamp.example".to_string());
+        config.validate().unwrap();
     }
 
     #[test]

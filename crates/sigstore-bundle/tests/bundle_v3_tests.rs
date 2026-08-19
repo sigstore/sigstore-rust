@@ -227,8 +227,8 @@ fn test_inclusion_proof_verification() {
     let root_hash = &proof.root_hash;
 
     // Verify the inclusion proof
-    let leaf_index: u64 = proof.log_index.as_u64().unwrap();
-    let tree_size: u64 = proof.tree_size.try_into().unwrap();
+    let leaf_index = proof.log_index.value();
+    let tree_size = proof.tree_size;
 
     let result = verify_inclusion_proof(&leaf_hash, leaf_index, tree_size, proof_hashes, root_hash);
 
