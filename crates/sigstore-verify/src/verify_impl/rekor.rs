@@ -234,27 +234,19 @@ fn verify_intoto_v002(
         )));
     }
 
-    enum ExpectedVerifier<'a> {
-        Certificate(&'a DerCertificate),
-        PublicKey(&'a DerPublicKey),
-    }
-
-    let expected_verifier = match &bundle.verification_material.content {
-        VerificationMaterialContent::X509CertificateChain { certificates } => certificates
-            .first()
-            .map(|cert| ExpectedVerifier::Certificate(&cert.raw_bytes))
-            .ok_or_else(|| Error::Verification("bundle certificate chain is empty".to_string()))?,
-        VerificationMaterialContent::Certificate(cert) => {
-            ExpectedVerifier::Certificate(&cert.raw_bytes)
+    let expected_public_key = match &bundle.verification_material.content {
+        VerificationMaterialContent::X509CertificateChain { certificates } => {
+            let certificate = certificates.first().ok_or_else(|| {
+                Error::Verification("bundle certificate chain is empty".to_string())
+            })?;
+            certificate_public_key(&certificate.raw_bytes)?
         }
-        VerificationMaterialContent::PublicKey { .. } => {
-            ExpectedVerifier::PublicKey(managed_key.ok_or_else(|| {
-                Error::Verification(
-                    "intoto Rekor signature cannot be bound without the managed public key"
-                        .to_string(),
-                )
-            })?)
-        }
+        VerificationMaterialContent::Certificate(cert) => certificate_public_key(&cert.raw_bytes)?,
+        VerificationMaterialContent::PublicKey { .. } => managed_key.cloned().ok_or_else(|| {
+            Error::Verification(
+                "intoto Rekor signature cannot be bound without the managed public key".to_string(),
+            )
+        })?,
     };
 
     let [rekor_sig] = rekor_envelope.signatures.as_slice() else {
@@ -275,30 +267,13 @@ fn verify_intoto_v002(
         ));
     }
 
-    let verifier_matches = match rekor_sig.to_certificate() {
-        Ok(rekor_cert) => match expected_verifier {
-            ExpectedVerifier::Certificate(bundle_cert) => {
-                bundle_cert.as_bytes() == rekor_cert.as_bytes()
-            }
-            ExpectedVerifier::PublicKey(bundle_key) => {
-                certificate_public_key(&rekor_cert)?.as_bytes() == bundle_key.as_bytes()
-            }
-        },
-        Err(_) => {
-            let rekor_key = rekor_sig
-                .to_public_key()
-                .map_err(|e| Error::Verification(e.to_string()))?;
-            match expected_verifier {
-                ExpectedVerifier::Certificate(bundle_cert) => {
-                    rekor_key.as_bytes() == certificate_public_key(bundle_cert)?.as_bytes()
-                }
-                ExpectedVerifier::PublicKey(bundle_key) => {
-                    rekor_key.as_bytes() == bundle_key.as_bytes()
-                }
-            }
-        }
+    let rekor_public_key = match rekor_sig.to_certificate() {
+        Ok(certificate) => certificate_public_key(&certificate)?,
+        Err(_) => rekor_sig
+            .to_public_key()
+            .map_err(|e| Error::Verification(e.to_string()))?,
     };
-    if !verifier_matches {
+    if rekor_public_key.as_bytes() != expected_public_key.as_bytes() {
         return Err(Error::Verification(
             "DSSE signing certificate does not match the intoto Rekor verifier".to_string(),
         ));
