@@ -3,13 +3,13 @@
 //! This module provides the main entry point for verifying Sigstore signatures.
 
 use crate::error::{Error, Result};
-use base64::Engine;
 use sigstore_bundle::validate_bundle_with_options;
 use sigstore_bundle::ValidationOptions;
 use sigstore_crypto::{parse_certificate_info, KeyAlgorithm, SigningScheme, VerificationKey};
 use sigstore_trust_root::TrustedRoot;
 
-use sigstore_types::{Artifact, Bundle, HashAlgorithm, SignatureContent, Statement};
+use sigstore_types::bundle::VerificationMaterialContent;
+use sigstore_types::{Artifact, Bundle, DerPublicKey, HashAlgorithm, SignatureContent, Statement};
 
 /// How the signing certificate is verified.
 ///
@@ -32,7 +32,35 @@ pub enum CertificatePolicy {
     },
 }
 
-/// Policy for verifying signatures
+/// Policy for verifying key-based signatures.
+#[derive(Debug, Clone)]
+pub struct PublicKeyVerificationPolicy {
+    /// Verify transparency log inclusion
+    pub verify_tlog: bool,
+}
+
+impl Default for PublicKeyVerificationPolicy {
+    fn default() -> Self {
+        Self { verify_tlog: true }
+    }
+}
+
+impl PublicKeyVerificationPolicy {
+    /// Skip transparency log verification
+    ///
+    /// WARNING: This is unsafe for production use against the Sigstore
+    /// public-good instance: bundles are accepted without proof that the
+    /// signature event was ever logged, because the inclusion proof and
+    /// checkpoint are not checked. Each log entry's consistency with the
+    /// rest of the bundle is still verified. See
+    /// [`VerificationPolicy::skip_tlog_unsafe`] for the full trade-off.
+    pub fn skip_tlog_unsafe(mut self) -> Self {
+        self.verify_tlog = false;
+        self
+    }
+}
+
+/// Policy for verifying certificate-based signatures
 #[derive(Debug, Clone)]
 pub struct VerificationPolicy {
     /// Expected identity (email or URI)
@@ -248,161 +276,293 @@ impl Verifier {
         bundle: &Bundle,
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
-        let artifact = artifact.into();
-        let mut result = VerificationResult::new();
+        verify_certificate_material(artifact.into(), bundle, policy, &self.trusted_root)
+    }
 
-        // Validate bundle structure first. This is a purely structural
-        // (shape/required-fields) check; all cryptographic verification of
-        // the bundle's contents happens in the steps below.
-        let options = ValidationOptions {
-            require_inclusion_proof: policy.verify_tlog,
-            require_timestamp: false, // Don't require timestamps, but verify if present
-        };
-        validate_bundle_with_options(bundle, &options)
-            .map_err(|e| Error::Verification(format!("bundle validation failed: {}", e)))?;
-
-        // Extract certificate for verification
-        let cert = crate::verify_impl::helpers::extract_certificate(
-            &bundle.verification_material.content,
-        )?;
-        let cert_info = parse_certificate_info(cert.as_bytes())
-            .map_err(|e| Error::Verification(format!("failed to parse certificate: {}", e)))?;
-
-        // Store identity and issuer in result
-        result.identity = cert_info.identity.clone();
-        result.issuer = cert_info.issuer.clone();
-
-        // (0): Establish the times for the signature
-        // First, establish verified times for the signature. This is required to
-        // validate the certificate chain, so this step comes first.
-        // These include TSA timestamps and (in the case of rekor v1 entries)
-        // rekor log integrated time.
-        let signature = crate::verify_impl::helpers::extract_signature(&bundle.content);
-        let validation_times = crate::verify_impl::helpers::determine_validation_times(
+    /// Verify a managed-key bundle using a caller-supplied public key.
+    pub fn verify_with_key<'a>(
+        &self,
+        artifact: impl Into<Artifact<'a>>,
+        bundle: &Bundle,
+        public_key: &DerPublicKey,
+        policy: &PublicKeyVerificationPolicy,
+    ) -> Result<VerificationResult> {
+        verify_public_key_material(
+            artifact.into(),
             bundle,
-            &signature,
+            public_key,
+            policy,
             &self.trusted_root,
+        )
+    }
+}
+
+fn verify_certificate_material(
+    artifact: Artifact<'_>,
+    bundle: &Bundle,
+    policy: &VerificationPolicy,
+    trusted_root: &TrustedRoot,
+) -> Result<VerificationResult> {
+    if matches!(
+        bundle.verification_material.content,
+        VerificationMaterialContent::PublicKey { .. }
+    ) {
+        return Err(Error::Verification(
+            "bundle contains a public key but certificate verification was requested".to_string(),
+        ));
+    }
+    verify_certificate_bundle(artifact, bundle, policy, trusted_root)
+}
+
+fn verify_public_key_material(
+    artifact: Artifact<'_>,
+    bundle: &Bundle,
+    public_key: &DerPublicKey,
+    policy: &PublicKeyVerificationPolicy,
+    trusted_root: &TrustedRoot,
+) -> Result<VerificationResult> {
+    if !matches!(
+        bundle.verification_material.content,
+        VerificationMaterialContent::PublicKey { .. }
+    ) {
+        return Err(Error::Verification(
+            "bundle contains a certificate but public-key verification was requested".to_string(),
+        ));
+    }
+    verify_public_key_bundle(artifact, bundle, public_key, policy, trusted_root)
+}
+
+/// Validate bundle structure. This is a purely structural
+/// (shape/required-fields) check; all cryptographic verification of the
+/// bundle's contents happens in the verification steps.
+fn validate_bundle_shape(bundle: &Bundle, verify_tlog: bool) -> Result<()> {
+    let options = ValidationOptions {
+        require_inclusion_proof: verify_tlog,
+        require_timestamp: false, // Don't require timestamps, but verify if present
+    };
+    validate_bundle_with_options(bundle, &options)
+        .map_err(|e| Error::Verification(format!("bundle validation failed: {}", e)))
+}
+
+fn verify_certificate_bundle(
+    artifact: Artifact<'_>,
+    bundle: &Bundle,
+    policy: &VerificationPolicy,
+    trusted_root: &TrustedRoot,
+) -> Result<VerificationResult> {
+    let mut result = VerificationResult::new();
+    validate_bundle_shape(bundle, policy.verify_tlog)?;
+
+    // Extract certificate for verification
+    let cert =
+        crate::verify_impl::helpers::extract_certificate(&bundle.verification_material.content)?;
+    let cert_info = parse_certificate_info(cert.as_bytes())
+        .map_err(|e| Error::Verification(format!("failed to parse certificate: {}", e)))?;
+
+    // Store identity and issuer in result
+    result.identity = cert_info.identity.clone();
+    result.issuer = cert_info.issuer.clone();
+
+    // (0): Establish the times for the signature
+    // First, establish verified times for the signature. This is required to
+    // validate the certificate chain, so this step comes first.
+    // These include TSA timestamps and (in the case of rekor v1 entries)
+    // rekor log integrated time.
+    let signature = crate::verify_impl::helpers::extract_signature(&bundle.content);
+    let validation_times =
+        crate::verify_impl::helpers::determine_validation_times(bundle, &signature, trusted_root)?;
+
+    // (1): Verify that the signing certificate chains to the root of trust,
+    //      is valid at EVERY verified signing time, and has CODE_SIGNING EKU.
+    //      Checking each timestamp (rather than only the earliest) prevents a
+    //      single backdated timestamp - e.g. from one compromised TSA in a
+    //      multi-TSA deployment - from vouching for expired key material.
+    //      The verified path yields the leaf's direct issuer, which SCT
+    //      verification needs to reconstruct the RFC 6962 signed data.
+    //
+    // (2): Verify the signing certificate's SCT. This is nested here because
+    //      it consumes the issuer produced by chain verification; the type
+    //      system therefore guarantees the issuer is available whenever SCT
+    //      verification runs.
+    if let CertificatePolicy::Verify { verify_sct } = policy.certificate {
+        let mut issuer_spki = None;
+        for &validation_time in &validation_times {
+            issuer_spki = Some(crate::verify_impl::helpers::verify_certificate_chain(
+                &bundle.verification_material.content,
+                validation_time,
+                trusted_root,
+            )?);
+
+            // Also verify the certificate is within its validity period
+            crate::verify_impl::helpers::validate_certificate_time(validation_time, &cert_info)?;
+        }
+        // determine_validation_times never yields an empty list, but fail
+        // closed rather than panic if that ever stops holding: reaching
+        // here with no issuer means no timestamp was actually checked.
+        let Some(issuer_spki) = issuer_spki else {
+            return Err(Error::Verification(
+                "no verified timestamp to validate the signing certificate against".to_string(),
+            ));
+        };
+
+        if verify_sct {
+            crate::verify_impl::sct::verify_sct(
+                cert.as_bytes(),
+                issuer_spki.as_bytes(),
+                trusted_root,
+            )?;
+        }
+    }
+
+    // (3): Verify against the given `VerificationPolicy`.
+    verify_identity_policy(&result, policy)?;
+
+    // (4): Verify the inclusion proof and signed checkpoint for the log entry.
+    // (5): Verify the inclusion promise for the log entry, if present.
+    // (6): Verify the timely insertion of the log entry against the validity
+    //      period for the signing certificate.
+    if policy.verify_tlog {
+        let integrated_time = crate::verify_impl::tlog::verify_tlog_entries(
+            bundle,
+            trusted_root,
+            cert_info.not_before,
+            cert_info.not_after,
         )?;
 
-        // (1): Verify that the signing certificate chains to the root of trust,
-        //      is valid at EVERY verified signing time, and has CODE_SIGNING EKU.
-        //      Checking each timestamp (rather than only the earliest) prevents a
-        //      single backdated timestamp - e.g. from one compromised TSA in a
-        //      multi-TSA deployment - from vouching for expired key material.
-        //      The verified path yields the leaf's direct issuer, which SCT
-        //      verification needs to reconstruct the RFC 6962 signed data.
-        //
-        // (2): Verify the signing certificate's SCT. This is nested here because
-        //      it consumes the issuer produced by chain verification; the type
-        //      system therefore guarantees the issuer is available whenever SCT
-        //      verification runs.
-        if let CertificatePolicy::Verify { verify_sct } = policy.certificate {
-            let mut issuer_spki = None;
-            for &validation_time in &validation_times {
-                issuer_spki = Some(crate::verify_impl::helpers::verify_certificate_chain(
-                    &bundle.verification_material.content,
-                    validation_time,
-                    &self.trusted_root,
-                )?);
-
-                // Also verify the certificate is within its validity period
-                crate::verify_impl::helpers::validate_certificate_time(
-                    validation_time,
-                    &cert_info,
-                )?;
-            }
-            // determine_validation_times never yields an empty list, but fail
-            // closed rather than panic if that ever stops holding: reaching
-            // here with no issuer means no timestamp was actually checked.
-            let Some(issuer_spki) = issuer_spki else {
-                return Err(Error::Verification(
-                    "no verified timestamp to validate the signing certificate against".to_string(),
-                ));
-            };
-
-            if verify_sct {
-                crate::verify_impl::sct::verify_sct(
-                    cert.as_bytes(),
-                    issuer_spki.as_bytes(),
-                    &self.trusted_root,
-                )?;
-            }
+        if let Some(time) = integrated_time {
+            result.integrated_time = Some(time);
         }
+    }
 
-        // (3): Verify against the given `VerificationPolicy`.
+    // (7): Verify the signature and input against the signing certificate's
+    //      public key. This runs regardless of `policy.verify_tlog` so the
+    //      signature is always cryptographically checked.
+    verify_signed_content(
+        bundle,
+        &artifact,
+        &cert_info.public_key,
+        signing_scheme_for_content(cert_info.key_algorithm, &bundle.content)?,
+    )?;
 
-        // Verify against policy constraints
-        if let Some(ref expected_identity) = policy.identity {
-            match &result.identity {
-                Some(actual_identity) if actual_identity == expected_identity => {}
-                Some(actual_identity) => {
-                    return Err(Error::Verification(format!(
-                        "identity mismatch: expected {}, got {}",
-                        expected_identity, actual_identity
-                    )));
-                }
-                None => {
-                    return Err(Error::Verification(format!(
-                        "certificate is missing identity (SAN), but policy requires: {}",
-                        expected_identity
-                    )));
-                }
-            }
+    // (8): Verify the transparency log entry's consistency against the other
+    //      materials, to prevent variants of CVE-2022-36056.
+    //
+    //      This runs regardless of `policy.verify_tlog`. It needs no trusted
+    //      root and performs no log cryptography - it only checks that each
+    //      entry's body describes *this* bundle. Skipping it would let an
+    //      entry belonging to an unrelated signature ride along in the
+    //      bundle, and step (0) would accept that entry's SET-authenticated
+    //      integratedTime as a verified signing time.
+    crate::verify_impl::verify_tlog_consistency(bundle, &artifact)?;
+
+    Ok(result)
+}
+
+/// Verify a bundle whose verification material is a public-key hint, using
+/// the caller-supplied public key.
+///
+/// This verification:
+/// - Verifies the signature using the provided public key
+/// - Verifies transparency log entries (Merkle inclusion proofs, checkpoints,
+///   SETs) when `policy.verify_tlog` is enabled
+/// - Skips certificate chain verification (no certificate present)
+/// - Skips identity/issuer verification
+fn verify_public_key_bundle(
+    artifact: Artifact<'_>,
+    bundle: &Bundle,
+    public_key: &DerPublicKey,
+    policy: &PublicKeyVerificationPolicy,
+    trusted_root: &TrustedRoot,
+) -> Result<VerificationResult> {
+    let result = VerificationResult::new();
+    validate_bundle_shape(bundle, policy.verify_tlog)?;
+
+    // Verify transparency log entries (Merkle inclusion proofs, checkpoints,
+    // SETs) without certificate time validation
+    if policy.verify_tlog {
+        for entry in &bundle.verification_material.tlog_entries {
+            crate::verify_impl::tlog::verify_entry_inclusion(entry, trusted_root)?;
         }
+    }
 
-        if let Some(ref expected_issuer) = policy.issuer {
-            match &result.issuer {
-                Some(actual_issuer) if actual_issuer == expected_issuer => {}
-                Some(actual_issuer) => {
-                    return Err(Error::Verification(format!(
-                        "issuer mismatch: expected {}, got {}",
-                        expected_issuer, actual_issuer
-                    )));
-                }
-                None => {
-                    return Err(Error::Verification(format!(
-                        "certificate is missing issuer (Fulcio OID extension), but policy requires: {}",
-                        expected_issuer
-                    )));
-                }
+    verify_signed_content(
+        bundle,
+        &artifact,
+        public_key,
+        signing_scheme_for_content(public_key_algorithm(public_key)?, &bundle.content)?,
+    )?;
+
+    // Verify the transparency log entries' consistency against the bundle's
+    // other materials and the artifact (CVE-2022-36056 class), mirroring
+    // step 8 of the certificate path. This runs regardless of
+    // `policy.verify_tlog`: it needs no trusted root and only checks that
+    // each entry's body describes *this* bundle.
+    crate::verify_impl::rekor::verify_tlog_consistency_with_key(
+        bundle,
+        &artifact,
+        Some(public_key),
+    )?;
+
+    Ok(result)
+}
+
+fn verify_identity_policy(result: &VerificationResult, policy: &VerificationPolicy) -> Result<()> {
+    if let Some(ref expected_identity) = policy.identity {
+        match &result.identity {
+            Some(actual_identity) if actual_identity == expected_identity => {}
+            Some(actual_identity) => {
+                return Err(Error::Verification(format!(
+                    "identity mismatch: expected {}, got {}",
+                    expected_identity, actual_identity
+                )));
             }
-        }
-
-        // (4): Verify the inclusion proof and signed checkpoint for the log entry.
-        // (5): Verify the inclusion promise for the log entry, if present.
-        // (6): Verify the timely insertion of the log entry against the validity
-        //      period for the signing certificate.
-        if policy.verify_tlog {
-            let integrated_time = crate::verify_impl::tlog::verify_tlog_entries(
-                bundle,
-                &self.trusted_root,
-                cert_info.not_before,
-                cert_info.not_after,
-            )?;
-
-            if let Some(time) = integrated_time {
-                result.integrated_time = Some(time);
+            None => {
+                return Err(Error::Verification(format!(
+                    "certificate is missing identity (SAN), but policy requires: {}",
+                    expected_identity
+                )));
             }
         }
+    }
 
-        // (7): Verify the signature and input against the signing certificate's
-        //      public key.
-        // For DSSE envelopes, verify using PAE (Pre-Authentication Encoding)
-        if let SignatureContent::DsseEnvelope(envelope) = &bundle.content {
-            verify_dsse_envelope_signature(
-                envelope,
-                &cert_info.public_key,
-                cert_info.key_algorithm.default_signing_scheme(),
-            )?;
-
-            // Verify the payload binds the artifact
-            verify_dsse_artifact_binding(envelope, &artifact)?;
+    if let Some(ref expected_issuer) = policy.issuer {
+        match &result.issuer {
+            Some(actual_issuer) if actual_issuer == expected_issuer => {}
+            Some(actual_issuer) => {
+                return Err(Error::Verification(format!(
+                    "issuer mismatch: expected {}, got {}",
+                    expected_issuer, actual_issuer
+                )));
+            }
+            None => {
+                return Err(Error::Verification(format!(
+                    "certificate is missing issuer (Fulcio OID extension), but policy requires: {}",
+                    expected_issuer
+                )));
+            }
         }
+    }
 
-        // For MessageSignature bundles, verify the messageDigest matches the artifact
-        if let SignatureContent::MessageSignature(msg_sig) = &bundle.content {
+    Ok(())
+}
+
+/// Verify the bundle's signature content (DSSE envelope or message signature)
+/// over the artifact with the given public key and signing scheme.
+///
+/// This is intentionally independent of transparency-log verification: it
+/// always runs, so the signature is always cryptographically checked even
+/// when `policy.verify_tlog` is disabled.
+fn verify_signed_content(
+    bundle: &Bundle,
+    artifact: &Artifact<'_>,
+    public_key: &DerPublicKey,
+    signing_scheme: SigningScheme,
+) -> Result<()> {
+    match &bundle.content {
+        SignatureContent::MessageSignature(msg_sig) => {
+            // Verify the messageDigest matches the artifact
             if let Some(ref digest) = msg_sig.message_digest {
-                let artifact_hash = compute_artifact_digest_algo(&artifact, digest.algorithm)?;
+                let artifact_hash = compute_artifact_digest_algo(artifact, digest.algorithm)?;
 
                 // Compare the digest in the bundle with the computed artifact hash
                 if digest.digest != artifact_hash {
@@ -411,26 +571,12 @@ impl Verifier {
                     ));
                 }
             }
-
-            // Cryptographically verify the signature over the artifact. This runs
-            // regardless of `policy.verify_tlog` so the signature is always checked;
-            // the transparency-log path (step 8) performs an equivalent check when
-            // enabled, but must not be the only place verification happens.
-            verify_message_signature_crypto(&cert_info, msg_sig, &artifact)?;
+            verify_signature_over_artifact(public_key, signing_scheme, &msg_sig.signature, artifact)
         }
-
-        // (8): Verify the transparency log entry's consistency against the other
-        //      materials, to prevent variants of CVE-2022-36056.
-        //
-        //      This runs regardless of `policy.verify_tlog`. It needs no trusted
-        //      root and performs no log cryptography - it only checks that each
-        //      entry's body describes *this* bundle. Skipping it would let an
-        //      entry belonging to an unrelated signature ride along in the
-        //      bundle, and step (0) would accept that entry's SET-authenticated
-        //      integratedTime as a verified signing time.
-        crate::verify_impl::verify_tlog_consistency(bundle, &artifact)?;
-
-        Ok(result)
+        SignatureContent::DsseEnvelope(envelope) => {
+            verify_dsse_envelope_signature(envelope, public_key, signing_scheme)?;
+            verify_dsse_artifact_binding(envelope, artifact)
+        }
     }
 }
 
@@ -572,15 +718,9 @@ fn verify_signature_over_artifact(
     result.map_err(|e| Error::Verification(format!("signature verification failed: {}", e)))
 }
 
-/// Cryptographically verify a `MessageSignature`'s signature over the artifact
-/// using the signing certificate's public key.
-///
-/// This is intentionally independent of transparency-log verification. Without
-/// it, a `MessageSignature` bundle verified with `policy.verify_tlog == false`
-/// would only have its `messageDigest` compared against the artifact and its
-/// signature would never be cryptographically checked. The signature hash is
-/// resolved from the certificate's key algorithm plus the bundle's declared
-/// `messageDigest.algorithm` (falling back to the key's default scheme).
+/// Resolve the signing scheme for a `MessageSignature` from the key algorithm
+/// plus the bundle's declared `messageDigest.algorithm` (falling back to the
+/// key's default scheme).
 fn signing_scheme_for_message_signature(
     key_algorithm: KeyAlgorithm,
     msg_sig: &sigstore_types::bundle::MessageSignature,
@@ -603,19 +743,6 @@ fn signing_scheme_for_content(
     }
 }
 
-fn verify_message_signature_crypto(
-    cert_info: &sigstore_crypto::CertificateInfo,
-    msg_sig: &sigstore_types::bundle::MessageSignature,
-    artifact: &Artifact<'_>,
-) -> Result<()> {
-    verify_signature_over_artifact(
-        &cert_info.public_key,
-        signing_scheme_for_message_signature(cert_info.key_algorithm, msg_sig)?,
-        &msg_sig.signature,
-        artifact,
-    )
-}
-
 /// Convenience function to verify an artifact against a bundle
 ///
 /// This uses the trusted root for all cryptographic material
@@ -628,7 +755,7 @@ fn verify_message_signature_crypto(
 /// # Example
 ///
 /// ```no_run
-/// use sigstore_verify::verify;
+/// use sigstore_verify::{verify, VerificationPolicy};
 /// use sigstore_trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
 /// use sigstore_types::{Bundle, Sha256Hash};
 ///
@@ -638,7 +765,8 @@ fn verify_message_signature_crypto(
 /// let bundle = Bundle::from_json(&bundle_json)?;
 /// let artifact = std::fs::read("artifact.txt")?;
 ///
-/// verify(&artifact, &bundle, &sigstore_verify::VerificationPolicy::default(), &trusted_root)?;
+/// let policy = VerificationPolicy::default();
+/// verify(&artifact, &bundle, &policy, &trusted_root)?;
 /// # Ok(())
 /// # }
 /// ```
@@ -648,8 +776,18 @@ pub fn verify<'a>(
     policy: &VerificationPolicy,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
-    let verifier = Verifier::new(trusted_root);
-    verifier.verify(artifact, bundle, policy)
+    verify_certificate_material(artifact.into(), bundle, policy, trusted_root)
+}
+
+/// Verify a managed-key bundle with a caller-supplied public key and policy.
+pub fn verify_with_key<'a>(
+    artifact: impl Into<Artifact<'a>>,
+    bundle: &Bundle,
+    public_key: &DerPublicKey,
+    policy: &PublicKeyVerificationPolicy,
+    trusted_root: &TrustedRoot,
+) -> Result<VerificationResult> {
+    verify_public_key_material(artifact.into(), bundle, public_key, policy, trusted_root)
 }
 
 /// Derive the key algorithm from the public key's SPKI algorithm identifier.
@@ -674,155 +812,9 @@ fn public_key_algorithm(public_key: &sigstore_types::DerPublicKey) -> Result<Key
     }
 }
 
-fn verify_public_key_hint(hint: &str, public_key: &sigstore_types::DerPublicKey) -> Result<()> {
-    let expected = sigstore_crypto::sha256(public_key.as_bytes());
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(hint)
-        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(hint))
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(hint))
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(hint))
-        .map_err(|_| {
-            Error::Verification("public key hint is not a supported SHA-256 key hint".to_string())
-        })?;
-
-    if decoded != expected.as_bytes() {
-        return Err(Error::Verification(
-            "public key hint does not match supplied public key".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
-/// Verify an artifact against a bundle using a provided public key
-///
-/// This is used for managed key verification where the bundle contains a public key
-/// hint instead of a certificate. The actual public key is provided separately.
-///
-/// This verification:
-/// - Verifies the signature using the provided public key
-/// - Verifies transparency log entries (Merkle inclusion proofs, checkpoints, SETs)
-/// - Skips certificate chain verification (no certificate present)
-/// - Skips identity/issuer verification
-///
-/// # Example
-///
-/// ```no_run
-/// use sigstore_verify::verify_with_key;
-/// use sigstore_trust_root::TrustedRoot;
-/// use sigstore_types::{Bundle, DerPublicKey};
-///
-/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let trusted_root = TrustedRoot::from_file("trusted_root.json")?;
-/// let bundle_json = std::fs::read_to_string("artifact.sigstore.json")?;
-/// let bundle = Bundle::from_json(&bundle_json)?;
-/// let artifact = std::fs::read("artifact.txt")?;
-/// let key_pem = std::fs::read_to_string("key.pub")?;
-/// let public_key = DerPublicKey::from_pem(&key_pem)?;
-///
-/// verify_with_key(&artifact, &bundle, &public_key, &trusted_root)?;
-/// # Ok(())
-/// # }
-/// ```
-pub fn verify_with_key<'a>(
-    artifact: impl Into<Artifact<'a>>,
-    bundle: &Bundle,
-    public_key: &sigstore_types::DerPublicKey,
-    trusted_root: &TrustedRoot,
-) -> Result<VerificationResult> {
-    let artifact = artifact.into();
-    let result = VerificationResult::new();
-
-    if let sigstore_types::bundle::VerificationMaterialContent::PublicKey { hint } =
-        &bundle.verification_material.content
-    {
-        verify_public_key_hint(hint, public_key)?;
-    }
-
-    // Validate bundle structure (structural only; the cryptographic checks
-    // follow below)
-    let options = ValidationOptions {
-        require_inclusion_proof: true,
-        require_timestamp: false,
-    };
-    validate_bundle_with_options(bundle, &options)
-        .map_err(|e| Error::Verification(format!("bundle validation failed: {}", e)))?;
-
-    let key_algorithm = public_key_algorithm(public_key)?;
-    let signing_scheme = signing_scheme_for_content(key_algorithm, &bundle.content)?;
-
-    // Verify transparency log entries (Merkle inclusion proofs, checkpoints,
-    // SETs) without certificate time validation
-    for entry in &bundle.verification_material.tlog_entries {
-        crate::verify_impl::tlog::verify_entry_inclusion(entry, trusted_root)?;
-    }
-
-    // Verify the signature
-    match &bundle.content {
-        SignatureContent::MessageSignature(msg_sig) => {
-            // Verify message digest matches artifact
-            if let Some(ref digest) = msg_sig.message_digest {
-                let artifact_hash = compute_artifact_digest_algo(&artifact, digest.algorithm)?;
-                if digest.digest != artifact_hash {
-                    return Err(Error::Verification(
-                        "message digest in bundle does not match artifact hash".to_string(),
-                    ));
-                }
-            }
-
-            // Verify signature over the artifact
-            verify_signature_over_artifact(
-                public_key,
-                signing_scheme,
-                &msg_sig.signature,
-                &artifact,
-            )?;
-        }
-        SignatureContent::DsseEnvelope(envelope) => {
-            verify_dsse_envelope_signature(envelope, public_key, signing_scheme)?;
-
-            // Verify the payload binds the artifact
-            verify_dsse_artifact_binding(envelope, &artifact)?;
-        }
-    }
-
-    // Verify the transparency log entries' consistency against the bundle's
-    // other materials and the artifact (CVE-2022-36056 class), mirroring
-    // step 8 of `Verifier::verify`. Pass the caller-supplied key so legacy
-    // intoto entries can bind their logged verifier in managed-key bundles.
-    crate::verify_impl::rekor::verify_tlog_consistency_with_key(
-        bundle,
-        &artifact,
-        Some(public_key),
-    )?;
-
-    Ok(result)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn public_key_hint_accepts_all_protojson_base64_variants() {
-        let key = sigstore_types::DerPublicKey::from_bytes(b"test public key");
-        let digest = sigstore_crypto::sha256(key.as_bytes());
-        for hint in [
-            base64::engine::general_purpose::STANDARD.encode(digest),
-            base64::engine::general_purpose::STANDARD_NO_PAD.encode(digest),
-            base64::engine::general_purpose::URL_SAFE.encode(digest),
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest),
-        ] {
-            verify_public_key_hint(&hint, &key).unwrap();
-        }
-
-        // Prefixes are not part of the protobuf field's encoding.
-        let prefixed = format!(
-            "sha256:{}",
-            base64::engine::general_purpose::STANDARD.encode(digest)
-        );
-        assert!(verify_public_key_hint(&prefixed, &key).is_err());
-    }
 
     #[test]
     fn test_verification_policy_default() {
