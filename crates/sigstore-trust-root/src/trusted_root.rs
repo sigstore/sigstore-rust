@@ -7,10 +7,8 @@ use serde::{Deserialize, Serialize};
 use sigstore_crypto::{Keyring, SigningScheme, VerificationKey};
 use sigstore_types::{
     DerCertificate, DerPublicKey, HashAlgorithm, LogId, LogKeyId, Sha256Hash, TimeRange,
+    TsaAuthority,
 };
-
-/// TSA certificate with its optional validity period
-pub type TsaCertWithValidity = (CertificateDer<'static>, Option<TimeRange>);
 
 /// A trusted root bundle containing all trust anchors
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -295,107 +293,38 @@ impl TrustedRoot {
         Ok(keyring)
     }
 
-    /// Get all TSA certificates with their validity periods
-    pub fn tsa_certs_with_validity(&self) -> Vec<TsaCertWithValidity> {
-        let mut result = Vec::new();
-
-        for tsa in &self.timestamp_authorities {
-            let validity = tsa.valid_for;
-
-            for cert_entry in &tsa.cert_chain.certificates {
-                let cert_der = cert_entry.raw_bytes.as_bytes().to_vec();
-                result.push((CertificateDer::from(&cert_der[..]).into_owned(), validity));
-            }
-        }
-
-        result
-    }
-
-    /// Get TSA root certificates (for chain validation)
+    /// Get each timestamp authority usable for verification.
     ///
-    /// Timestamp authorities whose `valid_for` window has not started yet are
-    /// excluded. Expired authorities are included because they are needed to
-    /// verify timestamps issued while they were valid.
-    pub fn tsa_root_certs(&self) -> Vec<CertificateDer<'static>> {
+    /// Each authority's chain is kept separate so cryptographic verification
+    /// and temporal authorization always use the same authority (verify a
+    /// timestamp against one via
+    /// `sigstore_tsa::verify_timestamp_for_authority`). Authorities with
+    /// empty chains or validity windows that have not started are skipped;
+    /// expired authorities remain available for historical verification.
+    pub fn tsa_authorities(&self) -> Vec<TsaAuthority> {
         let now = Timestamp::now();
-        let mut roots = Vec::new();
+        let mut authorities = Vec::new();
         for tsa in &self.timestamp_authorities {
             if !usable_for_verification(tsa.valid_for.as_ref(), now) {
                 continue;
             }
-            // The last certificate in the chain is typically the root
-            if let Some(cert_entry) = tsa.cert_chain.certificates.last() {
-                roots.push(CertificateDer::from(cert_entry.raw_bytes.as_bytes()).into_owned());
-            }
+            let (leaf, intermediates, root) = match tsa.cert_chain.certificates.as_slice() {
+                [] => continue,
+                [root] => (root, &[][..], root),
+                [leaf, intermediates @ .., root] => (leaf, intermediates, root),
+            };
+            let intermediates = intermediates
+                .iter()
+                .map(|cert| cert.raw_bytes.clone())
+                .collect();
+            authorities.push(TsaAuthority {
+                leaf: leaf.raw_bytes.clone(),
+                intermediates,
+                root: root.raw_bytes.clone(),
+                valid_for: tsa.valid_for,
+            });
         }
-        roots
-    }
-
-    /// Get TSA intermediate certificates (for chain validation)
-    ///
-    /// Timestamp authorities whose `valid_for` window has not started yet are
-    /// excluded. Expired authorities are included because they are needed to
-    /// verify timestamps issued while they were valid.
-    pub fn tsa_intermediate_certs(&self) -> Vec<CertificateDer<'static>> {
-        let now = Timestamp::now();
-        let mut intermediates = Vec::new();
-        for tsa in &self.timestamp_authorities {
-            if !usable_for_verification(tsa.valid_for.as_ref(), now) {
-                continue;
-            }
-            // All certificates except the first (leaf) and last (root) are intermediates
-            let chain_len = tsa.cert_chain.certificates.len();
-            if chain_len > 2 {
-                for cert_entry in &tsa.cert_chain.certificates[1..chain_len - 1] {
-                    intermediates
-                        .push(CertificateDer::from(cert_entry.raw_bytes.as_bytes()).into_owned());
-                }
-            }
-        }
-        intermediates
-    }
-
-    /// Get TSA leaf certificates (the first certificate in each chain)
-    /// These are the actual TSA signing certificates
-    ///
-    /// Timestamp authorities whose `valid_for` window has not started yet are
-    /// excluded. Expired authorities are included because they are needed to
-    /// verify timestamps issued while they were valid.
-    pub fn tsa_leaf_certs(&self) -> Vec<CertificateDer<'static>> {
-        let now = Timestamp::now();
-        let mut leaves = Vec::new();
-        for tsa in &self.timestamp_authorities {
-            if !usable_for_verification(tsa.valid_for.as_ref(), now) {
-                continue;
-            }
-            // The first certificate in the chain is the leaf (TSA signing cert)
-            if let Some(cert_entry) = tsa.cert_chain.certificates.first() {
-                leaves.push(CertificateDer::from(cert_entry.raw_bytes.as_bytes()).into_owned());
-            }
-        }
-        leaves
-    }
-
-    /// Check if a timestamp is within any TSA's validity period from the trust root
-    ///
-    /// Returns `true` if:
-    /// - There are no timestamp authorities configured (no TSA verification)
-    /// - Any TSA has no `valid_for` field (open-ended validity)
-    /// - The timestamp falls within at least one TSA's `valid_for` period
-    ///
-    /// Returns `false` only if there are TSAs with validity constraints and
-    /// the timestamp doesn't fall within any of them.
-    pub fn is_timestamp_within_tsa_validity(&self, timestamp: Timestamp) -> bool {
-        // If no TSAs are configured, no validity check needed
-        if self.timestamp_authorities.is_empty() {
-            return true;
-        }
-
-        self.timestamp_authorities.iter().any(|tsa| {
-            // A TSA without a valid_for constraint is valid for all time
-            tsa.valid_for
-                .map_or(true, |valid_for| valid_for.contains(timestamp))
-        })
+        authorities
     }
 }
 
@@ -758,27 +687,24 @@ mod tests {
     }"#;
 
     #[test]
-    fn test_tsa_validity_window() {
+    fn test_tsa_authorities_split_per_authority() {
         let root = TrustedRoot::from_json(TSA_TRUSTED_ROOT).unwrap();
+        let authorities = root.tsa_authorities();
+        assert_eq!(authorities.len(), 1);
 
-        let certs = root.tsa_certs_with_validity();
-        assert_eq!(certs.len(), 1);
+        let authority = &authorities[0];
+        assert_eq!(authority.leaf.as_bytes(), &[0, 0, 0]);
+        assert!(authority.intermediates.is_empty());
+        assert_eq!(authority.root.as_bytes(), &[0, 0, 0]);
+        // The window is carried through verbatim; enforcement lives in
+        // `sigstore_tsa::verify_timestamp_for_authority`.
         assert_eq!(
-            certs[0].1,
+            authority.valid_for,
             Some(TimeRange::new(
                 "2020-01-01T00:00:00Z".parse().unwrap(),
                 Some("2030-01-01T00:00:00Z".parse().unwrap()),
             ))
         );
-
-        assert!(root.is_timestamp_within_tsa_validity("2025-01-01T00:00:00Z".parse().unwrap()));
-        assert!(!root.is_timestamp_within_tsa_validity("2019-01-01T00:00:00Z".parse().unwrap()));
-        // Closed interval: the end bound is inside the window
-        assert!(root.is_timestamp_within_tsa_validity("2030-01-01T00:00:00Z".parse().unwrap()));
-        assert!(!root.is_timestamp_within_tsa_validity("2030-01-01T00:00:01Z".parse().unwrap()));
-
-        assert_eq!(root.tsa_root_certs().len(), 1);
-        assert_eq!(root.tsa_leaf_certs().len(), 1);
     }
 
     #[test]

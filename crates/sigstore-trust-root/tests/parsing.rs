@@ -74,8 +74,5 @@ fn test_trusted_root_api() {
             .unwrap()
             .len()
     );
-    println!(
-        "TSA certificates: {}",
-        trusted_root.tsa_certs_with_validity().len()
-    );
+    println!("TSA authorities: {}", trusted_root.tsa_authorities().len());
 }
