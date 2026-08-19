@@ -67,8 +67,8 @@ pub struct PublicKeyContent {
 }
 
 impl PublicKeyContent {
-    /// Parse the PEM content and return a DER certificate
-    pub fn to_certificate(&self) -> Result<DerCertificate, crate::error::Error> {
+    /// Parse the PEM content and return a DER certificate.
+    pub fn parse_certificate(&self) -> Result<DerCertificate, crate::error::Error> {
         let pem_bytes = self.content.as_bytes();
         let pem_str = String::from_utf8(pem_bytes.to_vec()).map_err(|e| {
             crate::error::Error::InvalidResponse(format!("PEM not valid UTF-8: {}", e))
@@ -79,7 +79,7 @@ impl PublicKeyContent {
     }
 
     /// Parse the PEM content and return a DER SubjectPublicKeyInfo public key.
-    pub fn to_public_key(&self) -> Result<DerPublicKey, crate::error::Error> {
+    pub fn parse_public_key(&self) -> Result<DerPublicKey, crate::error::Error> {
         let pem_bytes = self.content.as_bytes();
         let pem_str = String::from_utf8(pem_bytes.to_vec()).map_err(|e| {
             crate::error::Error::InvalidResponse(format!("PEM not valid UTF-8: {}", e))
@@ -188,8 +188,8 @@ pub struct DsseV001Signature {
 }
 
 impl DsseV001Signature {
-    /// Parse the PEM verifier and return a DER certificate
-    pub fn to_certificate(&self) -> Result<DerCertificate, crate::error::Error> {
+    /// Parse the PEM verifier and return a DER certificate.
+    pub fn parse_certificate(&self) -> Result<DerCertificate, crate::error::Error> {
         let pem_bytes = self.verifier.as_bytes();
         let pem_str = String::from_utf8(pem_bytes.to_vec()).map_err(|e| {
             crate::error::Error::InvalidResponse(format!("PEM not valid UTF-8: {}", e))
@@ -292,7 +292,7 @@ pub struct IntotoSignature {
 
 impl IntotoSignature {
     /// Parse the PEM verifier as an X.509 certificate.
-    pub fn to_certificate(&self) -> Result<DerCertificate, crate::error::Error> {
+    pub fn parse_certificate(&self) -> Result<DerCertificate, crate::error::Error> {
         let pem_str = self.verifier_pem()?;
         DerCertificate::from_pem(&pem_str).map_err(|e| {
             crate::error::Error::InvalidResponse(format!(
@@ -303,7 +303,7 @@ impl IntotoSignature {
     }
 
     /// Parse the PEM verifier as a SubjectPublicKeyInfo public key.
-    pub fn to_public_key(&self) -> Result<DerPublicKey, crate::error::Error> {
+    pub fn parse_public_key(&self) -> Result<DerPublicKey, crate::error::Error> {
         let pem_str = self.verifier_pem()?;
         DerPublicKey::from_pem(&pem_str).map_err(|e| {
             crate::error::Error::InvalidResponse(format!(

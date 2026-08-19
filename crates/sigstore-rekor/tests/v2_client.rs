@@ -179,7 +179,7 @@ async fn reads_v2_checkpoint_and_tile_storage_paths() {
     assert_eq!(tile.level, 2);
     assert_eq!(tile.index, 1_234_067);
     assert_eq!(tile.width, NonZeroU8::new(7));
-    assert_eq!(tile.as_bytes(), b"tile");
+    assert_eq!(tile.bytes, b"tile");
     // C2SP spec example: every base-1000 group is zero-padded to 3 digits.
     assert!(tile_request
         .recv()
@@ -193,7 +193,7 @@ async fn reads_v2_checkpoint_and_tile_storage_paths() {
         .unwrap();
     assert_eq!(entries.index, 1);
     assert_eq!(entries.width, None);
-    assert_eq!(entries.as_bytes(), b"entries");
+    assert_eq!(entries.bytes, b"entries");
     assert!(entries_request
         .recv()
         .unwrap()

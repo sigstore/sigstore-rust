@@ -1308,6 +1308,26 @@ fn verifies_sigstore_python_rekor_v2_message_signature_fixture() {
 }
 
 #[test]
+fn rekor_v2_does_not_report_unauthenticated_integrated_time() {
+    let artifact = include_bytes!("../test_data/upstream/sigstore-python/staging-rekor-v2.txt");
+    let mut bundle = Bundle::from_json(include_str!(
+        "../test_data/upstream/sigstore-python/staging-rekor-v2.txt.sigstore.json"
+    ))
+    .unwrap();
+    bundle.verification_material.tlog_entries[0].integrated_time = Some(jiff::Timestamp::MAX);
+
+    let result = verify(
+        artifact.as_slice(),
+        &bundle,
+        &VerificationPolicy::default(),
+        &staging_root(),
+    )
+    .unwrap();
+
+    assert_eq!(result.integrated_time, None);
+}
+
+#[test]
 fn verifies_sigstore_python_rekor_v2_dsse_fixture() {
     let bundle = Bundle::from_json(include_str!(
         "../test_data/upstream/sigstore-python/a.dsse.staging-rekor-v2.txt.sigstore.json"

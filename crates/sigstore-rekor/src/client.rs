@@ -21,32 +21,12 @@ pub struct RekorV2Tile {
     pub bytes: Vec<u8>,
 }
 
-impl RekorV2Tile {
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-
-    pub fn into_bytes(self) -> Vec<u8> {
-        self.bytes
-    }
-}
-
 /// Raw entry bundle returned by Rekor v2's C2SP tile endpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RekorV2EntryBundle {
     pub index: u64,
     pub width: Option<NonZeroU8>,
     pub bytes: Vec<u8>,
-}
-
-impl RekorV2EntryBundle {
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-
-    pub fn into_bytes(self) -> Vec<u8> {
-        self.bytes
-    }
 }
 
 #[cfg(feature = "cache")]

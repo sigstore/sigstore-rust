@@ -136,7 +136,7 @@ fn validate_verifier_match(
                 .spec
                 .signature
                 .public_key
-                .to_public_key()
+                .parse_public_key()
                 .map_err(|e| Error::Verification(e.to_string()))?,
             RekorEntryBody::HashedRekordV002(rekord) => rekord
                 .spec
@@ -174,7 +174,7 @@ fn validate_verifier_match(
                 .spec
                 .signature
                 .public_key
-                .to_certificate()
+                .parse_certificate()
                 .map_err(|e| Error::Verification(format!("{}", e)))?;
             Some(cert.as_bytes().to_vec())
         }

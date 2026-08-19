@@ -73,8 +73,8 @@ let partial_entries = client
     .get_entry_bundle(4, NonZeroU8::new(17))
     .await?;
 println!("checkpoint tree size: {}", checkpoint.tree_size);
-println!("tile bytes: {}", full_tile.as_bytes().len());
-println!("entry bytes: {}", partial_entries.as_bytes().len());
+println!("tile bytes: {}", full_tile.bytes.len());
+println!("entry bytes: {}", partial_entries.bytes.len());
 # Ok(())
 # }
 ```

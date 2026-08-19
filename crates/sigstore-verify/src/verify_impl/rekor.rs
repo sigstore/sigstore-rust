@@ -182,7 +182,7 @@ fn verify_dsse_v001(
     if let Some(cert) = &bundle_cert {
         // Convert Rekor's PEM verifier to DER for canonical comparison
         let rekor_cert_der = rekor_sig
-            .to_certificate()
+            .parse_certificate()
             .map_err(|e| Error::Verification(format!("{}", e)))?;
         if cert.as_bytes() != rekor_cert_der.as_bytes() {
             return Err(Error::Verification(
@@ -277,10 +277,10 @@ fn verify_intoto_v002(
         ));
     }
 
-    let rekor_public_key = match rekor_sig.to_certificate() {
+    let rekor_public_key = match rekor_sig.parse_certificate() {
         Ok(certificate) => certificate_public_key(&certificate)?,
         Err(_) => rekor_sig
-            .to_public_key()
+            .parse_public_key()
             .map_err(|e| Error::Verification(e.to_string()))?,
     };
     if rekor_public_key.as_bytes() != expected_public_key.as_bytes() {
