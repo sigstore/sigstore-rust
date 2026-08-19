@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-sign-v0.11.0...sigstore-sign-v0.12.0) - 2026-08-19
+
+### Added
+
+- *(trust-root)* [**breaking**] make TUF bootstrap trust explicit ([#180](https://github.com/sigstore/sigstore-rust/pull/180))
+
+### Fixed
+
+- *(sign)* keep unbounded hashing and signing from starving the async executor (TOB-SIGSTORE-8) ([#183](https://github.com/sigstore/sigstore-rust/pull/183))
+- *(types)* [**breaking**] make multi-signature DSSE envelopes unrepresentable (TOB-SIGSTORE-9) ([#170](https://github.com/sigstore/sigstore-rust/pull/170))
+- *(verify)* [**breaking**] remove clock skew, and use `jiff` Timestamp in the interfaces ([#164](https://github.com/sigstore/sigstore-rust/pull/164))
+
+### Other
+
+- *(artifact)* [**breaking**] make artifact digests typed ([#184](https://github.com/sigstore/sigstore-rust/pull/184))
+
 ## [0.10.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-sign-v0.9.0...sigstore-sign-v0.10.0) - 2026-06-29
 
 ### Added

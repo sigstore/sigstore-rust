@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-trust-root-v0.11.0...sigstore-trust-root-v0.12.0) - 2026-08-19
+
+### Added
+
+- *(trust-root)* [**breaking**] make TUF bootstrap trust explicit ([#180](https://github.com/sigstore/sigstore-rust/pull/180))
+
+### Fixed
+
+- *(verify)* bind TSA timestamps to the authority that signed them (TOB-SIGSTORE-11) ([#166](https://github.com/sigstore/sigstore-rust/pull/166))
+- *(trust-root)* [**breaking**] verify cached TUF repositories offline ([#179](https://github.com/sigstore/sigstore-rust/pull/179))
+
+### Other
+
+- *(crypto)* [**breaking**] clarify SPKI constructor names ([#178](https://github.com/sigstore/sigstore-rust/pull/178))
+- *(trust-root)* [**breaking**] consolidate transparency key getters and align TimeRange semantics ([#159](https://github.com/sigstore/sigstore-rust/pull/159))
+
 ## [0.11.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-trust-root-v0.10.0...sigstore-trust-root-v0.11.0) - 2026-07-08
 
 ### Other
