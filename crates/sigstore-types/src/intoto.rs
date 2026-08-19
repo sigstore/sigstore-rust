@@ -58,13 +58,16 @@ pub struct Digest {
 impl Statement {
     /// Check if any subject in the statement matches the given SHA-256 hash
     pub fn matches_sha256(&self, hash_hex: &str) -> bool {
-        self.subject.iter().any(|subject| {
-            subject
-                .digest
-                .sha256
-                .as_ref()
-                .is_some_and(|h| h == hash_hex)
-        })
+        self.subject
+            .iter()
+            .any(|subject| subject.digest.sha256.as_deref() == Some(hash_hex))
+    }
+
+    /// Check if any subject in the statement matches the given SHA-512 hash
+    pub fn matches_sha512(&self, hash_hex: &str) -> bool {
+        self.subject
+            .iter()
+            .any(|subject| subject.digest.sha512.as_deref() == Some(hash_hex))
     }
 }
 
@@ -107,7 +110,7 @@ mod tests {
                     name: "file1.txt".to_string(),
                     digest: Digest {
                         sha256: Some("hash1".to_string()),
-                        sha512: None,
+                        sha512: Some("long-hash1".to_string()),
                     },
                 },
                 Subject {
@@ -125,6 +128,8 @@ mod tests {
         assert!(statement.matches_sha256("hash1"));
         assert!(statement.matches_sha256("hash2"));
         assert!(!statement.matches_sha256("hash3"));
+        assert!(statement.matches_sha512("long-hash1"));
+        assert!(!statement.matches_sha512("long-hash2"));
     }
 
     #[test]
