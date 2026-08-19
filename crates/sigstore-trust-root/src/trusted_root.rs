@@ -308,13 +308,12 @@ impl TrustedRoot {
             if !usable_for_verification(tsa.valid_for.as_ref(), now) {
                 continue;
             }
-            let certs = &tsa.cert_chain.certificates;
-            let (Some(leaf), Some(root)) = (certs.first(), certs.last()) else {
-                continue;
+            let (leaf, intermediates, root) = match tsa.cert_chain.certificates.as_slice() {
+                [] => continue,
+                [root] => (root, &[][..], root),
+                [leaf, intermediates @ .., root] => (leaf, intermediates, root),
             };
-            let intermediates = certs
-                .get(1..certs.len() - 1)
-                .unwrap_or_default()
+            let intermediates = intermediates
                 .iter()
                 .map(|cert| cert.raw_bytes.clone())
                 .collect();

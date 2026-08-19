@@ -8,12 +8,12 @@
 
 use crate::asn1::{self, PkiStatus, TimeStampResp, TstInfo};
 use crate::error::{Error, Result};
-use cms::cert::CertificateChoices;
 use cms::signed_data::{SignedData, SignerIdentifier};
 use const_oid::ObjectIdentifier;
 use jiff::Timestamp;
 use rustls_pki_types::CertificateDer;
-use sigstore_types::TsaAuthority;
+use sigstore_crypto::{verify_signature, SigningScheme};
+use sigstore_types::{DerPublicKey, SignatureBytes, TsaAuthority};
 use x509_cert::Certificate;
 
 // Re-export webpki from rustls-webpki
@@ -229,12 +229,9 @@ pub(crate) fn verify_timestamp_response(
     let signer_cert = verify_cms_signature(&signed_data, tst_info_der, &opts)?;
     tracing::debug!("CMS signature verification completed successfully");
 
-    // Extract intermediate certificates from the SignedData for chain validation
-    let embedded_certs = extract_certificates(&signed_data);
-
-    // Validate certificate chain using webpki
+    // Validate the signer using only the configured authority's chain.
     tracing::debug!("Starting TSA certificate chain validation");
-    validate_tsa_certificate_chain(&signer_cert, timestamp, &opts, &embedded_certs)?;
+    validate_tsa_certificate_chain(&signer_cert, timestamp, &opts)?;
     tracing::debug!("TSA certificate chain validation completed successfully");
 
     Ok(TimestampResult { time: timestamp })
@@ -350,43 +347,21 @@ fn verify_cms_signature(
         .get(0)
         .ok_or_else(|| Error::SignatureVerificationError("no signer info found".to_string()))?;
 
-    // Extract certificates from SignedData
-    let certificates = extract_certificates(signed_data);
-
-    // Add the provided TSA certificates
-    let mut all_certs = certificates;
-    for tsa_cert in &opts.tsa_certificates {
-        use x509_cert::der::Decode;
-        if let Ok(cert) = Certificate::from_der(tsa_cert.as_ref()) {
-            all_certs.push(cert);
-        }
-    }
-
-    // Find the signer certificate
-    let signer_cert = find_signer_certificate(&signer_info.sid, &all_certs)?;
-
-    // When the caller pinned specific TSA certificates, the CMS signer must be
-    // one of them. Finding the signer among the token's embedded certificates
-    // is not enough to attribute the timestamp to a specific configured
-    // authority: a token can embed arbitrary certificates (TOB-SIGSTORE-11).
-    if !opts.tsa_certificates.is_empty() {
-        use x509_cert::der::Encode;
-        let signer_der = signer_cert.to_der().map_err(|e| {
-            Error::SignatureVerificationError(format!(
-                "failed to encode signer certificate to DER: {}",
-                e
-            ))
-        })?;
-        if !opts
-            .tsa_certificates
-            .iter()
-            .any(|cert| cert.as_ref() == signer_der.as_slice())
-        {
-            return Err(Error::SignatureVerificationError(
-                "CMS signer certificate does not match any provided TSA certificate".to_string(),
-            ));
-        }
-    }
+    // Resolve the signer exclusively among the authority's trusted leaves.
+    // Certificates embedded in the CMS envelope are untrusted input.
+    use x509_cert::der::Decode;
+    let trusted_signers = opts
+        .tsa_certificates
+        .iter()
+        .map(|certificate| {
+            Certificate::from_der(certificate.as_ref()).map_err(|e| {
+                Error::SignatureVerificationError(format!(
+                    "failed to parse trusted TSA certificate: {e}"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let signer_cert = find_signer_certificate(&signer_info.sid, &trusted_signers)?;
 
     // Get signed attributes and verify the message-digest attribute
     let signed_attrs = signer_info.signed_attrs.as_ref().ok_or_else(|| {
@@ -416,26 +391,6 @@ fn verify_cms_signature(
     Ok(signer_cert)
 }
 
-/// Extract certificates from SignedData
-fn extract_certificates(signed_data: &SignedData) -> Vec<Certificate> {
-    let mut certificates = Vec::new();
-
-    if let Some(cert_set) = &signed_data.certificates {
-        for cert_choice in cert_set.0.iter() {
-            match cert_choice {
-                CertificateChoices::Certificate(cert) => {
-                    certificates.push(cert.clone());
-                }
-                CertificateChoices::Other(_) => {
-                    tracing::debug!("Skipping non-standard certificate format");
-                }
-            }
-        }
-    }
-
-    certificates
-}
-
 /// Find the signer certificate that matches the SignerIdentifier
 fn find_signer_certificate(
     signer_id: &SignerIdentifier,
@@ -452,7 +407,7 @@ fn find_signer_certificate(
                 }
             }
             Err(Error::SignatureVerificationError(
-                "no certificate matches issuer and serial number".to_string(),
+                "CMS signer does not match any trusted TSA certificate".to_string(),
             ))
         }
         SignerIdentifier::SubjectKeyIdentifier(ski) => {
@@ -477,7 +432,7 @@ fn find_signer_certificate(
                 }
             }
             Err(Error::SignatureVerificationError(
-                "no certificate matches subject key identifier".to_string(),
+                "CMS signer does not match any trusted TSA certificate".to_string(),
             ))
         }
     }
@@ -560,59 +515,54 @@ fn verify_message_digest_attribute(
     Ok(())
 }
 
-/// Verify ECDSA signature using the certificate's public key and aws-lc-rs
-/// The digest_alg_oid specifies which hash algorithm was used to sign (from SignerInfo)
+/// Verify the CMS signature with the shared crypto verification API.
 fn verify_ecdsa_signature(
     signature: &[u8],
     message: &[u8],
     certificate: &Certificate,
     digest_alg_oid: &ObjectIdentifier,
 ) -> Result<()> {
-    use aws_lc_rs::signature::{
-        UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P384_SHA256_ASN1, ECDSA_P384_SHA384_ASN1,
-    };
+    use x509_cert::der::Encode;
 
-    // Get the public key from the certificate
     let spki = &certificate.tbs_certificate.subject_public_key_info;
-    let public_key_bytes = spki.subject_public_key.as_bytes().ok_or_else(|| {
-        Error::SignatureVerificationError("invalid public key encoding".to_string())
-    })?;
-
-    // Check that the key algorithm is EC public key
     if spki.algorithm.oid != OID_EC_PUBLIC_KEY {
         return Err(Error::SignatureVerificationError(format!(
             "not an EC key: {}",
             spki.algorithm.oid
         )));
     }
-
-    // Get the curve parameters
-    let params = spki.algorithm.parameters.as_ref().ok_or_else(|| {
-        Error::SignatureVerificationError("missing EC curve parameters".to_string())
-    })?;
-
-    // Decode the curve OID
-    let curve_oid = params.decode_as::<ObjectIdentifier>().map_err(|e| {
-        Error::SignatureVerificationError(format!("failed to decode curve OID: {}", e))
-    })?;
-
-    // Match on BOTH curve and digest algorithm to select the appropriate verification algorithm
-    let algorithm = match (&curve_oid, digest_alg_oid) {
-        (&OID_SECP256R1, &OID_SHA256) => &ECDSA_P256_SHA256_ASN1,
-        (&OID_SECP384R1, &OID_SHA256) => &ECDSA_P384_SHA256_ASN1,
-        (&OID_SECP384R1, &OID_SHA384) => &ECDSA_P384_SHA384_ASN1,
+    let curve_oid = spki
+        .algorithm
+        .parameters
+        .as_ref()
+        .ok_or_else(|| {
+            Error::SignatureVerificationError("missing EC curve parameters".to_string())
+        })?
+        .decode_as::<ObjectIdentifier>()
+        .map_err(|e| {
+            Error::SignatureVerificationError(format!("failed to decode curve OID: {e}"))
+        })?;
+    let scheme = match (&curve_oid, digest_alg_oid) {
+        (&OID_SECP256R1, &OID_SHA256) => SigningScheme::EcdsaP256Sha256,
+        (&OID_SECP384R1, &OID_SHA256) => SigningScheme::EcdsaP384Sha256,
+        (&OID_SECP384R1, &OID_SHA384) => SigningScheme::EcdsaP384Sha384,
         _ => {
             return Err(Error::SignatureVerificationError(format!(
-                "unsupported curve/digest combination: {} / {}",
-                curve_oid, digest_alg_oid
-            )));
+                "unsupported curve/digest combination: {curve_oid} / {digest_alg_oid}"
+            )))
         }
     };
+    let public_key = DerPublicKey::new(spki.to_der().map_err(|e| {
+        Error::SignatureVerificationError(format!("failed to encode signer public key: {e}"))
+    })?);
 
-    // Verify the signature
-    UnparsedPublicKey::new(algorithm, public_key_bytes)
-        .verify(message, signature)
-        .map_err(|_| Error::SignatureVerificationError("signature verification failed".to_string()))
+    verify_signature(
+        &public_key,
+        message,
+        &SignatureBytes::from_bytes(signature),
+        scheme,
+    )
+    .map_err(|e| Error::SignatureVerificationError(e.to_string()))
 }
 
 /// Validate the TSA certificate chain
@@ -620,7 +570,6 @@ fn validate_tsa_certificate_chain(
     signer_cert: &Certificate,
     timestamp: Timestamp,
     opts: &VerifyOpts,
-    embedded_certs: &[Certificate],
 ) -> Result<()> {
     use rustls_pki_types::{CertificateDer, UnixTime};
     use x509_cert::der::Encode;
@@ -661,31 +610,15 @@ fn validate_tsa_certificate_chain(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Convert embedded certificates to DER format for use as intermediates
-    let mut intermediate_ders: Vec<CertificateDer<'static>> = Vec::new();
-
-    for cert in embedded_certs {
-        // Skip the signer certificate itself
-        if cert == signer_cert {
-            continue;
-        }
-
-        let cert_der = cert.to_der().map_err(|e| {
-            Error::CertificateValidationError(format!(
-                "failed to encode embedded certificate to DER: {}",
-                e
-            ))
-        })?;
-        intermediate_ders.push(CertificateDer::from(cert_der).into_owned());
-    }
-
-    // Add intermediates from opts
-    intermediate_ders.extend(opts.intermediates.iter().map(|c| c.clone().into_owned()));
+    let intermediate_ders: Vec<CertificateDer<'static>> = opts
+        .intermediates
+        .iter()
+        .map(|certificate| certificate.clone().into_owned())
+        .collect();
 
     tracing::debug!(
-        "Using {} embedded intermediate cert(s) + {} provided intermediate cert(s)",
-        embedded_certs.len().saturating_sub(1),
-        opts.intermediates.len()
+        "Using {} trusted intermediate cert(s)",
+        intermediate_ders.len()
     );
 
     // Convert timestamp to UnixTime for webpki
@@ -775,14 +708,15 @@ mod tests {
         // Extract TSA certificates from trusted root
         let tsa_certs = extract_tsa_certs(VALID_TRUSTED_ROOT);
 
-        // The TSA has a self-signed root, so the last cert is the root
-        // and others are intermediates/leaf
+        // The chain is leaf-first and root-last.
+        let leaf = tsa_certs.first().unwrap().clone();
         let root = tsa_certs.last().unwrap().clone();
-        let intermediates: Vec<_> = tsa_certs[..tsa_certs.len() - 1].to_vec();
+        let intermediates: Vec<_> = tsa_certs[1..tsa_certs.len() - 1].to_vec();
 
         let opts = VerifyOpts::new()
             .with_root(root)
-            .with_intermediates(intermediates);
+            .with_intermediates(intermediates)
+            .with_tsa_certificates(vec![leaf]);
 
         // Verify the timestamp
         let result = verify_timestamp_response(&timestamp_token, &signature, opts);
@@ -806,7 +740,9 @@ mod tests {
         let timestamp_token = extract_timestamp_token(VALID_BUNDLE);
         let signature = extract_signature(VALID_BUNDLE);
 
-        let opts = VerifyOpts::new();
+        let tsa_certs = extract_tsa_certs(VALID_TRUSTED_ROOT);
+        let leaf = tsa_certs.first().unwrap().clone();
+        let opts = VerifyOpts::new().with_tsa_certificates(vec![leaf]);
 
         // Should fail with CertificateValidationError
         let result = verify_timestamp_response(&timestamp_token, &signature, opts);
@@ -856,11 +792,9 @@ mod tests {
 
         let tsa_certs = extract_tsa_certs(VALID_TRUSTED_ROOT);
         let root = tsa_certs.last().unwrap().clone();
-        let intermediates: Vec<_> = tsa_certs[..tsa_certs.len() - 1].to_vec();
+        let intermediates: Vec<_> = tsa_certs[1..tsa_certs.len() - 1].to_vec();
 
-        // Pin to the root certificate only: the actual CMS signer is the
-        // embedded leaf, so pinning must reject the token even though the
-        // signer chains to the trusted root.
+        // Trusting the root as the leaf must reject the actual CMS signer.
         let opts = VerifyOpts::new()
             .with_root(root.clone())
             .with_intermediates(intermediates)
@@ -870,7 +804,7 @@ mod tests {
         match result.unwrap_err() {
             Error::SignatureVerificationError(msg) => {
                 assert!(
-                    msg.contains("does not match any provided TSA certificate"),
+                    msg.contains("does not match any trusted TSA certificate"),
                     "unexpected message: {msg}"
                 );
             }
@@ -971,7 +905,7 @@ mod tests {
         match result.unwrap_err() {
             Error::SignatureVerificationError(msg) => {
                 assert!(
-                    msg.contains("does not match any provided TSA certificate"),
+                    msg.contains("does not match any trusted TSA certificate"),
                     "unexpected message: {msg}"
                 );
             }
