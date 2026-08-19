@@ -1,6 +1,6 @@
 use base64::Engine;
 use sigstore_rekor::{HashedRekordV2, RekorV2Client, RekorV2KeyDetails};
-use sigstore_types::{DerCertificate, Sha256Hash, SignatureBytes};
+use sigstore_types::{DerCertificate, KindVersion, Sha256Hash, SignatureBytes};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::num::NonZeroU8;
@@ -17,7 +17,7 @@ const VALID_ENTRY: &str = r#"{
     "rootHash":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     "treeSize":"8",
     "hashes":[],
-    "checkpoint":{"envelope":"example.com/log\n8\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n\n"}
+    "checkpoint":{"envelope":"example.com/log\n8\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n\n— example.com/log AAAAAAAA\n"}
   },
   "canonicalizedBody":"eyJzcGVjIjp7Imhhc2hlZFJla29yZFYwMDIiOnsiZGF0YSI6eyJhbGdvcml0aG0iOiJTSEEyXzI1NiIsImRpZ2VzdCI6IkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUU9In0sInNpZ25hdHVyZSI6eyJjb250ZW50IjoiYzJsbmJtRjBkWEpsIiwidmVyaWZpZXIiOnsia2V5RGV0YWlscyI6IlBLSVhfRUNEU0FfUDI1Nl9TSEFfMjU2IiwieDUwOUNlcnRpZmljYXRlIjp7InJhd0J5dGVzIjoiTUFBPSJ9fX19fX0="
 }"#;
@@ -98,8 +98,7 @@ async fn create_entry_returns_the_protobuf_entry_without_lossy_conversion() {
         entry.log_id.key_id.as_str(),
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     );
-    assert_eq!(entry.kind_version.kind, "hashedrekord");
-    assert_eq!(entry.kind_version.version, "0.0.2");
+    assert_eq!(entry.kind_version, KindVersion::HashedRekordV002);
     assert!(entry.integrated_time.is_none());
     assert!(entry.inclusion_promise.is_none());
     assert_eq!(entry.inclusion_proof.unwrap().tree_size, 8);
