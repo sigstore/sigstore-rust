@@ -60,7 +60,7 @@ pub struct LogEntry {
     #[serde(rename = "logID")]
     pub log_id: HexLogId,
     /// Log index
-    pub log_index: i64,
+    pub log_index: u64,
     /// Verification data
     #[serde(default)]
     pub verification: Option<Verification>,
@@ -82,7 +82,7 @@ pub struct Verification {
 ///
 /// Note: This is different from `sigstore_types::InclusionProof` which is the
 /// bundle format with typed fields. This uses raw strings as returned by the
-/// Rekor V1 API (hex-encoded hashes, i64 indices).
+/// Rekor V1 API (hex-encoded hashes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RekorInclusionProof {
@@ -91,11 +91,11 @@ pub struct RekorInclusionProof {
     /// Hashes in the proof path (hex-encoded in V1 API)
     pub hashes: Vec<String>,
     /// Log index
-    pub log_index: i64,
+    pub log_index: u64,
     /// Root hash (hex-encoded in V1 API)
     pub root_hash: String,
     /// Tree size
-    pub tree_size: i64,
+    pub tree_size: u64,
 }
 
 /// Log info response
@@ -109,7 +109,7 @@ pub struct LogInfo {
     /// Tree ID
     pub tree_i_d: String,
     /// Tree size
-    pub tree_size: i64,
+    pub tree_size: u64,
     /// Inactive shards
     #[serde(default)]
     pub inactive_shards: Vec<InactiveShard>,
@@ -126,7 +126,7 @@ pub struct InactiveShard {
     /// Tree ID
     pub tree_i_d: String,
     /// Tree size
-    pub tree_size: i64,
+    pub tree_size: u64,
 }
 
 /// Response from creating a log entry (map of UUID to LogEntry)

@@ -137,19 +137,11 @@ fn verify_merkle_inclusion(entry: &TransparencyLogEntry, proof: &InclusionProof)
         let checkpoint = proof.checkpoint.parse().map_err(|e| {
             Error::Verification(format!("failed to parse Rekor v2 checkpoint: {e}"))
         })?;
-        let leaf_index = entry
-            .log_index
-            .as_u64()
-            .ok_or_else(|| Error::Verification("invalid top-level log_index".to_string()))?;
+        let leaf_index = entry.log_index.value();
         (leaf_index, checkpoint.tree_size, checkpoint.root_hash)
     } else {
-        let leaf_index = proof.log_index.as_u64().ok_or_else(|| {
-            Error::Verification("invalid log_index in inclusion proof".to_string())
-        })?;
-        let tree_size = proof
-            .tree_size
-            .try_into()
-            .map_err(|_| Error::Verification("invalid tree_size in inclusion proof".to_string()))?;
+        let leaf_index = proof.log_index.value();
+        let tree_size = proof.tree_size;
         (leaf_index, tree_size, proof.root_hash)
     };
 
@@ -268,10 +260,7 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
 
     // Construct the payload (base64-encoded body)
     let body = entry.canonicalized_body.to_base64();
-    let log_index = entry
-        .log_index
-        .as_u64()
-        .ok_or_else(|| Error::Verification("Invalid log index".into()))? as i64;
+    let log_index = entry.log_index.as_i64();
 
     // Log ID for payload must be hex encoded
     let log_id_bytes = base64::engine::general_purpose::STANDARD

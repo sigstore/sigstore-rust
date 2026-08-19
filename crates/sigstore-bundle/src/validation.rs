@@ -223,10 +223,7 @@ fn validate_inclusion_proof_structure(bundle: &Bundle) -> Result<()> {
             let is_v2 =
                 entry.kind_version.kind == "hashedrekord" && entry.kind_version.version == "0.0.2";
             if is_v2 {
-                let leaf_index = entry
-                    .log_index
-                    .as_u64()
-                    .ok_or_else(|| Error::Validation("invalid top-level log_index".to_string()))?;
+                let leaf_index = entry.log_index.value();
                 if leaf_index >= checkpoint.tree_size {
                     return Err(Error::Validation(format!(
                         "top-level log_index {} out of range for checkpoint tree size {}",
@@ -234,14 +231,8 @@ fn validate_inclusion_proof_structure(bundle: &Bundle) -> Result<()> {
                     )));
                 }
             } else {
-                let leaf_index: u64 = proof
-                    .log_index
-                    .as_u64()
-                    .ok_or_else(|| Error::Validation("invalid log_index in proof".to_string()))?;
-                let tree_size: u64 = proof
-                    .tree_size
-                    .try_into()
-                    .map_err(|_| Error::Validation("invalid tree_size in proof".to_string()))?;
+                let leaf_index = proof.log_index.value();
+                let tree_size = proof.tree_size;
                 if leaf_index >= tree_size {
                     return Err(Error::Validation(format!(
                         "inclusion proof log_index {} out of range for tree_size {}",

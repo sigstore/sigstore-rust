@@ -622,11 +622,6 @@ fn validate_v2_entry(entry: &TransparencyLogEntry, request: &HashedRekordV2) -> 
     // proof.log_index, proof.tree_size, and proof.root_hash are unauthenticated
     // duplicates in Rekor v2. Consumers use the top-level index and signed
     // checkpoint values instead.
-    if entry.log_index.as_u64().is_none() {
-        return Err(Error::InvalidResponse(
-            "Rekor v2 response has a negative log index".to_string(),
-        ));
-    }
     if proof.checkpoint.is_empty() {
         return Err(Error::InvalidResponse(
             "Rekor v2 response has an empty checkpoint".to_string(),
