@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-rekor-v0.11.0...sigstore-rekor-v0.12.0) - 2026-08-19
+
+### Fixed
+
+- *(verify)* handle canonical Rekor intoto entries ([#175](https://github.com/sigstore/sigstore-rust/pull/175))
+- *(verify)* [**breaking**] remove clock skew, and use `jiff` Timestamp in the interfaces ([#164](https://github.com/sigstore/sigstore-rust/pull/164))
+
 ## [0.6.2](https://github.com/prefix-dev/sigstore-rust/compare/sigstore-rekor-v0.6.1...sigstore-rekor-v0.6.2) - 2026-02-04
 
 ### Other
