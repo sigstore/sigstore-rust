@@ -215,7 +215,8 @@ async fn main() {
     if let Some(entry) = bundle.verification_material.tlog_entries.first() {
         println!(
             "  Entry Kind: {} v{}",
-            entry.kind_version.kind, entry.kind_version.version
+            entry.kind_version.kind(),
+            entry.kind_version.version()
         );
         println!("  Log Index: {}", entry.log_index);
         match entry.integrated_time {

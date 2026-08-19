@@ -20,7 +20,7 @@
 //! root material required to do so.
 
 use crate::error::{Error, Result};
-use sigstore_types::{Bundle, MediaType};
+use sigstore_types::{Bundle, KindVersion, MediaType};
 
 /// Options controlling which materials must be *present* in the bundle.
 ///
@@ -98,13 +98,7 @@ pub fn validate_bundle(bundle: &Bundle) -> Result<()> {
 /// Those checks require trusted key material and are performed by the
 /// verification path in the `sigstore-verify` crate.
 pub fn validate_bundle_with_options(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
-    // Check media type is valid
-    let version = bundle
-        .version()
-        .map_err(|e| Error::Validation(format!("invalid media type: {}", e)))?;
-
-    // Version-specific validation
-    match version {
+    match bundle.version() {
         MediaType::Bundle0_1 => validate_v0_1(bundle, options),
         MediaType::Bundle0_2 => validate_v0_2(bundle, options),
         MediaType::Bundle0_3 => validate_v0_3(bundle, options),
@@ -214,14 +208,11 @@ fn validate_common(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
 fn validate_inclusion_proof_structure(bundle: &Bundle) -> Result<()> {
     for entry in &bundle.verification_material.tlog_entries {
         if let Some(proof) = &entry.inclusion_proof {
-            // The checkpoint must be a parseable signed note
-            let checkpoint = proof
-                .checkpoint
-                .parse()
-                .map_err(|e| Error::Validation(format!("failed to parse checkpoint: {}", e)))?;
+            let checkpoint = proof.checkpoint.checkpoint().ok_or_else(|| {
+                Error::Validation("inclusion proof has no checkpoint".to_string())
+            })?;
 
-            let is_v2 =
-                entry.kind_version.kind == "hashedrekord" && entry.kind_version.version == "0.0.2";
+            let is_v2 = entry.kind_version == KindVersion::HashedRekordV002;
             if is_v2 {
                 let leaf_index = entry.log_index.value();
                 if leaf_index >= checkpoint.tree_size {
