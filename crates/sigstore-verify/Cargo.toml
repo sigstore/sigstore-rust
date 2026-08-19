@@ -30,6 +30,7 @@ pem = { workspace = true }
 rustls-webpki = { workspace = true }
 rustls-pki-types = { workspace = true }
 tracing = { workspace = true }
+futures = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

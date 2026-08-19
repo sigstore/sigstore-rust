@@ -36,6 +36,10 @@ pub enum Error {
     /// OIDC error
     #[error("OIDC error: {0}")]
     Oidc(#[from] sigstore_oidc::Error),
+
+    /// Failed to read artifact input.
+    #[error("failed to read artifact: {0}")]
+    ArtifactRead(#[source] std::io::Error),
 }
 
 /// Result type for signing operations

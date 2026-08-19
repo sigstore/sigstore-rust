@@ -3,6 +3,7 @@
 //! This module provides the main entry point for signing artifacts with Sigstore.
 
 use crate::error::{Error, Result};
+use futures::io::{AsyncRead, AsyncReadExt};
 use sigstore_bundle::{BundleV03, TlogEntryBuilder};
 use sigstore_crypto::{KeyPair, Sha256Hasher, SigningScheme};
 use sigstore_fulcio::FulcioClient;
@@ -71,6 +72,36 @@ async fn sha256_yielding(data: &[u8]) -> Sha256Hasher {
     let mut hasher = Sha256Hasher::new();
     update_sha256_yielding(&mut hasher, data).await;
     hasher
+}
+
+async fn sha256_reader_yielding(mut reader: impl std::io::Read) -> Result<Sha256Hash> {
+    let mut hasher = Sha256Hasher::new();
+    let mut buffer = [0_u8; HASH_YIELD_CHUNK_SIZE];
+    loop {
+        let read = std::io::Read::read(&mut reader, &mut buffer).map_err(Error::ArtifactRead)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        yield_now().await;
+    }
+    Ok(hasher.finalize())
+}
+
+async fn sha256_async_reader(mut reader: impl AsyncRead + Unpin) -> Result<Sha256Hash> {
+    let mut hasher = Sha256Hasher::new();
+    let mut buffer = [0_u8; HASH_YIELD_CHUNK_SIZE];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .await
+            .map_err(Error::ArtifactRead)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize())
 }
 
 /// Start hashing a DSSE PAE without materializing the PAE in memory.
@@ -322,21 +353,8 @@ impl Signer {
     /// # }
     /// ```
     pub async fn sign<'a>(&self, artifact: impl Into<Artifact<'a>>) -> Result<Bundle> {
-        let artifact = artifact.into();
-
-        // 1. Generate ephemeral key pair
-        let key_pair = self.generate_ephemeral_keypair()?;
-
-        // 2. Get signing certificate from Fulcio
-        let leaf_cert_der = self.request_certificate(&key_pair).await?;
-
-        // 3. + 4. Hash blobs cooperatively, or explicitly attest to the typed
-        // digest supplied by the caller, then sign in prehashed mode.
-        let (artifact_hash, signature) = match artifact {
-            Artifact::Blob(blob) => {
-                let hasher = sha256_yielding(blob).await;
-                key_pair.sign_prehashed(hasher)?
-            }
+        let artifact_hash = match artifact.into() {
+            Artifact::Blob(blob) => sha256_yielding(blob).await.finalize(),
             Artifact::Digest(digest) => {
                 if digest.algorithm() != HashAlgorithm::Sha2256 {
                     return Err(Error::Signing(format!(
@@ -344,14 +362,38 @@ impl Signer {
                         digest.algorithm()
                     )));
                 }
-                let hash = Sha256Hash::try_from_slice(digest.as_bytes())
-                    .map_err(|e| Error::Signing(e.to_string()))?;
-                let signature = key_pair.sign_digest(&hash)?;
-                (hash, signature)
+                Sha256Hash::try_from_slice(digest.as_bytes())
+                    .map_err(|e| Error::Signing(e.to_string()))?
             }
         };
+        self.sign_sha256(artifact_hash).await
+    }
 
-        // 5. Create Rekor entry (with certificate, not just public key)
+    /// Sign an artifact read synchronously to EOF in constant memory.
+    ///
+    /// Reads happen while this future is polled and may block its executor
+    /// thread. Async applications should prefer [`Signer::sign_async_reader`].
+    pub async fn sign_reader(&self, reader: impl std::io::Read) -> Result<Bundle> {
+        self.sign_sha256(sha256_reader_yielding(reader).await?)
+            .await
+    }
+
+    /// Sign an artifact read asynchronously to EOF in constant memory.
+    pub async fn sign_async_reader(&self, reader: impl AsyncRead + Unpin) -> Result<Bundle> {
+        self.sign_sha256(sha256_async_reader(reader).await?).await
+    }
+
+    async fn sign_sha256(&self, artifact_hash: Sha256Hash) -> Result<Bundle> {
+        // 1. Generate ephemeral key pair
+        let key_pair = self.generate_ephemeral_keypair()?;
+
+        // 2. Get signing certificate from Fulcio
+        let leaf_cert_der = self.request_certificate(&key_pair).await?;
+
+        // 3. Sign the already prepared digest.
+        let signature = key_pair.sign_digest(&artifact_hash)?;
+
+        // 4. Create Rekor entry (with certificate, not just public key)
         let tlog_entry = self
             .create_rekor_entry(&artifact_hash, &signature, &leaf_cert_der)
             .await?;
@@ -727,6 +769,24 @@ mod tests {
             let chunked = sha256_yielding(&data).await.finalize();
             assert_eq!(chunked, sigstore_crypto::sha256(&data), "size {size}");
         }
+    }
+
+    #[tokio::test]
+    async fn reader_hashing_matches_blob_hashing() {
+        let data = vec![42_u8; HASH_YIELD_CHUNK_SIZE * 2 + 7];
+        let expected = sigstore_crypto::sha256(&data);
+        assert_eq!(
+            sha256_reader_yielding(std::io::Cursor::new(&data))
+                .await
+                .unwrap(),
+            expected
+        );
+        assert_eq!(
+            sha256_async_reader(futures::io::Cursor::new(&data))
+                .await
+                .unwrap(),
+            expected
+        );
     }
 
     #[tokio::test]

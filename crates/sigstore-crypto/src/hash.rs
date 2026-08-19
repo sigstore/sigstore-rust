@@ -1,7 +1,7 @@
 //! Hashing utilities using aws-lc-rs
 
 use aws_lc_rs::digest::{self, Context, SHA256, SHA384, SHA512};
-use sigstore_types::Sha256Hash;
+use sigstore_types::{ArtifactDigest, HashAlgorithm, Sha256Hash};
 use std::io::{self, Read};
 
 /// Hash data using SHA-256, returning a typed hash
@@ -22,6 +22,35 @@ pub fn sha384(data: &[u8]) -> Vec<u8> {
 pub fn sha512(data: &[u8]) -> Vec<u8> {
     let digest = digest::digest(&SHA512, data);
     digest.as_ref().to_vec()
+}
+
+/// Incremental hasher for a typed artifact digest.
+pub struct ArtifactHasher {
+    algorithm: HashAlgorithm,
+    context: Context,
+}
+
+impl ArtifactHasher {
+    pub fn new(algorithm: HashAlgorithm) -> Self {
+        let backend = match algorithm {
+            HashAlgorithm::Sha2256 => &SHA256,
+            HashAlgorithm::Sha2384 => &SHA384,
+            HashAlgorithm::Sha2512 => &SHA512,
+        };
+        Self {
+            algorithm,
+            context: Context::new(backend),
+        }
+    }
+
+    pub fn update(&mut self, data: &[u8]) {
+        self.context.update(data);
+    }
+
+    pub fn finalize(self) -> ArtifactDigest {
+        ArtifactDigest::new(self.algorithm, self.context.finish().as_ref())
+            .expect("cryptographic backend returned the algorithm's documented digest length")
+    }
 }
 
 /// Incremental SHA-256 hasher
