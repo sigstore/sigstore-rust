@@ -18,7 +18,7 @@ use sigstore_trust_root::{
 use sigstore_tsa::TimestampClient;
 use sigstore_types::{
     Artifact, Bundle, DerCertificate, DsseEnvelope, DsseSignature, HashAlgorithm, KeyId,
-    PayloadBytes, Sha256Hash, SignatureBytes, Statement, Subject, TimestampToken,
+    KindVersion, PayloadBytes, Sha256Hash, SignatureBytes, Statement, Subject, TimestampToken,
     TransparencyLogEntry,
 };
 
@@ -435,7 +435,11 @@ impl Signer {
                     .create_entry(request)
                     .await
                     .map_err(|e| Error::Signing(format!("Failed to create Rekor entry: {e}")))?;
-                Ok(TlogEntryBuilder::from_log_entry(&entry, "hashedrekord", "0.0.1").build())
+                Ok(
+                    TlogEntryBuilder::from_log_entry(&entry, KindVersion::HashedRekordV001)
+                        .map_err(|e| Error::Signing(format!("invalid Rekor response: {e}")))?
+                        .build(),
+                )
             }
             RekorApiVersion::V2 => {
                 let rekor = RekorV2Client::new(&self.rekor_url);
@@ -581,7 +585,11 @@ impl Signer {
                 let entry = rekor.create_dsse_entry(request).await.map_err(|e| {
                     Error::Signing(format!("Failed to create DSSE Rekor entry: {e}"))
                 })?;
-                Ok(TlogEntryBuilder::from_log_entry(&entry, "dsse", "0.0.1").build())
+                Ok(
+                    TlogEntryBuilder::from_log_entry(&entry, KindVersion::DsseV001)
+                        .map_err(|e| Error::Signing(format!("invalid Rekor response: {e}")))?
+                        .build(),
+                )
             }
             RekorApiVersion::V2 => {
                 let rekor = RekorV2Client::new(&self.rekor_url);
@@ -705,7 +713,7 @@ impl Attestation {
                 .map(|s| Subject {
                     name: s.name.clone(),
                     digest: Digest {
-                        sha256: Some(s.digest.to_hex()),
+                        sha256: Some(s.digest),
                         sha512: None,
                     },
                 })

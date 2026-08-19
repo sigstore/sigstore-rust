@@ -7,7 +7,7 @@ use crate::error::{Error, Result};
 use sigstore_rekor::body::RekorEntryBody;
 use sigstore_types::bundle::VerificationMaterialContent;
 use sigstore_types::{
-    Artifact, Bundle, DerPublicKey, Sha256Hash, SignatureContent, TransparencyLogEntry,
+    Artifact, Bundle, DerPublicKey, KindVersion, Sha256Hash, SignatureContent, TransparencyLogEntry,
 };
 use x509_cert::der::Decode;
 use x509_cert::Certificate;
@@ -29,8 +29,8 @@ pub(crate) fn verify_hashedrekord_entry(
     // Parse the Rekor entry body (convert canonicalized body to base64 string)
     let body = RekorEntryBody::from_base64_json(
         &entry.canonicalized_body.to_base64(),
-        &entry.kind_version.kind,
-        &entry.kind_version.version,
+        entry.kind_version.kind(),
+        entry.kind_version.version(),
     )
     .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
 
@@ -59,7 +59,7 @@ pub(crate) fn verify_hashedrekord_entry(
         _ => {
             return Err(Error::Verification(format!(
                 "expected HashedRekord body, got different type for version {}",
-                entry.kind_version.version
+                entry.kind_version.version()
             )));
         }
     };
@@ -267,7 +267,7 @@ fn validate_integrated_time(entry: &TransparencyLogEntry, bundle: &Bundle) -> Re
         // For 0.0.2 (Rekor v2), integrated_time is not present
         let v1_integrated_time = entry
             .integrated_time
-            .filter(|_| entry.kind_version.version == "0.0.1");
+            .filter(|_| entry.kind_version == KindVersion::HashedRekordV001);
         if let Some(integrated_time) = v1_integrated_time {
             let cert = Certificate::from_der(bundle_cert_der).map_err(|e| {
                 Error::Verification(format!(
