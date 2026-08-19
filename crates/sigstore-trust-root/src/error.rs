@@ -37,10 +37,6 @@ pub enum Error {
     #[error("no matching certificate found")]
     CertificateNotFound,
 
-    /// Time parsing error
-    #[error("failed to parse time: {0}")]
-    TimeParse(String),
-
     /// TUF error (only available with "tuf" feature)
     #[error("TUF error: {0}")]
     Tuf(String),

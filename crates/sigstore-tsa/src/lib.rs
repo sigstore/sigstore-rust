@@ -13,4 +13,5 @@ pub use asn1::{
 };
 pub use client::TimestampClient;
 pub use error::{Error, Result};
-pub use verify::{verify_timestamp_response, TimestampResult, VerifyOpts};
+pub use sigstore_types::TsaAuthority;
+pub use verify::verify_timestamp_for_authority;
