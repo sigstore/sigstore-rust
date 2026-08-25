@@ -3,6 +3,7 @@
 //! This module provides typed representations of the canonicalized body
 //! content for different Rekor entry types and versions.
 
+use crate::entry::RekorV2KeyDetails;
 use serde::{Deserialize, Serialize};
 use sigstore_types::encoding::base64_bytes;
 use sigstore_types::{
@@ -113,6 +114,8 @@ pub struct HashedRekordV002Data {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HashedRekordV002DataInner {
+    /// Algorithm used for the logged digest.
+    pub algorithm: HashAlgorithm,
     /// Base64-encoded hash digest
     #[serde(with = "base64_bytes")]
     pub digest: Vec<u8>,
@@ -128,6 +131,8 @@ pub struct HashedRekordV002Signature {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HashedRekordV002Verifier {
+    /// Signature algorithm and key encoding authenticated by the log entry.
+    pub key_details: RekorV2KeyDetails,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x509_certificate: Option<X509CertificateRaw>,
     #[serde(skip_serializing_if = "Option::is_none")]
