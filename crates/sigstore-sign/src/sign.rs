@@ -715,6 +715,7 @@ impl Attestation {
                     digest: Digest {
                         sha256: Some(s.digest),
                         sha512: None,
+                        other: Default::default(),
                     },
                 })
                 .collect(),

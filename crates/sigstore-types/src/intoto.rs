@@ -46,7 +46,7 @@ pub struct Subject {
 ///
 /// Contains one or more cryptographic hashes of the artifact.
 /// At minimum, sha256 should be provided.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Digest {
     /// SHA-256 hash (hex-encoded)
     #[serde(
@@ -62,6 +62,42 @@ pub struct Digest {
         skip_serializing_if = "Option::is_none"
     )]
     pub sha512: Option<Sha512Hash>,
+    /// Additional in-toto digest algorithms, preserved without interpretation.
+    ///
+    /// The in-toto digest map is extensible. Algorithms understood by this
+    /// crate are parsed into fixed-size semantic values above; other entries
+    /// remain available for lossless round trips.
+    #[serde(flatten)]
+    pub other: std::collections::BTreeMap<String, String>,
+}
+
+impl<'de> Deserialize<'de> for Digest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WireDigest {
+            #[serde(default, with = "option_hex_sha256")]
+            sha256: Option<Sha256Hash>,
+            #[serde(default, with = "option_hex_sha512")]
+            sha512: Option<Sha512Hash>,
+            #[serde(flatten)]
+            other: std::collections::BTreeMap<String, String>,
+        }
+
+        let wire = WireDigest::deserialize(deserializer)?;
+        if wire.sha256.is_none() && wire.sha512.is_none() && wire.other.is_empty() {
+            return Err(serde::de::Error::custom(
+                "subject digest must contain at least one algorithm",
+            ));
+        }
+        Ok(Self {
+            sha256: wire.sha256,
+            sha512: wire.sha512,
+            other: wire.other,
+        })
+    }
 }
 
 impl Statement {
@@ -148,6 +184,7 @@ mod tests {
                     digest: Digest {
                         sha256: Some(sha256_1),
                         sha512: Some(sha512_1),
+                        other: Default::default(),
                     },
                 },
                 Subject {
@@ -155,6 +192,7 @@ mod tests {
                     digest: Digest {
                         sha256: Some(sha256_2),
                         sha512: None,
+                        other: Default::default(),
                     },
                 },
             ],
@@ -190,6 +228,31 @@ mod tests {
         let json = r#"{
             "_type": "https://in-toto.io/Statement/v1",
             "subject": [{"digest": {"sha256": "abc123"}}],
+            "predicateType": "https://sigstore.dev/cosign/sign/v1",
+            "predicate": {}
+        }"#;
+        assert!(serde_json::from_str::<Statement>(json).is_err());
+    }
+
+    #[test]
+    fn additional_subject_digest_is_preserved_instead_of_discarded() {
+        let json = r#"{
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [{"digest": {"sha384": "00"}}],
+            "predicateType": "https://sigstore.dev/cosign/sign/v1",
+            "predicate": {}
+        }"#;
+        let statement = serde_json::from_str::<Statement>(json).unwrap();
+        assert_eq!(statement.subject[0].digest.other["sha384"], "00");
+        let serialized = serde_json::to_value(statement).unwrap();
+        assert_eq!(serialized["subject"][0]["digest"]["sha384"], "00");
+    }
+
+    #[test]
+    fn empty_subject_digest_is_rejected() {
+        let json = r#"{
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [{"digest": {}}],
             "predicateType": "https://sigstore.dev/cosign/sign/v1",
             "predicate": {}
         }"#;
