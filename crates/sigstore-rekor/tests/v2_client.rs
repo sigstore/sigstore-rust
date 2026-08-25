@@ -1,3 +1,4 @@
+use base64::Engine;
 use sigstore_rekor::{HashedRekordV2, RekorV2Client, RekorV2KeyDetails};
 use sigstore_types::{DerCertificate, Sha256Hash, SignatureBytes};
 use std::io::{Read, Write};
@@ -18,7 +19,7 @@ const VALID_ENTRY: &str = r#"{
     "hashes":[],
     "checkpoint":{"envelope":"example.com/log\n8\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n\n"}
   },
-  "canonicalizedBody":"eyJzcGVjIjp7Imhhc2hlZFJla29yZFYwMDIiOnsiZGF0YSI6eyJkaWdlc3QiOiJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFPSJ9LCJzaWduYXR1cmUiOnsiY29udGVudCI6ImMybG5ibUYwZFhKbCIsInZlcmlmaWVyIjp7ImtleURldGFpbHMiOiJQS0lYX0VDRFNBX1AyNTZfU0hBXzI1NiIsIng1MDlDZXJ0aWZpY2F0ZSI6eyJyYXdCeXRlcyI6Ik1BQT0ifX19fX19"
+  "canonicalizedBody":"eyJzcGVjIjp7Imhhc2hlZFJla29yZFYwMDIiOnsiZGF0YSI6eyJhbGdvcml0aG0iOiJTSEEyXzI1NiIsImRpZ2VzdCI6IkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUU9In0sInNpZ25hdHVyZSI6eyJjb250ZW50IjoiYzJsbmJtRjBkWEpsIiwidmVyaWZpZXIiOnsia2V5RGV0YWlscyI6IlBLSVhfRUNEU0FfUDI1Nl9TSEFfMjU2IiwieDUwOUNlcnRpZmljYXRlIjp7InJhd0J5dGVzIjoiTUFBPSJ9fX19fX0="
 }"#;
 
 fn serve_once(status: &str, content_type: &str, body: &[u8]) -> (String, mpsc::Receiver<String>) {
@@ -56,6 +57,24 @@ fn serve_once(status: &str, content_type: &str, body: &[u8]) -> (String, mpsc::R
     });
 
     (format!("http://{address}"), request_rx)
+}
+
+fn entry_with_body_field(path: &[&str], value: serde_json::Value) -> String {
+    let mut entry: serde_json::Value = serde_json::from_str(VALID_ENTRY).unwrap();
+    let encoded = entry["canonicalizedBody"].as_str().unwrap();
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .unwrap();
+    let mut body: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+    let mut field = &mut body;
+    for component in path {
+        field = &mut field[*component];
+    }
+    *field = value;
+    entry["canonicalizedBody"] = serde_json::Value::String(
+        base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&body).unwrap()),
+    );
+    serde_json::to_string(&entry).unwrap()
 }
 
 fn request() -> HashedRekordV2 {
@@ -113,6 +132,36 @@ async fn create_entry_rejects_malformed_or_incomplete_v2_responses() {
             .await
             .unwrap_err();
         received.recv().unwrap();
+        assert!(
+            error.to_string().contains("Invalid response"),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn create_entry_rejects_mismatched_algorithm_semantics() {
+    for response in [
+        entry_with_body_field(
+            &["spec", "hashedRekordV002", "data", "algorithm"],
+            serde_json::json!("SHA2_384"),
+        ),
+        entry_with_body_field(
+            &[
+                "spec",
+                "hashedRekordV002",
+                "signature",
+                "verifier",
+                "keyDetails",
+            ],
+            serde_json::json!("UNSPECIFIED"),
+        ),
+    ] {
+        let (url, _received) = serve_once("201 Created", "application/json", response.as_bytes());
+        let error = RekorV2Client::new(url)
+            .create_entry(request())
+            .await
+            .unwrap_err();
         assert!(
             error.to_string().contains("Invalid response"),
             "unexpected error: {error}"

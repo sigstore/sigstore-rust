@@ -49,11 +49,18 @@ pub(crate) fn verify_hashedrekord_entry(
             validate_artifact_hash(&hash, &expected)?;
         }
         RekorEntryBody::HashedRekordV002(rekord) => {
-            // v0.0.2: spec.hashedRekordV002.data.digest (Vec<u8>)
-            let expected = Sha256Hash::try_from_slice(&rekord.spec.hashed_rekord_v002.data.digest)
-                .map_err(|e| {
-                    Error::Verification(format!("invalid digest in Rekor entry: {}", e))
-                })?;
+            // v0.0.2 is currently defined only for SHA-256/P-256 entries. Do
+            // not reinterpret a digest logged under a different algorithm.
+            let logged = &rekord.spec.hashed_rekord_v002;
+            if logged.data.algorithm != sigstore_types::HashAlgorithm::Sha2256 {
+                return Err(Error::Verification(format!(
+                    "unsupported Rekor v2 digest algorithm: {}",
+                    logged.data.algorithm
+                )));
+            }
+            let expected = Sha256Hash::try_from_slice(&logged.data.digest).map_err(|e| {
+                Error::Verification(format!("invalid digest in Rekor entry: {}", e))
+            })?;
             validate_artifact_hash(&hash, &expected)?;
         }
         _ => {
