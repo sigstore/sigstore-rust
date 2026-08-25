@@ -100,6 +100,11 @@ async fn sha256_async_reader(mut reader: impl AsyncRead + Unpin) -> Result<Sha25
             break;
         }
         hasher.update(&buffer[..read]);
+        // AsyncRead is allowed to remain ready indefinitely (for example,
+        // futures::io::Cursor), so the read itself is not necessarily a
+        // scheduling point. Yield explicitly to keep large inputs from
+        // monopolizing the executor thread.
+        yield_now().await;
     }
     Ok(hasher.finalize())
 }
@@ -787,6 +792,17 @@ mod tests {
                 .unwrap(),
             expected
         );
+    }
+
+    #[test]
+    fn async_reader_hashing_yields_even_when_reads_are_ready() {
+        let mut future = Box::pin(sha256_async_reader(futures::io::Cursor::new(vec![42_u8])));
+        let waker = futures::task::noop_waker();
+        let mut context = std::task::Context::from_waker(&waker);
+        assert!(matches!(
+            std::future::Future::poll(future.as_mut(), &mut context),
+            std::task::Poll::Pending
+        ));
     }
 
     #[tokio::test]

@@ -4,6 +4,33 @@ use sigstore_crypto::ArtifactHasher;
 use sigstore_types::{Artifact, ArtifactDigest, Bundle, HashAlgorithm, SignatureContent};
 use std::io::Read;
 
+/// Yield control back to the async executor once.
+///
+/// `AsyncRead` implementations may return `Ready` indefinitely, so awaiting a
+/// read is not by itself a reliable scheduling point.
+fn yield_now() -> impl std::future::Future<Output = ()> {
+    struct YieldNow(bool);
+
+    impl std::future::Future for YieldNow {
+        type Output = ();
+
+        fn poll(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<()> {
+            if self.0 {
+                std::task::Poll::Ready(())
+            } else {
+                self.0 = true;
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            }
+        }
+    }
+
+    YieldNow(false)
+}
+
 /// Artifact data normalized for the verification core.
 ///
 /// Blob callers retain their bytes for schemes that cannot verify prehashed
@@ -77,6 +104,9 @@ impl<'a> PreparedArtifact<'a> {
             for hasher in &mut hashers {
                 hasher.update(&buffer[..read]);
             }
+            // Always-ready readers (including in-memory cursors) do not yield
+            // when awaited. Cooperate explicitly after each hashing chunk.
+            yield_now().await;
         }
         Ok(Self::from_hashers(hashers))
     }
