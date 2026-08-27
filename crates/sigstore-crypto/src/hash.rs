@@ -1,7 +1,7 @@
 //! Hashing utilities using aws-lc-rs
 
 use aws_lc_rs::digest::{self, Context, SHA256, SHA384, SHA512};
-use sigstore_types::Sha256Hash;
+use sigstore_types::{Sha256Hash, Sha512Hash};
 use std::io::{self, Read};
 
 /// Hash data using SHA-256, returning a typed hash
@@ -18,10 +18,12 @@ pub fn sha384(data: &[u8]) -> Vec<u8> {
     digest.as_ref().to_vec()
 }
 
-/// Hash data using SHA-512, returning raw bytes
-pub fn sha512(data: &[u8]) -> Vec<u8> {
+/// Hash data using SHA-512, returning a typed hash
+pub fn sha512(data: &[u8]) -> Sha512Hash {
     let digest = digest::digest(&SHA512, data);
-    digest.as_ref().to_vec()
+    let mut result = [0u8; 64];
+    result.copy_from_slice(digest.as_ref());
+    Sha512Hash::from_bytes(result)
 }
 
 /// Incremental SHA-256 hasher
@@ -103,6 +105,19 @@ mod tests {
         let expected =
             hex::decode("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
                 .unwrap();
+        assert_eq!(hash.as_bytes(), expected.as_slice());
+    }
+
+    #[test]
+    fn test_sha512() {
+        let hash = sha512(b"hello");
+        assert_eq!(hash.as_bytes().len(), 64);
+
+        let expected = hex::decode(concat!(
+            "9b71d224bd62f3785d96d46ad3ea3d73319bfbc2890caadae2dff72519673ca7",
+            "2323c3d99ba5c11d7c7acc6e14b8c5da0c4663475c2e5c3adef46f73bcdec043",
+        ))
+        .unwrap();
         assert_eq!(hash.as_bytes(), expected.as_slice());
     }
 

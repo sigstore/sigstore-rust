@@ -49,7 +49,8 @@ let request = HashedRekordV2::new_with_certificate(
     &certificate,
     RekorV2KeyDetails::PkixEcdsaP256Sha256,
 );
-let entry = RekorV2Client::public().create_entry(request).await?;
+let client = RekorV2Client::new("https://log2025-1.rekor.sigstore.dev");
+let entry = client.create_entry(request).await?;
 println!("log index: {}", entry.log_index);
 # Ok(())
 # }
@@ -66,7 +67,7 @@ use sigstore_rekor::RekorV2Client;
 use std::num::NonZeroU8;
 
 # async fn example() -> Result<(), sigstore_rekor::Error> {
-let client = RekorV2Client::public();
+let client = RekorV2Client::new("https://log2025-1.rekor.sigstore.dev");
 let checkpoint = client.get_checkpoint().await?;
 let full_tile = client.get_tile(0, 12, None).await?;
 let partial_entries = client

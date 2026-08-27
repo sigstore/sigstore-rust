@@ -46,7 +46,7 @@ pub struct LogEntry {
     /// UUID of the entry (the key in the response map)
     #[serde(skip)]
     pub uuid: EntryUuid,
-    /// Body of the entry (base64 encoded canonicalized body)
+    /// Canonicalized JSON body of the entry.
     pub body: CanonicalizedBody,
     /// Integrated time. Always present in Rekor V1 API responses; `None` for
     /// entries converted from the V2 API, which has no integrated time.

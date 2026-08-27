@@ -382,16 +382,6 @@ impl RekorV2Client {
         }
     }
 
-    /// Create a client for the public Sigstore Rekor v2 instance.
-    pub fn public() -> Self {
-        Self::new(RekorApiVersion::V2.default_url())
-    }
-
-    /// Create a client for the Sigstore staging Rekor v2 instance.
-    pub fn staging() -> Self {
-        Self::new(RekorApiVersion::V2.default_staging_url())
-    }
-
     /// Create a Rekor v2 hashedrekord entry.
     ///
     /// Rekor v2 returns the protobuf `TransparencyLogEntry` JSON representation
