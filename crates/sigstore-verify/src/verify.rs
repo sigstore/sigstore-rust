@@ -12,6 +12,72 @@ use sigstore_trust_root::TrustedRoot;
 
 use sigstore_types::{Artifact, Bundle, HashAlgorithm, SignatureContent, Statement};
 
+/// Artifact input for verification.
+#[derive(Debug)]
+pub enum ArtifactSource<'a, R = std::io::Empty> {
+    /// Raw artifact bytes or a pre-computed digest.
+    Artifact(Artifact<'a>),
+    /// Artifact bytes streamed from a reader.
+    Reader(R),
+}
+
+/// Reader input for [`ArtifactSource`].
+#[derive(Debug)]
+pub struct Reader<R>(R);
+
+/// Wrap a reader so it can be passed to `verify(...).`
+pub fn reader<R>(reader: R) -> Reader<R> {
+    Reader(reader)
+}
+
+impl<'a, A> From<A> for ArtifactSource<'a>
+where
+    A: Into<Artifact<'a>>,
+{
+    fn from(artifact: A) -> Self {
+        Self::Artifact(artifact.into())
+    }
+}
+
+impl<'a, R> From<Reader<R>> for ArtifactSource<'a, R> {
+    fn from(reader: Reader<R>) -> Self {
+        Self::Reader(reader.0)
+    }
+}
+
+/// Artifact input for async verification.
+#[derive(Debug)]
+pub enum AsyncArtifactSource<'a, R = futures::io::Empty> {
+    /// Raw artifact bytes or a pre-computed digest.
+    Artifact(Artifact<'a>),
+    /// Artifact bytes streamed from an async reader.
+    Reader(R),
+}
+
+/// Async reader input for [`AsyncArtifactSource`].
+#[derive(Debug)]
+pub struct AsyncReader<R>(R);
+
+/// Wrap an async reader so it can be passed to `verify_async(...).`
+pub fn async_reader<R>(reader: R) -> AsyncReader<R> {
+    AsyncReader(reader)
+}
+
+impl<'a, A> From<A> for AsyncArtifactSource<'a>
+where
+    A: Into<Artifact<'a>>,
+{
+    fn from(artifact: A) -> Self {
+        Self::Artifact(artifact.into())
+    }
+}
+
+impl<'a, R> From<AsyncReader<R>> for AsyncArtifactSource<'a, R> {
+    fn from(reader: AsyncReader<R>) -> Self {
+        Self::Reader(reader.0)
+    }
+}
+
 /// How the signing certificate is verified.
 ///
 /// SCT verification depends on the issuer identified while verifying the
@@ -243,17 +309,17 @@ impl Verifier {
     ///    public key.
     /// 8. Verify the transparency log entry's consistency against the other
     ///    materials, to prevent variants of CVE-2022-36056.
-    pub fn verify<'a>(
+    pub fn verify<'a, R: std::io::Read>(
         &self,
-        artifact: impl Into<Artifact<'a>>,
+        artifact: impl Into<ArtifactSource<'a, R>>,
         bundle: &Bundle,
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
-        self.verify_prepared(
-            PreparedArtifact::from_artifact(artifact.into()),
-            bundle,
-            policy,
-        )
+        let artifact = match artifact.into() {
+            ArtifactSource::Artifact(artifact) => PreparedArtifact::from_artifact(artifact),
+            ArtifactSource::Reader(reader) => PreparedArtifact::from_reader(reader, bundle)?,
+        };
+        self.verify_prepared(artifact, bundle, policy)
     }
 
     /// Verify an artifact read synchronously to EOF in constant memory.
@@ -266,11 +332,7 @@ impl Verifier {
         bundle: &Bundle,
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
-        self.verify_prepared(
-            PreparedArtifact::from_reader(reader, bundle)?,
-            bundle,
-            policy,
-        )
+        self.verify(crate::verify::reader(reader), bundle, policy)
     }
 
     /// Verify an artifact read asynchronously to EOF in constant memory.
@@ -280,7 +342,22 @@ impl Verifier {
         bundle: &Bundle,
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
-        let artifact = PreparedArtifact::from_async_reader(reader, bundle).await?;
+        self.verify_async(crate::verify::async_reader(reader), bundle, policy).await
+    }
+
+    /// Verify an artifact or async reader against a bundle.
+    pub async fn verify_async<'a, R: futures::io::AsyncRead + Unpin>(
+        &self,
+        artifact: impl Into<AsyncArtifactSource<'a, R>>,
+        bundle: &Bundle,
+        policy: &VerificationPolicy,
+    ) -> Result<VerificationResult> {
+        let artifact = match artifact.into() {
+            AsyncArtifactSource::Artifact(artifact) => PreparedArtifact::from_artifact(artifact),
+            AsyncArtifactSource::Reader(reader) => {
+                PreparedArtifact::from_async_reader(reader, bundle).await?
+            }
+        };
         self.verify_prepared(artifact, bundle, policy)
     }
 
@@ -645,8 +722,8 @@ fn verify_message_signature_crypto(
 /// # Ok(())
 /// # }
 /// ```
-pub fn verify<'a>(
-    artifact: impl Into<Artifact<'a>>,
+pub fn verify<'a, R: std::io::Read>(
+    artifact: impl Into<ArtifactSource<'a, R>>,
     bundle: &Bundle,
     policy: &VerificationPolicy,
     trusted_root: &TrustedRoot,
@@ -662,7 +739,7 @@ pub fn verify_reader(
     policy: &VerificationPolicy,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
-    Verifier::new(trusted_root).verify_reader(reader, bundle, policy)
+    verify(crate::verify::reader(reader), bundle, policy, trusted_root)
 }
 
 /// Verify an artifact from a runtime-independent asynchronous reader.
@@ -672,8 +749,18 @@ pub async fn verify_async_reader(
     policy: &VerificationPolicy,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
+    verify_async(crate::verify::async_reader(reader), bundle, policy, trusted_root).await
+}
+
+/// Verify an artifact or async reader against a bundle.
+pub async fn verify_async<'a, R: futures::io::AsyncRead + Unpin>(
+    artifact: impl Into<AsyncArtifactSource<'a, R>>,
+    bundle: &Bundle,
+    policy: &VerificationPolicy,
+    trusted_root: &TrustedRoot,
+) -> Result<VerificationResult> {
     Verifier::new(trusted_root)
-        .verify_async_reader(reader, bundle, policy)
+        .verify_async(artifact, bundle, policy)
         .await
 }
 
@@ -749,18 +836,17 @@ fn verify_public_key_hint(hint: &str, public_key: &sigstore_types::DerPublicKey)
 /// # Ok(())
 /// # }
 /// ```
-pub fn verify_with_key<'a>(
-    artifact: impl Into<Artifact<'a>>,
+pub fn verify_with_key<'a, R: std::io::Read>(
+    artifact: impl Into<ArtifactSource<'a, R>>,
     bundle: &Bundle,
     public_key: &sigstore_types::DerPublicKey,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
-    verify_with_key_prepared(
-        PreparedArtifact::from_artifact(artifact.into()),
-        bundle,
-        public_key,
-        trusted_root,
-    )
+    let artifact = match artifact.into() {
+        ArtifactSource::Artifact(artifact) => PreparedArtifact::from_artifact(artifact),
+        ArtifactSource::Reader(reader) => PreparedArtifact::from_reader(reader, bundle)?,
+    };
+    verify_with_key_prepared(artifact, bundle, public_key, trusted_root)
 }
 
 /// Verify a managed-key bundle from a synchronous artifact reader.
@@ -770,12 +856,7 @@ pub fn verify_with_key_reader(
     public_key: &sigstore_types::DerPublicKey,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
-    verify_with_key_prepared(
-        PreparedArtifact::from_reader(reader, bundle)?,
-        bundle,
-        public_key,
-        trusted_root,
-    )
+    verify_with_key(crate::verify::reader(reader), bundle, public_key, trusted_root)
 }
 
 /// Verify a managed-key bundle from an asynchronous artifact reader.
@@ -785,12 +866,23 @@ pub async fn verify_with_key_async_reader(
     public_key: &sigstore_types::DerPublicKey,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
-    verify_with_key_prepared(
-        PreparedArtifact::from_async_reader(reader, bundle).await?,
-        bundle,
-        public_key,
-        trusted_root,
-    )
+    verify_with_key_async(crate::verify::async_reader(reader), bundle, public_key, trusted_root).await
+}
+
+/// Verify a managed-key bundle from an artifact or async reader.
+pub async fn verify_with_key_async<'a, R: futures::io::AsyncRead + Unpin>(
+    artifact: impl Into<AsyncArtifactSource<'a, R>>,
+    bundle: &Bundle,
+    public_key: &sigstore_types::DerPublicKey,
+    trusted_root: &TrustedRoot,
+) -> Result<VerificationResult> {
+    let artifact = match artifact.into() {
+        AsyncArtifactSource::Artifact(artifact) => PreparedArtifact::from_artifact(artifact),
+        AsyncArtifactSource::Reader(reader) => {
+            PreparedArtifact::from_async_reader(reader, bundle).await?
+        }
+    };
+    verify_with_key_prepared(artifact, bundle, public_key, trusted_root)
 }
 
 fn verify_with_key_prepared(

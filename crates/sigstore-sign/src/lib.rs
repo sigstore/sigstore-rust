@@ -36,5 +36,6 @@ pub use sigstore_types as types;
 
 pub use error::{Error, Result};
 pub use sign::{
-    sign_context, Attestation, AttestationSubject, Signer, SigningConfig, SigningContext,
+    async_reader, reader, ArtifactSource, AsyncArtifactSource, Attestation, AttestationSubject,
+    Signer, SigningConfig, SigningContext, sign_context,
 };
