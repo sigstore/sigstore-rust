@@ -818,6 +818,50 @@ impl<'de> serde::Deserialize<'de> for Sha256Hash {
 }
 
 // ============================================================================
+// SHA-512 Hash Type (Fixed Size)
+// ============================================================================
+
+/// SHA-512 hash digest (64 bytes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Sha512Hash([u8; 64]);
+
+impl Sha512Hash {
+    pub fn from_bytes(bytes: [u8; 64]) -> Self {
+        Self(bytes)
+    }
+
+    pub fn try_from_slice(bytes: &[u8]) -> Result<Self> {
+        let bytes: [u8; 64] = bytes.try_into().map_err(|_| {
+            Error::InvalidEncoding(format!(
+                "SHA-512 hash must be 64 bytes, got {}",
+                bytes.len()
+            ))
+        })?;
+        Ok(Self(bytes))
+    }
+
+    pub fn from_hex(value: &str) -> Result<Self> {
+        let bytes =
+            hex::decode(value).map_err(|e| Error::InvalidEncoding(format!("invalid hex: {e}")))?;
+        Self::try_from_slice(&bytes)
+    }
+
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.0)
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 64] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for Sha512Hash {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+// ============================================================================
 // Arbitrary Digest Type (Flexible Size)
 // ============================================================================
 

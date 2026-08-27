@@ -9,7 +9,7 @@ use serde::Serialize;
 use sigstore_crypto::Checkpoint;
 use sigstore_trust_root::TrustedRoot;
 use sigstore_types::bundle::InclusionProof;
-use sigstore_types::{Bundle, Sha256Hash, SignatureBytes, TransparencyLogEntry};
+use sigstore_types::{Bundle, KindVersion, Sha256Hash, SignatureBytes, TransparencyLogEntry};
 
 /// Verify transparency log entries (checkpoints, Merkle inclusion proofs and SETs)
 ///
@@ -43,8 +43,7 @@ pub fn verify_tlog_entries(
 
         // Only Rekor v1 authenticates integratedTime via the SET. Rekor v2
         // uses RFC 3161 timestamps; ignore an unauthenticated top-level value.
-        let is_rekor_v2 =
-            entry.kind_version.kind == "hashedrekord" && entry.kind_version.version == "0.0.2";
+        let is_rekor_v2 = entry.kind_version == KindVersion::HashedRekordV002;
         if !is_rekor_v2 {
             if let Some(time) = entry.integrated_time {
                 validate_integrated_time(time, jiff::Timestamp::now(), not_before, not_after)?;
@@ -111,7 +110,7 @@ pub fn verify_entry_inclusion(
     if let Some(ref inclusion_proof) = entry.inclusion_proof {
         verify_merkle_inclusion(entry, inclusion_proof)?;
         verify_checkpoint(
-            &inclusion_proof.checkpoint.envelope,
+            inclusion_proof.checkpoint.envelope(),
             inclusion_proof,
             is_rekor_v2(entry),
             trusted_root,
@@ -134,8 +133,8 @@ pub fn verify_entry_inclusion(
 /// The checkpoint signature check authenticates the selected root.
 fn verify_merkle_inclusion(entry: &TransparencyLogEntry, proof: &InclusionProof) -> Result<()> {
     let (leaf_index, tree_size, root_hash) = if is_rekor_v2(entry) {
-        let checkpoint = proof.checkpoint.parse().map_err(|e| {
-            Error::Verification(format!("failed to parse Rekor v2 checkpoint: {e}"))
+        let checkpoint = proof.checkpoint.checkpoint().ok_or_else(|| {
+            Error::Verification("Rekor v2 inclusion proof has no checkpoint".to_string())
         })?;
         let leaf_index = entry.log_index.value();
         (leaf_index, checkpoint.tree_size, checkpoint.root_hash)
@@ -209,7 +208,7 @@ pub fn verify_checkpoint(
 }
 
 fn is_rekor_v2(entry: &TransparencyLogEntry) -> bool {
-    entry.kind_version.kind == "hashedrekord" && entry.kind_version.version == "0.0.2"
+    entry.kind_version == KindVersion::HashedRekordV002
 }
 
 #[derive(Serialize)]
