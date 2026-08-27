@@ -2,6 +2,7 @@
 //!
 //! This module provides the main entry point for verifying Sigstore signatures.
 
+use crate::artifact::PreparedArtifact;
 use crate::error::{Error, Result};
 use base64::Engine;
 use sigstore_bundle::validate_bundle_with_options;
@@ -10,6 +11,72 @@ use sigstore_crypto::{parse_certificate_info, KeyAlgorithm, SigningScheme, Verif
 use sigstore_trust_root::TrustedRoot;
 
 use sigstore_types::{Artifact, Bundle, HashAlgorithm, SignatureContent, Statement};
+
+/// Artifact input for verification.
+#[derive(Debug)]
+pub enum ArtifactSource<'a, R = std::io::Empty> {
+    /// Raw artifact bytes or a pre-computed digest.
+    Artifact(Artifact<'a>),
+    /// Artifact bytes streamed from a reader.
+    Reader(R),
+}
+
+/// Reader input for [`ArtifactSource`].
+#[derive(Debug)]
+pub struct Reader<R>(R);
+
+/// Wrap a reader so it can be passed to `verify(...).`
+pub fn reader<R>(reader: R) -> Reader<R> {
+    Reader(reader)
+}
+
+impl<'a, A> From<A> for ArtifactSource<'a>
+where
+    A: Into<Artifact<'a>>,
+{
+    fn from(artifact: A) -> Self {
+        Self::Artifact(artifact.into())
+    }
+}
+
+impl<'a, R> From<Reader<R>> for ArtifactSource<'a, R> {
+    fn from(reader: Reader<R>) -> Self {
+        Self::Reader(reader.0)
+    }
+}
+
+/// Artifact input for async verification.
+#[derive(Debug)]
+pub enum AsyncArtifactSource<'a, R = futures::io::Empty> {
+    /// Raw artifact bytes or a pre-computed digest.
+    Artifact(Artifact<'a>),
+    /// Artifact bytes streamed from an async reader.
+    Reader(R),
+}
+
+/// Async reader input for [`AsyncArtifactSource`].
+#[derive(Debug)]
+pub struct AsyncReader<R>(R);
+
+/// Wrap an async reader so it can be passed to `verify_async(...).`
+pub fn async_reader<R>(reader: R) -> AsyncReader<R> {
+    AsyncReader(reader)
+}
+
+impl<'a, A> From<A> for AsyncArtifactSource<'a>
+where
+    A: Into<Artifact<'a>>,
+{
+    fn from(artifact: A) -> Self {
+        Self::Artifact(artifact.into())
+    }
+}
+
+impl<'a, R> From<AsyncReader<R>> for AsyncArtifactSource<'a, R> {
+    fn from(reader: AsyncReader<R>) -> Self {
+        Self::Reader(reader.0)
+    }
+}
 
 /// How the signing certificate is verified.
 ///
@@ -242,13 +309,65 @@ impl Verifier {
     ///    public key.
     /// 8. Verify the transparency log entry's consistency against the other
     ///    materials, to prevent variants of CVE-2022-36056.
-    pub fn verify<'a>(
+    pub fn verify<'a, R: std::io::Read>(
         &self,
-        artifact: impl Into<Artifact<'a>>,
+        artifact: impl Into<ArtifactSource<'a, R>>,
         bundle: &Bundle,
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
-        let artifact = artifact.into();
+        let artifact = match artifact.into() {
+            ArtifactSource::Artifact(artifact) => PreparedArtifact::from_artifact(artifact),
+            ArtifactSource::Reader(reader) => PreparedArtifact::from_reader(reader, bundle)?,
+        };
+        self.verify_prepared(artifact, bundle, policy)
+    }
+
+    /// Verify an artifact read synchronously to EOF in constant memory.
+    ///
+    /// Reads happen on the calling thread. Async applications should use
+    /// [`Verifier::verify_async_reader`] to avoid blocking an executor.
+    pub fn verify_reader(
+        &self,
+        reader: impl std::io::Read,
+        bundle: &Bundle,
+        policy: &VerificationPolicy,
+    ) -> Result<VerificationResult> {
+        self.verify(crate::verify::reader(reader), bundle, policy)
+    }
+
+    /// Verify an artifact read asynchronously to EOF in constant memory.
+    pub async fn verify_async_reader(
+        &self,
+        reader: impl futures::io::AsyncRead + Unpin,
+        bundle: &Bundle,
+        policy: &VerificationPolicy,
+    ) -> Result<VerificationResult> {
+        self.verify_async(crate::verify::async_reader(reader), bundle, policy)
+            .await
+    }
+
+    /// Verify an artifact or async reader against a bundle.
+    pub async fn verify_async<'a, R: futures::io::AsyncRead + Unpin>(
+        &self,
+        artifact: impl Into<AsyncArtifactSource<'a, R>>,
+        bundle: &Bundle,
+        policy: &VerificationPolicy,
+    ) -> Result<VerificationResult> {
+        let artifact = match artifact.into() {
+            AsyncArtifactSource::Artifact(artifact) => PreparedArtifact::from_artifact(artifact),
+            AsyncArtifactSource::Reader(reader) => {
+                PreparedArtifact::from_async_reader(reader, bundle).await?
+            }
+        };
+        self.verify_prepared(artifact, bundle, policy)
+    }
+
+    fn verify_prepared(
+        &self,
+        artifact: PreparedArtifact<'_>,
+        bundle: &Bundle,
+        policy: &VerificationPolicy,
+    ) -> Result<VerificationResult> {
         let mut result = VerificationResult::new();
 
         // Validate bundle structure first. This is a purely structural
@@ -434,23 +553,11 @@ impl Verifier {
     }
 }
 
-fn compute_artifact_digest_algo(artifact: &Artifact<'_>, algo: HashAlgorithm) -> Result<Vec<u8>> {
-    match artifact {
-        Artifact::Blob(bytes) => match algo {
-            HashAlgorithm::Sha2256 => Ok(sigstore_crypto::sha256(bytes).as_bytes().to_vec()),
-            HashAlgorithm::Sha2384 => Ok(sigstore_crypto::sha384(bytes)),
-            HashAlgorithm::Sha2512 => Ok(sigstore_crypto::sha512(bytes)),
-        },
-        Artifact::Digest(digest) => {
-            if digest.algorithm() != algo {
-                return Err(Error::Verification(format!(
-                    "verification requires an {algo} artifact digest, got {}",
-                    digest.algorithm()
-                )));
-            }
-            Ok(digest.as_bytes().to_vec())
-        }
-    }
+fn compute_artifact_digest_algo(
+    artifact: &PreparedArtifact<'_>,
+    algo: HashAlgorithm,
+) -> Result<Vec<u8>> {
+    artifact.digest(algo)
 }
 
 /// Verify the DSSE envelope's signature over its PAE with the given key.
@@ -476,7 +583,7 @@ fn verify_dsse_envelope_signature(
 /// subject of the statement, and the statement must have at least one subject.
 fn verify_dsse_artifact_binding(
     envelope: &sigstore_types::DsseEnvelope,
-    artifact: &Artifact<'_>,
+    artifact: &PreparedArtifact<'_>,
 ) -> Result<()> {
     if envelope.payload_type != "application/vnd.in-toto+json" {
         return Err(Error::Verification(format!(
@@ -495,26 +602,15 @@ fn verify_dsse_artifact_binding(
             "in-toto statement has no subjects: cannot bind artifact to attestation".to_string(),
         ));
     }
-    let matches = match artifact {
-        Artifact::Blob(bytes) => {
-            let sha256 = hex::encode(sigstore_crypto::sha256(bytes));
-            let sha512 = hex::encode(sigstore_crypto::sha512(bytes));
-            statement.matches_sha256(&sha256) || statement.matches_sha512(&sha512)
-        }
-        Artifact::Digest(digest) => {
-            let value = hex::encode(digest.as_bytes());
-            match digest.algorithm() {
-                HashAlgorithm::Sha2256 => statement.matches_sha256(&value),
-                HashAlgorithm::Sha2512 => statement.matches_sha512(&value),
-                algorithm => {
-                    return Err(Error::Verification(format!(
-                        "unsupported pre-computed artifact digest algorithm: {}",
-                        algorithm
-                    )))
-                }
-            }
-        }
-    };
+    let sha256_matches = artifact
+        .digest(HashAlgorithm::Sha2256)
+        .map(|digest| statement.matches_sha256(&hex::encode(digest)))
+        .unwrap_or(false);
+    let sha512_matches = artifact
+        .digest(HashAlgorithm::Sha2512)
+        .map(|digest| statement.matches_sha512(&hex::encode(digest)))
+        .unwrap_or(false);
+    let matches = sha256_matches || sha512_matches;
 
     if !matches {
         return Err(Error::Verification(
@@ -534,40 +630,25 @@ fn verify_signature_over_artifact(
     public_key: &sigstore_types::DerPublicKey,
     scheme: SigningScheme,
     signature: &sigstore_types::SignatureBytes,
-    artifact: &Artifact<'_>,
+    artifact: &PreparedArtifact<'_>,
 ) -> Result<()> {
-    let result = match artifact {
-        Artifact::Blob(bytes) => {
-            sigstore_crypto::verify_signature(public_key, bytes, signature, scheme)
+    let result = if let Some(blob) = artifact.blob() {
+        sigstore_crypto::verify_signature(public_key, blob, signature, scheme)
+    } else {
+        if !scheme.supports_prehashed() {
+            return Err(Error::Verification(format!(
+                "cannot verify signature from a digest or reader - scheme {} does not support prehashed mode",
+                scheme.name()
+            )));
         }
-        Artifact::Digest(digest) => {
-            if !scheme.supports_prehashed() {
-                return Err(Error::Verification(format!(
-                    "cannot verify signature with digest-only - scheme {} does not support prehashed mode",
-                    scheme.name()
-                )));
-            }
-            let expected = scheme.hash_algorithm().ok_or_else(|| {
-                Error::Verification(format!(
-                    "cannot verify signature with digest-only - scheme {} has no external digest algorithm",
-                    scheme.name()
-                ))
-            })?;
-            if digest.algorithm() != expected {
-                return Err(Error::Verification(format!(
-                    "signature scheme {} requires an {} artifact digest, got {}",
-                    scheme.name(),
-                    expected,
-                    digest.algorithm()
-                )));
-            }
-            sigstore_crypto::verify_signature_prehashed(
-                public_key,
-                digest.as_bytes(),
-                signature,
-                scheme,
-            )
-        }
+        let expected = scheme.hash_algorithm().ok_or_else(|| {
+            Error::Verification(format!(
+                "scheme {} has no external digest algorithm",
+                scheme.name()
+            ))
+        })?;
+        let digest = artifact.digest(expected)?;
+        sigstore_crypto::verify_signature_prehashed(public_key, &digest, signature, scheme)
     };
     result.map_err(|e| Error::Verification(format!("signature verification failed: {}", e)))
 }
@@ -606,7 +687,7 @@ fn signing_scheme_for_content(
 fn verify_message_signature_crypto(
     cert_info: &sigstore_crypto::CertificateInfo,
     msg_sig: &sigstore_types::bundle::MessageSignature,
-    artifact: &Artifact<'_>,
+    artifact: &PreparedArtifact<'_>,
 ) -> Result<()> {
     verify_signature_over_artifact(
         &cert_info.public_key,
@@ -642,14 +723,52 @@ fn verify_message_signature_crypto(
 /// # Ok(())
 /// # }
 /// ```
-pub fn verify<'a>(
-    artifact: impl Into<Artifact<'a>>,
+pub fn verify<'a, R: std::io::Read>(
+    artifact: impl Into<ArtifactSource<'a, R>>,
     bundle: &Bundle,
     policy: &VerificationPolicy,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
     let verifier = Verifier::new(trusted_root);
     verifier.verify(artifact, bundle, policy)
+}
+
+/// Verify an artifact from a synchronous reader.
+pub fn verify_reader(
+    reader: impl std::io::Read,
+    bundle: &Bundle,
+    policy: &VerificationPolicy,
+    trusted_root: &TrustedRoot,
+) -> Result<VerificationResult> {
+    verify(crate::verify::reader(reader), bundle, policy, trusted_root)
+}
+
+/// Verify an artifact from a runtime-independent asynchronous reader.
+pub async fn verify_async_reader(
+    reader: impl futures::io::AsyncRead + Unpin,
+    bundle: &Bundle,
+    policy: &VerificationPolicy,
+    trusted_root: &TrustedRoot,
+) -> Result<VerificationResult> {
+    verify_async(
+        crate::verify::async_reader(reader),
+        bundle,
+        policy,
+        trusted_root,
+    )
+    .await
+}
+
+/// Verify an artifact or async reader against a bundle.
+pub async fn verify_async<'a, R: futures::io::AsyncRead + Unpin>(
+    artifact: impl Into<AsyncArtifactSource<'a, R>>,
+    bundle: &Bundle,
+    policy: &VerificationPolicy,
+    trusted_root: &TrustedRoot,
+) -> Result<VerificationResult> {
+    Verifier::new(trusted_root)
+        .verify_async(artifact, bundle, policy)
+        .await
 }
 
 /// Derive the key algorithm from the public key's SPKI algorithm identifier.
@@ -724,13 +843,72 @@ fn verify_public_key_hint(hint: &str, public_key: &sigstore_types::DerPublicKey)
 /// # Ok(())
 /// # }
 /// ```
-pub fn verify_with_key<'a>(
-    artifact: impl Into<Artifact<'a>>,
+pub fn verify_with_key<'a, R: std::io::Read>(
+    artifact: impl Into<ArtifactSource<'a, R>>,
     bundle: &Bundle,
     public_key: &sigstore_types::DerPublicKey,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
-    let artifact = artifact.into();
+    let artifact = match artifact.into() {
+        ArtifactSource::Artifact(artifact) => PreparedArtifact::from_artifact(artifact),
+        ArtifactSource::Reader(reader) => PreparedArtifact::from_reader(reader, bundle)?,
+    };
+    verify_with_key_prepared(artifact, bundle, public_key, trusted_root)
+}
+
+/// Verify a managed-key bundle from a synchronous artifact reader.
+pub fn verify_with_key_reader(
+    reader: impl std::io::Read,
+    bundle: &Bundle,
+    public_key: &sigstore_types::DerPublicKey,
+    trusted_root: &TrustedRoot,
+) -> Result<VerificationResult> {
+    verify_with_key(
+        crate::verify::reader(reader),
+        bundle,
+        public_key,
+        trusted_root,
+    )
+}
+
+/// Verify a managed-key bundle from an asynchronous artifact reader.
+pub async fn verify_with_key_async_reader(
+    reader: impl futures::io::AsyncRead + Unpin,
+    bundle: &Bundle,
+    public_key: &sigstore_types::DerPublicKey,
+    trusted_root: &TrustedRoot,
+) -> Result<VerificationResult> {
+    verify_with_key_async(
+        crate::verify::async_reader(reader),
+        bundle,
+        public_key,
+        trusted_root,
+    )
+    .await
+}
+
+/// Verify a managed-key bundle from an artifact or async reader.
+pub async fn verify_with_key_async<'a, R: futures::io::AsyncRead + Unpin>(
+    artifact: impl Into<AsyncArtifactSource<'a, R>>,
+    bundle: &Bundle,
+    public_key: &sigstore_types::DerPublicKey,
+    trusted_root: &TrustedRoot,
+) -> Result<VerificationResult> {
+    let artifact = match artifact.into() {
+        AsyncArtifactSource::Artifact(artifact) => PreparedArtifact::from_artifact(artifact),
+        AsyncArtifactSource::Reader(reader) => {
+            PreparedArtifact::from_async_reader(reader, bundle).await?
+        }
+    };
+    verify_with_key_prepared(artifact, bundle, public_key, trusted_root)
+}
+
+fn verify_with_key_prepared(
+    artifact: PreparedArtifact<'_>,
+    bundle: &Bundle,
+    public_key: &sigstore_types::DerPublicKey,
+    trusted_root: &TrustedRoot,
+) -> Result<VerificationResult> {
     let result = VerificationResult::new();
 
     if let sigstore_types::bundle::VerificationMaterialContent::PublicKey { hint } =
@@ -910,7 +1088,7 @@ mod tests {
         let hash_hex = sigstore_crypto::sha256(artifact_bytes).to_hex();
         let envelope = in_toto_envelope(&statement_with_subject_sha256(&hash_hex));
 
-        let artifact = Artifact::from(artifact_bytes.as_slice());
+        let artifact = PreparedArtifact::from_artifact(Artifact::from(artifact_bytes.as_slice()));
         assert!(verify_dsse_artifact_binding(&envelope, &artifact).is_ok());
     }
 
@@ -919,7 +1097,7 @@ mod tests {
         let hash_hex = sigstore_crypto::sha256(b"some other artifact").to_hex();
         let envelope = in_toto_envelope(&statement_with_subject_sha256(&hash_hex));
 
-        let artifact = Artifact::from(b"hello world".as_slice());
+        let artifact = PreparedArtifact::from_artifact(Artifact::from(b"hello world".as_slice()));
         let err = verify_dsse_artifact_binding(&envelope, &artifact).unwrap_err();
         assert!(err
             .to_string()
@@ -931,7 +1109,7 @@ mod tests {
         let payload = r#"{"_type":"https://in-toto.io/Statement/v1","subject":[],"predicateType":"https://example.com/predicate/v1","predicate":{}}"#;
         let envelope = in_toto_envelope(payload);
 
-        let artifact = Artifact::from(b"hello world".as_slice());
+        let artifact = PreparedArtifact::from_artifact(Artifact::from(b"hello world".as_slice()));
         let err = verify_dsse_artifact_binding(&envelope, &artifact).unwrap_err();
         assert!(err.to_string().contains("no subjects"));
     }
@@ -944,7 +1122,7 @@ mod tests {
             unused_signature(),
         );
 
-        let artifact = Artifact::from(b"hello world".as_slice());
+        let artifact = PreparedArtifact::from_artifact(Artifact::from(b"hello world".as_slice()));
         let err = verify_dsse_artifact_binding(&envelope, &artifact).unwrap_err();
         assert!(err.to_string().contains("unsupported DSSE payload type"));
     }

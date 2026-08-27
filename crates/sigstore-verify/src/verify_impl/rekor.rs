@@ -3,6 +3,7 @@
 //! This module handles validation of different Rekor entry types against
 //! bundle content to ensure consistency.
 
+use crate::artifact::PreparedArtifact;
 use crate::error::{Error, Result};
 use base64::Engine;
 use sigstore_rekor::body::RekorEntryBody;
@@ -13,10 +14,7 @@ use sigstore_types::{
 use x509_cert::der::{Decode, Encode};
 
 /// Verify that all log entries are consistent with the bundle's content and artifact
-pub fn verify_tlog_consistency(
-    bundle: &Bundle,
-    artifact: &sigstore_types::Artifact<'_>,
-) -> Result<()> {
+pub fn verify_tlog_consistency(bundle: &Bundle, artifact: &PreparedArtifact<'_>) -> Result<()> {
     verify_tlog_consistency_with_key(bundle, artifact, None)
 }
 
@@ -24,7 +22,7 @@ pub fn verify_tlog_consistency(
 /// public key that the bundle references only by hint.
 pub(crate) fn verify_tlog_consistency_with_key(
     bundle: &Bundle,
-    artifact: &sigstore_types::Artifact<'_>,
+    artifact: &PreparedArtifact<'_>,
     managed_key: Option<&DerPublicKey>,
 ) -> Result<()> {
     for entry in &bundle.verification_material.tlog_entries {
@@ -329,7 +327,9 @@ mod tests {
 
     fn verify_consistency(bundle: &Bundle) -> Result<()> {
         let digest = [0u8; 32];
-        verify_tlog_consistency(bundle, &Artifact::from(Sha256Hash::from_bytes(digest)))
+        let artifact =
+            PreparedArtifact::from_artifact(Artifact::from(Sha256Hash::from_bytes(digest)));
+        verify_tlog_consistency(bundle, &artifact)
     }
 
     #[test]
@@ -354,20 +354,12 @@ mod tests {
             hint: sigstore_crypto::sha256(public_key.as_bytes()).to_base64(),
         };
         let digest = [0u8; 32];
-        verify_tlog_consistency_with_key(
-            &bundle,
-            &Artifact::from(Sha256Hash::from_bytes(digest)),
-            Some(&public_key),
-        )
-        .unwrap();
+        let artifact =
+            PreparedArtifact::from_artifact(Artifact::from(Sha256Hash::from_bytes(digest)));
+        verify_tlog_consistency_with_key(&bundle, &artifact, Some(&public_key)).unwrap();
 
         let wrong_key = DerPublicKey::new(vec![1, 2, 3]);
-        assert!(verify_tlog_consistency_with_key(
-            &bundle,
-            &Artifact::from(Sha256Hash::from_bytes(digest)),
-            Some(&wrong_key),
-        )
-        .is_err());
+        assert!(verify_tlog_consistency_with_key(&bundle, &artifact, Some(&wrong_key)).is_err());
     }
 
     #[test]

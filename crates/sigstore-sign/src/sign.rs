@@ -3,6 +3,7 @@
 //! This module provides the main entry point for signing artifacts with Sigstore.
 
 use crate::error::{Error, Result};
+use futures::io::{AsyncRead, AsyncReadExt};
 use sigstore_bundle::{BundleV03, TlogEntryBuilder};
 use sigstore_crypto::{KeyPair, Sha256Hasher, SigningScheme};
 use sigstore_fulcio::FulcioClient;
@@ -21,6 +22,72 @@ use sigstore_types::{
     PayloadBytes, Sha256Hash, SignatureBytes, Statement, Subject, TimestampToken,
     TransparencyLogEntry,
 };
+
+/// Artifact input for signing.
+#[derive(Debug)]
+pub enum ArtifactSource<'a, R = std::io::Empty> {
+    /// Raw artifact bytes or a pre-computed digest.
+    Artifact(Artifact<'a>),
+    /// Artifact bytes streamed from a reader.
+    Reader(R),
+}
+
+/// Reader input for [`ArtifactSource`].
+#[derive(Debug)]
+pub struct Reader<R>(R);
+
+/// Wrap a reader so it can be passed to `sign(...).`
+pub fn reader<R>(reader: R) -> Reader<R> {
+    Reader(reader)
+}
+
+impl<'a, A> From<A> for ArtifactSource<'a>
+where
+    A: Into<Artifact<'a>>,
+{
+    fn from(artifact: A) -> Self {
+        Self::Artifact(artifact.into())
+    }
+}
+
+impl<'a, R> From<Reader<R>> for ArtifactSource<'a, R> {
+    fn from(reader: Reader<R>) -> Self {
+        Self::Reader(reader.0)
+    }
+}
+
+/// Artifact input for async signing.
+#[derive(Debug)]
+pub enum AsyncArtifactSource<'a, R = futures::io::Empty> {
+    /// Raw artifact bytes or a pre-computed digest.
+    Artifact(Artifact<'a>),
+    /// Artifact bytes streamed from an async reader.
+    Reader(R),
+}
+
+/// Async reader input for [`AsyncArtifactSource`].
+#[derive(Debug)]
+pub struct AsyncReader<R>(R);
+
+/// Wrap an async reader so it can be passed to `sign_async(...).`
+pub fn async_reader<R>(reader: R) -> AsyncReader<R> {
+    AsyncReader(reader)
+}
+
+impl<'a, A> From<A> for AsyncArtifactSource<'a>
+where
+    A: Into<Artifact<'a>>,
+{
+    fn from(artifact: A) -> Self {
+        Self::Artifact(artifact.into())
+    }
+}
+
+impl<'a, R> From<AsyncReader<R>> for AsyncArtifactSource<'a, R> {
+    fn from(reader: AsyncReader<R>) -> Self {
+        Self::Reader(reader.0)
+    }
+}
 
 /// Number of bytes hashed between yields to the async executor.
 const HASH_YIELD_CHUNK_SIZE: usize = 64 * 1024;
@@ -75,6 +142,41 @@ async fn sha256_yielding(data: &[u8]) -> Sha256Hasher {
     let mut hasher = Sha256Hasher::new();
     update_sha256_yielding(&mut hasher, data).await;
     hasher
+}
+
+async fn sha256_reader_yielding(mut reader: impl std::io::Read) -> Result<Sha256Hash> {
+    let mut hasher = Sha256Hasher::new();
+    let mut buffer = [0_u8; HASH_YIELD_CHUNK_SIZE];
+    loop {
+        let read = std::io::Read::read(&mut reader, &mut buffer).map_err(Error::ArtifactRead)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        yield_now().await;
+    }
+    Ok(hasher.finalize())
+}
+
+async fn sha256_async_reader(mut reader: impl AsyncRead + Unpin) -> Result<Sha256Hash> {
+    let mut hasher = Sha256Hasher::new();
+    let mut buffer = [0_u8; HASH_YIELD_CHUNK_SIZE];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .await
+            .map_err(Error::ArtifactRead)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        // AsyncRead is allowed to remain ready indefinitely (for example,
+        // futures::io::Cursor), so the read itself is not necessarily a
+        // scheduling point. Yield explicitly to keep large inputs from
+        // monopolizing the executor thread.
+        yield_now().await;
+    }
+    Ok(hasher.finalize())
 }
 
 /// Start hashing a DSSE PAE without materializing the PAE in memory.
@@ -335,23 +437,45 @@ impl Signer {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn sign<'a>(&self, artifact: impl Into<Artifact<'a>>) -> Result<Bundle> {
-        self.validate_configuration()?;
-        let artifact = artifact.into();
+    pub async fn sign<'a, R: std::io::Read>(
+        &self,
+        artifact: impl Into<ArtifactSource<'a, R>>,
+    ) -> Result<Bundle> {
+        let artifact_hash = match artifact.into() {
+            ArtifactSource::Artifact(artifact) => self.sha256_artifact(artifact).await?,
+            ArtifactSource::Reader(reader) => sha256_reader_yielding(reader).await?,
+        };
+        self.sign_sha256(artifact_hash).await
+    }
 
-        // 1. Generate ephemeral key pair
-        let key_pair = self.generate_ephemeral_keypair()?;
+    /// Sign an artifact read synchronously to EOF in constant memory.
+    ///
+    /// Reads happen while this future is polled and may block its executor
+    /// thread. Async applications should prefer [`Signer::sign_async_reader`].
+    pub async fn sign_reader(&self, reader: impl std::io::Read) -> Result<Bundle> {
+        self.sign(crate::sign::reader(reader)).await
+    }
 
-        // 2. Get signing certificate from Fulcio
-        let leaf_cert_der = self.request_certificate(&key_pair).await?;
+    /// Sign an artifact read asynchronously to EOF in constant memory.
+    pub async fn sign_async_reader(&self, reader: impl AsyncRead + Unpin) -> Result<Bundle> {
+        self.sign_async(crate::sign::async_reader(reader)).await
+    }
 
-        // 3. + 4. Hash blobs cooperatively, or explicitly attest to the typed
-        // digest supplied by the caller, then sign in prehashed mode.
-        let (artifact_hash, signature) = match artifact {
-            Artifact::Blob(blob) => {
-                let hasher = sha256_yielding(blob).await;
-                key_pair.sign_prehashed(hasher)?
-            }
+    /// Sign an artifact or async reader.
+    pub async fn sign_async<'a, R: AsyncRead + Unpin>(
+        &self,
+        artifact: impl Into<AsyncArtifactSource<'a, R>>,
+    ) -> Result<Bundle> {
+        let artifact_hash = match artifact.into() {
+            AsyncArtifactSource::Artifact(artifact) => self.sha256_artifact(artifact).await?,
+            AsyncArtifactSource::Reader(reader) => sha256_async_reader(reader).await?,
+        };
+        self.sign_sha256(artifact_hash).await
+    }
+
+    async fn sha256_artifact(&self, artifact: Artifact<'_>) -> Result<Sha256Hash> {
+        match artifact {
+            Artifact::Blob(blob) => Ok(sha256_yielding(blob).await.finalize()),
             Artifact::Digest(digest) => {
                 if digest.algorithm() != HashAlgorithm::Sha2256 {
                     return Err(Error::Signing(format!(
@@ -359,14 +483,25 @@ impl Signer {
                         digest.algorithm()
                     )));
                 }
-                let hash = Sha256Hash::try_from_slice(digest.as_bytes())
-                    .map_err(|e| Error::Signing(e.to_string()))?;
-                let signature = key_pair.sign_digest(&hash)?;
-                (hash, signature)
+                Sha256Hash::try_from_slice(digest.as_bytes())
+                    .map_err(|e| Error::Signing(e.to_string()))
             }
-        };
+        }
+    }
 
-        // 5. Create Rekor entry (with certificate, not just public key)
+    async fn sign_sha256(&self, artifact_hash: Sha256Hash) -> Result<Bundle> {
+        self.validate_configuration()?;
+
+        // 1. Generate ephemeral key pair
+        let key_pair = self.generate_ephemeral_keypair()?;
+
+        // 2. Get signing certificate from Fulcio
+        let leaf_cert_der = self.request_certificate(&key_pair).await?;
+
+        // 3. Sign the already prepared digest.
+        let signature = key_pair.sign_digest(&artifact_hash)?;
+
+        // 4. Create Rekor entry (with certificate, not just public key)
         let tlog_entry = self
             .create_rekor_entry(&artifact_hash, &signature, &leaf_cert_der)
             .await?;
@@ -766,6 +901,35 @@ mod tests {
             let chunked = sha256_yielding(&data).await.finalize();
             assert_eq!(chunked, sigstore_crypto::sha256(&data), "size {size}");
         }
+    }
+
+    #[tokio::test]
+    async fn reader_hashing_matches_blob_hashing() {
+        let data = vec![42_u8; HASH_YIELD_CHUNK_SIZE * 2 + 7];
+        let expected = sigstore_crypto::sha256(&data);
+        assert_eq!(
+            sha256_reader_yielding(std::io::Cursor::new(&data))
+                .await
+                .unwrap(),
+            expected
+        );
+        assert_eq!(
+            sha256_async_reader(futures::io::Cursor::new(&data))
+                .await
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn async_reader_hashing_yields_even_when_reads_are_ready() {
+        let mut future = Box::pin(sha256_async_reader(futures::io::Cursor::new(vec![42_u8])));
+        let waker = futures::task::noop_waker();
+        let mut context = std::task::Context::from_waker(&waker);
+        assert!(matches!(
+            std::future::Future::poll(future.as_mut(), &mut context),
+            std::task::Poll::Pending
+        ));
     }
 
     #[tokio::test]

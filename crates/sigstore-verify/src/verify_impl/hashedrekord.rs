@@ -3,12 +3,11 @@
 //! This module handles validation of hashedrekord entries, including
 //! artifact hash verification and certificate/signature matching.
 
+use crate::artifact::PreparedArtifact;
 use crate::error::{Error, Result};
 use sigstore_rekor::body::RekorEntryBody;
 use sigstore_types::bundle::VerificationMaterialContent;
-use sigstore_types::{
-    Artifact, Bundle, DerPublicKey, Sha256Hash, SignatureContent, TransparencyLogEntry,
-};
+use sigstore_types::{Bundle, DerPublicKey, Sha256Hash, SignatureContent, TransparencyLogEntry};
 use x509_cert::der::Decode;
 use x509_cert::Certificate;
 
@@ -23,7 +22,7 @@ use x509_cert::Certificate;
 pub(crate) fn verify_hashedrekord_entry(
     entry: &TransparencyLogEntry,
     bundle: &Bundle,
-    artifact: &Artifact<'_>,
+    artifact: &PreparedArtifact<'_>,
     managed_key: Option<&DerPublicKey>,
 ) -> Result<()> {
     // Parse the Rekor entry body (convert canonicalized body to base64 string)
@@ -84,23 +83,14 @@ pub(crate) fn verify_hashedrekord_entry(
 }
 
 /// Compute the SHA-256 digest from an artifact for Rekor inclusion proof
-fn compute_artifact_digest(artifact: &Artifact<'_>) -> Result<Sha256Hash> {
-    match artifact {
-        Artifact::Blob(bytes) => Ok(sigstore_crypto::sha256(bytes)),
-        Artifact::Digest(digest) => {
-            if digest.algorithm() != sigstore_types::HashAlgorithm::Sha2256 {
-                return Err(Error::Verification(format!(
-                    "Rekor entry verification requires SHA-256, got {}",
-                    digest.algorithm()
-                )));
-            }
-            Sha256Hash::try_from_slice(digest.as_bytes()).map_err(|_| {
-                Error::Verification(
-                    "Rekor entry verification requires a 32-byte SHA-256 digest".to_string(),
-                )
-            })
-        }
-    }
+fn compute_artifact_digest(artifact: &PreparedArtifact<'_>) -> Result<Sha256Hash> {
+    Sha256Hash::try_from_slice(&artifact.digest(sigstore_types::HashAlgorithm::Sha2256)?).map_err(
+        |_| {
+            Error::Verification(
+                "Rekor entry verification requires a 32-byte SHA-256 digest".to_string(),
+            )
+        },
+    )
 }
 
 /// Validate artifact hash matches expected hash

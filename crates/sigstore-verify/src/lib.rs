@@ -24,6 +24,7 @@
 //! # }
 //! ```
 
+mod artifact;
 pub mod error;
 mod verify;
 
@@ -40,5 +41,8 @@ pub use sigstore_types as types;
 
 pub use error::{Error, Result};
 pub use verify::{
-    verify, verify_with_key, CertificatePolicy, VerificationPolicy, VerificationResult, Verifier,
+    async_reader, reader, verify, verify_async, verify_async_reader, verify_reader,
+    verify_with_key, verify_with_key_async, verify_with_key_async_reader, verify_with_key_reader,
+    ArtifactSource, AsyncArtifactSource, CertificatePolicy, VerificationPolicy, VerificationResult,
+    Verifier,
 };

@@ -44,6 +44,13 @@ let result = verify(artifact_bytes.as_slice(), &bundle, &policy, &root)?;
 let digest = Sha256Hash::from_hex("b94d27b9...")?;
 let result = verify(digest, &bundle, &policy, &root)?;
 
+// Or stream a large artifact in constant memory
+let file = std::fs::File::open("large-artifact.tar.gz")?;
+let result = sigstore_verify::verify_reader(file, &bundle, &policy, &root)?;
+
+// Runtime-independent futures_io::AsyncRead is also supported
+let result = sigstore_verify::verify_async_reader(async_reader, &bundle, &policy, &root).await?;
+
 // Using the Verifier struct directly
 let verifier = Verifier::new(&root);
 let result = verifier.verify(artifact_bytes.as_slice(), &bundle, &policy)?;
