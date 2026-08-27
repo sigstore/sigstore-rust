@@ -41,10 +41,15 @@ pub fn verify_tlog_entries(
         // Verify Merkle inclusion proof, checkpoint signature and SET
         verify_entry_inclusion(entry, trusted_root)?;
 
-        // Validate integrated time (absent in v2 entries, which use RFC 3161)
-        if let Some(time) = entry.integrated_time {
-            validate_integrated_time(time, jiff::Timestamp::now(), not_before, not_after)?;
-            integrated_time_result = Some(time);
+        // Only Rekor v1 authenticates integratedTime via the SET. Rekor v2
+        // uses RFC 3161 timestamps; ignore an unauthenticated top-level value.
+        let is_rekor_v2 =
+            entry.kind_version.kind == "hashedrekord" && entry.kind_version.version == "0.0.2";
+        if !is_rekor_v2 {
+            if let Some(time) = entry.integrated_time {
+                validate_integrated_time(time, jiff::Timestamp::now(), not_before, not_after)?;
+                integrated_time_result = Some(time);
+            }
         }
     }
 
@@ -90,10 +95,10 @@ fn validate_integrated_time(
 /// This performs all per-entry transparency log crypto checks:
 /// - If an inclusion proof is present:
 ///   - verifies the Merkle inclusion proof, i.e. that the leaf hash of the
-///     entry's canonicalized body hashes up to the proof's root hash, and
-///   - verifies the checkpoint: its root hash must match the proof's root
-///     hash, and its signature must verify against a Rekor key from the
-///     trusted root (see [`verify_checkpoint`]).
+///     entry's canonicalized body hashes up to the authenticated root, and
+///   - verifies the checkpoint signature against a Rekor key from the trusted
+///     root (see [`verify_checkpoint`]). Rekor v1 additionally requires its
+///     duplicated proof root to match the checkpoint root.
 /// - If an inclusion promise (SET) is present, verifies it against the
 ///   Rekor key for the entry's log ID (see [`verify_set`]).
 ///
@@ -108,6 +113,7 @@ pub fn verify_entry_inclusion(
         verify_checkpoint(
             &inclusion_proof.checkpoint.envelope,
             inclusion_proof,
+            is_rekor_v2(entry),
             trusted_root,
         )?;
     }
@@ -122,19 +128,22 @@ pub fn verify_entry_inclusion(
 /// Verify the Merkle inclusion proof of a tlog entry.
 ///
 /// Computes the leaf hash of the entry's canonicalized body and verifies
-/// that, combined with the proof hashes, it reproduces the proof's root
-/// hash. Note that this alone does not authenticate the root hash; the
-/// accompanying checkpoint signature check in [`verify_checkpoint`] binds
-/// the root hash to a key in the trusted root.
+/// that, combined with the proof hashes, it reproduces the expected root
+/// hash. Rekor v2 takes the index, tree size, and root from the top-level entry
+/// and signed checkpoint rather than unauthenticated duplicate proof fields.
+/// The checkpoint signature check authenticates the selected root.
 fn verify_merkle_inclusion(entry: &TransparencyLogEntry, proof: &InclusionProof) -> Result<()> {
-    let leaf_index: u64 = proof
-        .log_index
-        .as_u64()
-        .ok_or_else(|| Error::Verification("invalid log_index in inclusion proof".to_string()))?;
-    let tree_size: u64 = proof
-        .tree_size
-        .try_into()
-        .map_err(|_| Error::Verification("invalid tree_size in inclusion proof".to_string()))?;
+    let (leaf_index, tree_size, root_hash) = if is_rekor_v2(entry) {
+        let checkpoint = proof.checkpoint.parse().map_err(|e| {
+            Error::Verification(format!("failed to parse Rekor v2 checkpoint: {e}"))
+        })?;
+        let leaf_index = entry.log_index.value();
+        (leaf_index, checkpoint.tree_size, checkpoint.root_hash)
+    } else {
+        let leaf_index = proof.log_index.value();
+        let tree_size = proof.tree_size;
+        (leaf_index, tree_size, proof.root_hash)
+    };
 
     let leaf_hash = sigstore_merkle::hash_leaf(entry.canonicalized_body.as_bytes());
 
@@ -143,7 +152,7 @@ fn verify_merkle_inclusion(entry: &TransparencyLogEntry, proof: &InclusionProof)
         leaf_index,
         tree_size,
         &proof.hashes,
-        &proof.root_hash,
+        &root_hash,
     )
     .map_err(|e| Error::Verification(format!("inclusion proof verification failed: {}", e)))
 }
@@ -152,19 +161,19 @@ fn verify_merkle_inclusion(entry: &TransparencyLogEntry, proof: &InclusionProof)
 pub fn verify_checkpoint(
     checkpoint_envelope: &str,
     inclusion_proof: &InclusionProof,
+    is_v2: bool,
     trusted_root: &TrustedRoot,
 ) -> Result<()> {
     // Parse the checkpoint (signed note)
     let checkpoint = Checkpoint::from_text(checkpoint_envelope)
         .map_err(|e| Error::Verification(format!("Failed to parse checkpoint: {}", e)))?;
 
-    // Verify that the checkpoint's root hash matches the inclusion proof's root hash
+    // Rekor v1 requires internal consistency with its duplicate proof root.
+    // Rekor v2 explicitly treats that field as unauthenticated and ignores it.
     let checkpoint_root_hash = &checkpoint.root_hash;
-
-    // The root hash in the inclusion proof is already a Sha256Hash
     let proof_root_hash = &inclusion_proof.root_hash;
 
-    if checkpoint_root_hash.as_bytes() != proof_root_hash.as_bytes() {
+    if !is_v2 && checkpoint_root_hash.as_bytes() != proof_root_hash.as_bytes() {
         return Err(Error::Verification(format!(
             "Checkpoint root hash mismatch: expected {}, got {}",
             checkpoint_root_hash.to_hex(),
@@ -172,25 +181,35 @@ pub fn verify_checkpoint(
         )));
     }
 
-    // TrustedRoot constructs the keyring from the declared key IDs and keeps
+    // A checkpoint can contain log and witness signatures. TrustedRoot keeps
     // validity metadata alongside each parsed verification key. Four-byte
-    // checkpoint hints may collide, so try every matching key.
+    // checkpoint hints may collide, so try every matching key and do not let
+    // an invalid matching signature suppress a later valid log signature.
     let rekor_keys = trusted_root
         .rekor_keys()
         .map_err(|e| Error::Verification(format!("failed to build Rekor keyring: {e}")))?;
     let message = checkpoint.signed_data();
     let now = jiff::Timestamp::now();
+    let mut found_matching_key = false;
     for sig in &checkpoint.signatures {
         for key in rekor_keys.keys_by_hint(&sig.key_id, now) {
+            found_matching_key = true;
             if key.verify(message, &sig.signature).is_ok() {
                 return Ok(());
             }
         }
     }
 
-    Err(Error::Verification(
-        "No matching Rekor key found for checkpoint signature".to_string(),
-    ))
+    let message = if found_matching_key {
+        "No valid Rekor signature found on checkpoint"
+    } else {
+        "No matching Rekor key found for checkpoint signature"
+    };
+    Err(Error::Verification(message.to_string()))
+}
+
+fn is_rekor_v2(entry: &TransparencyLogEntry) -> bool {
+    entry.kind_version.kind == "hashedrekord" && entry.kind_version.version == "0.0.2"
 }
 
 #[derive(Serialize)]
@@ -241,10 +260,7 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
 
     // Construct the payload (base64-encoded body)
     let body = entry.canonicalized_body.to_base64();
-    let log_index = entry
-        .log_index
-        .as_u64()
-        .ok_or_else(|| Error::Verification("Invalid log index".into()))? as i64;
+    let log_index = entry.log_index.as_i64();
 
     // Log ID for payload must be hex encoded
     let log_id_bytes = base64::engine::general_purpose::STANDARD

@@ -20,9 +20,11 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use sigstore_protobuf_specs::dev::sigstore::bundle::v1::Bundle as PbBundle;
+use sigstore_protobuf_specs::dev::sigstore::rekor::v2::CreateEntryRequest as PbCreateEntryRequest;
 use sigstore_protobuf_specs::dev::sigstore::trustroot::v1::SigningConfig as PbSigningConfig;
 use sigstore_protobuf_specs::dev::sigstore::trustroot::v1::TrustedRoot as PbTrustedRoot;
 
+use sigstore_rekor::HashedRekordV2;
 use sigstore_trust_root::{SigningConfig, TrustedRoot};
 use sigstore_types::Bundle;
 
@@ -179,6 +181,51 @@ fn signing_config_staging() {
     );
 }
 
+// ==== Rekor v2 write requests ====
+//
+// Only hashedrekord is intentional. The generated 0.5.1 crate still contains
+// the superseded DsseRequestV002 message, but the finalized Rekor v2 protocol
+// requires DSSE envelopes to be submitted as hashedrekord entries:
+// https://github.com/sigstore/architecture-docs/pull/63
+
+#[test]
+fn rekor_v2_hashedrekord_certificate_request() {
+    check_exact::<HashedRekordV2, PbCreateEntryRequest>(
+        "Rekor v2 certificate request",
+        r#"{
+          "hashedRekordRequestV002": {
+            "digest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "signature": {
+              "content": "c2lnbmF0dXJl",
+              "verifier": {
+                "x509Certificate": {"rawBytes": "MAA="},
+                "keyDetails": "PKIX_ECDSA_P256_SHA_256"
+              }
+            }
+          }
+        }"#,
+    );
+}
+
+#[test]
+fn rekor_v2_hashedrekord_public_key_request() {
+    check_exact::<HashedRekordV2, PbCreateEntryRequest>(
+        "Rekor v2 public-key request",
+        r#"{
+          "hashedRekordRequestV002": {
+            "digest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "signature": {
+              "content": "c2lnbmF0dXJl",
+              "verifier": {
+                "publicKey": {"rawBytes": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="},
+                "keyDetails": "PKIX_ECDSA_P256_SHA_256"
+              }
+            }
+          }
+        }"#,
+    );
+}
+
 // ==== Bundles across versions, content types and verification materials ====
 
 #[test]
@@ -219,6 +266,26 @@ fn bundle_v03_hashedrekord_v002_rekor2() {
         "conda-attestation-rekor2.sigstore.json",
         include_str!(
             "../../sigstore-verify/test_data/bundles/conda-attestation-rekor2.sigstore.json"
+        ),
+    );
+}
+
+#[test]
+fn bundle_v03_sigstore_python_rekor_v2_message_signature() {
+    check_bundle(
+        "sigstore-python/staging-rekor-v2.txt.sigstore.json",
+        include_str!(
+            "../../sigstore-verify/test_data/upstream/sigstore-python/staging-rekor-v2.txt.sigstore.json"
+        ),
+    );
+}
+
+#[test]
+fn bundle_v03_sigstore_python_rekor_v2_dsse() {
+    check_bundle(
+        "sigstore-python/a.dsse.staging-rekor-v2.txt.sigstore.json",
+        include_str!(
+            "../../sigstore-verify/test_data/upstream/sigstore-python/a.dsse.staging-rekor-v2.txt.sigstore.json"
         ),
     );
 }

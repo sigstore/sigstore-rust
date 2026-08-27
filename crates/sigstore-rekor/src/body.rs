@@ -3,6 +3,7 @@
 //! This module provides typed representations of the canonicalized body
 //! content for different Rekor entry types and versions.
 
+use crate::entry::RekorV2KeyDetails;
 use serde::{Deserialize, Serialize};
 use sigstore_types::encoding::base64_bytes;
 use sigstore_types::{
@@ -67,14 +68,25 @@ pub struct PublicKeyContent {
 }
 
 impl PublicKeyContent {
-    /// Parse the PEM content and return a DER certificate
-    pub fn to_certificate(&self) -> Result<DerCertificate, crate::error::Error> {
+    /// Parse the PEM content and return a DER certificate.
+    pub fn parse_certificate(&self) -> Result<DerCertificate, crate::error::Error> {
         let pem_bytes = self.content.as_bytes();
         let pem_str = String::from_utf8(pem_bytes.to_vec()).map_err(|e| {
             crate::error::Error::InvalidResponse(format!("PEM not valid UTF-8: {}", e))
         })?;
         DerCertificate::from_pem(&pem_str).map_err(|e| {
             crate::error::Error::InvalidResponse(format!("failed to parse certificate PEM: {}", e))
+        })
+    }
+
+    /// Parse the PEM content and return a DER SubjectPublicKeyInfo public key.
+    pub fn parse_public_key(&self) -> Result<DerPublicKey, crate::error::Error> {
+        let pem_bytes = self.content.as_bytes();
+        let pem_str = String::from_utf8(pem_bytes.to_vec()).map_err(|e| {
+            crate::error::Error::InvalidResponse(format!("PEM not valid UTF-8: {}", e))
+        })?;
+        DerPublicKey::from_pem(&pem_str).map_err(|e| {
+            crate::error::Error::InvalidResponse(format!("failed to parse public key PEM: {}", e))
         })
     }
 }
@@ -102,6 +114,8 @@ pub struct HashedRekordV002Data {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HashedRekordV002DataInner {
+    /// Algorithm used for the logged digest.
+    pub algorithm: HashAlgorithm,
     /// Base64-encoded hash digest
     #[serde(with = "base64_bytes")]
     pub digest: Vec<u8>,
@@ -117,6 +131,8 @@ pub struct HashedRekordV002Signature {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HashedRekordV002Verifier {
+    /// Signature algorithm and key encoding authenticated by the log entry.
+    pub key_details: RekorV2KeyDetails,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x509_certificate: Option<X509CertificateRaw>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -177,8 +193,8 @@ pub struct DsseV001Signature {
 }
 
 impl DsseV001Signature {
-    /// Parse the PEM verifier and return a DER certificate
-    pub fn to_certificate(&self) -> Result<DerCertificate, crate::error::Error> {
+    /// Parse the PEM verifier and return a DER certificate.
+    pub fn parse_certificate(&self) -> Result<DerCertificate, crate::error::Error> {
         let pem_bytes = self.verifier.as_bytes();
         let pem_str = String::from_utf8(pem_bytes.to_vec()).map_err(|e| {
             crate::error::Error::InvalidResponse(format!("PEM not valid UTF-8: {}", e))
@@ -281,7 +297,7 @@ pub struct IntotoSignature {
 
 impl IntotoSignature {
     /// Parse the PEM verifier as an X.509 certificate.
-    pub fn to_certificate(&self) -> Result<DerCertificate, crate::error::Error> {
+    pub fn parse_certificate(&self) -> Result<DerCertificate, crate::error::Error> {
         let pem_str = self.verifier_pem()?;
         DerCertificate::from_pem(&pem_str).map_err(|e| {
             crate::error::Error::InvalidResponse(format!(
@@ -292,7 +308,7 @@ impl IntotoSignature {
     }
 
     /// Parse the PEM verifier as a SubjectPublicKeyInfo public key.
-    pub fn to_public_key(&self) -> Result<DerPublicKey, crate::error::Error> {
+    pub fn parse_public_key(&self) -> Result<DerPublicKey, crate::error::Error> {
         let pem_str = self.verifier_pem()?;
         DerPublicKey::from_pem(&pem_str).map_err(|e| {
             crate::error::Error::InvalidResponse(format!(

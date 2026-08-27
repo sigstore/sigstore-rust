@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 
 [dev-dependencies]
+sigstore-rekor = { workspace = true }
 sigstore-types = { workspace = true }
 sigstore-trust-root = { workspace = true, default-features = false }
 sigstore_protobuf_specs = "0.5.1"

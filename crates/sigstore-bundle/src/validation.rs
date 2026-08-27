@@ -203,10 +203,10 @@ fn validate_common(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
 /// This is a structural check only:
 ///
 /// - the checkpoint envelope must parse as a signed note,
-/// - `log_index` and `tree_size` must be valid and in range
-///   (`log_index < tree_size`),
-/// - the proof's `root_hash` must equal the root hash embedded in its own
-///   checkpoint (internal consistency between two fields of the bundle).
+/// - for Rekor v1, the duplicated proof index, tree size, and root hash must
+///   be internally consistent,
+/// - for Rekor v2, those duplicated fields are ignored and the top-level log
+///   index is checked against the signed checkpoint's tree size.
 ///
 /// It does NOT verify the Merkle proof against the root hash, and it does
 /// NOT verify the checkpoint signature. Those cryptographic checks are
@@ -220,30 +220,30 @@ fn validate_inclusion_proof_structure(bundle: &Bundle) -> Result<()> {
                 .parse()
                 .map_err(|e| Error::Validation(format!("failed to parse checkpoint: {}", e)))?;
 
-            // Indices must be valid and in range
-            let leaf_index: u64 = proof
-                .log_index
-                .as_u64()
-                .ok_or_else(|| Error::Validation("invalid log_index in proof".to_string()))?;
-            let tree_size: u64 = proof
-                .tree_size
-                .try_into()
-                .map_err(|_| Error::Validation("invalid tree_size in proof".to_string()))?;
-            if leaf_index >= tree_size {
-                return Err(Error::Validation(format!(
-                    "inclusion proof log_index {} out of range for tree_size {}",
-                    leaf_index, tree_size
-                )));
-            }
-
-            // The proof's root hash must be consistent with the root hash
-            // recorded in its own checkpoint. This is internal consistency
-            // of the bundle, not a trust decision: neither hash has been
-            // authenticated at this point.
-            if checkpoint.root_hash != proof.root_hash {
-                return Err(Error::Validation(
-                    "inclusion proof root hash does not match checkpoint root hash".to_string(),
-                ));
+            let is_v2 =
+                entry.kind_version.kind == "hashedrekord" && entry.kind_version.version == "0.0.2";
+            if is_v2 {
+                let leaf_index = entry.log_index.value();
+                if leaf_index >= checkpoint.tree_size {
+                    return Err(Error::Validation(format!(
+                        "top-level log_index {} out of range for checkpoint tree size {}",
+                        leaf_index, checkpoint.tree_size
+                    )));
+                }
+            } else {
+                let leaf_index = proof.log_index.value();
+                let tree_size = proof.tree_size;
+                if leaf_index >= tree_size {
+                    return Err(Error::Validation(format!(
+                        "inclusion proof log_index {} out of range for tree_size {}",
+                        leaf_index, tree_size
+                    )));
+                }
+                if checkpoint.root_hash != proof.root_hash {
+                    return Err(Error::Validation(
+                        "inclusion proof root hash does not match checkpoint root hash".to_string(),
+                    ));
+                }
             }
         }
     }
