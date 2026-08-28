@@ -201,9 +201,7 @@ async fn main() {
     }
     println!("  Bundle: {}", bundle_path);
     println!("  Media Type: {}", bundle.media_type);
-    if let Ok(v) = bundle.version() {
-        println!("  Version: {:?}", v);
-    }
+    println!("  Version: {:?}", bundle.version());
     if let Some(id) = &identity {
         println!("  Required Identity: {}", id);
     }

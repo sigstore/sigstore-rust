@@ -67,14 +67,8 @@ fn test_parse_v01_bundle() {
     let bundle = Bundle::from_json(V01_BUNDLE).expect("Failed to parse v0.1 bundle");
 
     // Check media type
-    assert_eq!(
-        bundle.media_type,
-        "application/vnd.dev.sigstore.bundle+json;version=0.1"
-    );
-
-    // Check version
-    let version = bundle.version().expect("Failed to get version");
-    assert_eq!(version, sigstore_types::MediaType::Bundle0_1);
+    assert_eq!(bundle.media_type, sigstore_types::MediaType::Bundle0_1);
+    assert_eq!(bundle.version(), sigstore_types::MediaType::Bundle0_1);
 
     // Check it has x509CertificateChain (not single certificate)
     match &bundle.verification_material.content {
@@ -128,14 +122,8 @@ fn test_parse_v03_bundle() {
     let bundle = Bundle::from_json(V03_BUNDLE_WITH_PROOF).expect("Failed to parse v0.3 bundle");
 
     // Check media type
-    assert_eq!(
-        bundle.media_type,
-        "application/vnd.dev.sigstore.bundle.v0.3+json"
-    );
-
-    // Check version
-    let version = bundle.version().expect("Failed to get version");
-    assert_eq!(version, sigstore_types::MediaType::Bundle0_3);
+    assert_eq!(bundle.media_type, sigstore_types::MediaType::Bundle0_3);
+    assert_eq!(bundle.version(), sigstore_types::MediaType::Bundle0_3);
 
     // Check it has single certificate (not chain)
     match &bundle.verification_material.content {
@@ -218,10 +206,7 @@ fn test_v03_github_attestation_no_tlog_entries() {
     let bundle =
         Bundle::from_json(V03_BUNDLE_GITHUB_NO_TLOG).expect("Failed to parse GitHub bundle");
 
-    assert_eq!(
-        bundle.version().unwrap(),
-        sigstore_types::MediaType::Bundle0_3
-    );
+    assert_eq!(bundle.version(), sigstore_types::MediaType::Bundle0_3);
     assert!(bundle.verification_material.tlog_entries.is_empty());
     assert_eq!(
         bundle
@@ -294,8 +279,8 @@ fn test_media_type_parsing() {
     let v01 = Bundle::from_json(V01_BUNDLE).expect("Failed to parse v0.1");
     let v03 = Bundle::from_json(V03_BUNDLE_WITH_PROOF).expect("Failed to parse v0.3");
 
-    assert_eq!(v01.version().unwrap(), sigstore_types::MediaType::Bundle0_1);
-    assert_eq!(v03.version().unwrap(), sigstore_types::MediaType::Bundle0_3);
+    assert_eq!(v01.version(), sigstore_types::MediaType::Bundle0_1);
+    assert_eq!(v03.version(), sigstore_types::MediaType::Bundle0_3);
 }
 
 // ==== Error Cases ====
@@ -350,8 +335,7 @@ fn test_v03_with_certificate_chain_fails() {
                     "logIndex": "1",
                     "rootHash": "{}",
                     "treeSize": "2",
-                    "hashes": [],
-                    "checkpoint": {{"envelope": "test\n1\n{}\n"}}
+                    "hashes": []
                 }},
                 "canonicalizedBody": "dGVzdA=="
             }}]
@@ -362,7 +346,7 @@ fn test_v03_with_certificate_chain_fails() {
             "signatures": [{{"sig": "dGVzdA=="}}]
         }}
     }}"#,
-        fake_hash, fake_hash
+        fake_hash
     );
 
     let bundle = Bundle::from_json(&json).expect("Failed to parse bundle");
@@ -460,9 +444,5 @@ fn test_invalid_media_type() {
         }
     }"#;
 
-    let bundle = Bundle::from_json(json).expect("Failed to parse bundle");
-
-    // Should fail with invalid media type
-    let result = validate_bundle(&bundle);
-    assert!(result.is_err(), "Should fail with invalid media type");
+    assert!(Bundle::from_json(json).is_err());
 }

@@ -3,7 +3,7 @@
 //! These tests use real bundle fixtures from the sigstore-python project.
 
 use sigstore_bundle::{validate_bundle, validate_bundle_with_options, ValidationOptions};
-use sigstore_types::{Bundle, LogIndex, MediaType};
+use sigstore_types::{Bundle, KindVersion, LogIndex, MediaType};
 
 /// Test bundle JSON from sigstore-python/test/assets/bundle_v3.txt.sigstore
 const BUNDLE_V3_JSON: &str = r#"{
@@ -65,7 +65,7 @@ fn test_parse_v3_bundle() {
     let bundle = Bundle::from_json(BUNDLE_V3_JSON).unwrap();
 
     // Check media type
-    assert_eq!(bundle.version().unwrap(), MediaType::Bundle0_3);
+    assert_eq!(bundle.version(), MediaType::Bundle0_3);
 
     // Check we have a certificate
     assert!(bundle.signing_certificate().is_some());
@@ -78,8 +78,7 @@ fn test_parse_v3_bundle() {
         entry.integrated_time,
         Some(jiff::Timestamp::from_second(1712085549).unwrap())
     );
-    assert_eq!(entry.kind_version.kind, "hashedrekord");
-    assert_eq!(entry.kind_version.version, "0.0.1");
+    assert_eq!(entry.kind_version, KindVersion::HashedRekordV001);
 
     // Check inclusion proof exists
     assert!(bundle.has_inclusion_proof());
@@ -122,7 +121,7 @@ fn test_v3_bundle_checkpoint_parsing() {
     let proof = entry.inclusion_proof.as_ref().unwrap();
 
     // Parse the checkpoint
-    let checkpoint = proof.checkpoint.parse().unwrap();
+    let checkpoint = proof.checkpoint.checkpoint().unwrap();
 
     assert_eq!(
         checkpoint.origin,
@@ -186,8 +185,7 @@ fn test_invalid_bundle_version() {
         }
     }"#;
 
-    let bundle = Bundle::from_json(invalid_json).unwrap();
-    assert!(bundle.version().is_err());
+    assert!(Bundle::from_json(invalid_json).is_err());
 }
 
 #[test]
