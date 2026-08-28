@@ -441,7 +441,7 @@ fn compute_artifact_digest_algo(artifact: &Artifact<'_>, algo: HashAlgorithm) ->
         Artifact::Blob(bytes) => match algo {
             HashAlgorithm::Sha2256 => Ok(sigstore_crypto::sha256(bytes).as_bytes().to_vec()),
             HashAlgorithm::Sha2384 => Ok(sigstore_crypto::sha384(bytes)),
-            HashAlgorithm::Sha2512 => Ok(sigstore_crypto::sha512(bytes)),
+            HashAlgorithm::Sha2512 => Ok(sigstore_crypto::sha512(bytes).as_bytes().to_vec()),
         },
         Artifact::Digest(digest) => {
             if digest.algorithm() != algo {
@@ -500,8 +500,7 @@ fn verify_dsse_artifact_binding(
     let matches = match artifact {
         Artifact::Blob(bytes) => {
             let sha256 = sigstore_crypto::sha256(bytes);
-            let sha512 = Sha512Hash::try_from_slice(&sigstore_crypto::sha512(bytes))
-                .expect("SHA-512 produces a 64-byte digest");
+            let sha512 = sigstore_crypto::sha512(bytes);
             statement.matches_sha256(&sha256) || statement.matches_sha512(&sha512)
         }
         Artifact::Digest(digest) => match digest.algorithm() {
