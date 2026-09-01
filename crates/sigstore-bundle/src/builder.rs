@@ -8,7 +8,7 @@ use sigstore_types::{
         TransparencyLogEntry, VerificationMaterial, VerificationMaterialContent,
     },
     Bundle, CanonicalizedBody, DerCertificate, DsseEnvelope, LogIndex, LogKeyId, MediaType,
-    Sha256Hash, SignatureBytes, SignedTimestamp, TimestampToken,
+    Result as TypesResult, Sha256Hash, SignatureBytes, SignedTimestamp, TimestampToken,
 };
 
 /// Verification material for v0.3 bundles.
@@ -118,7 +118,7 @@ impl BundleV03 {
         };
 
         Bundle {
-            media_type: MediaType::Bundle0_3.as_str().to_string(),
+            media_type: MediaType::Bundle0_3,
             verification_material: VerificationMaterial {
                 content: verification_content,
                 tlog_entries: self.tlog_entries,
@@ -135,8 +135,7 @@ impl BundleV03 {
 pub struct TlogEntryBuilder {
     log_index: u64,
     log_id: String,
-    kind: String,
-    kind_version: String,
+    kind_version: KindVersion,
     integrated_time: Option<jiff::Timestamp>,
     canonicalized_body: Vec<u8>,
     inclusion_promise: Option<InclusionPromise>,
@@ -149,8 +148,7 @@ impl TlogEntryBuilder {
         Self {
             log_index: 0,
             log_id: String::new(),
-            kind: "hashedrekord".to_string(),
-            kind_version: "0.0.1".to_string(),
+            kind_version: KindVersion::HashedRekordV001,
             integrated_time: None,
             canonicalized_body: Vec::new(),
             inclusion_promise: None,
@@ -165,9 +163,8 @@ impl TlogEntryBuilder {
     ///
     /// # Arguments
     /// * `entry` - The LogEntry returned from the Rekor API
-    /// * `kind` - The entry kind (e.g., "hashedrekord", "dsse")
-    /// * `version` - The entry version (e.g., "0.0.1")
-    pub fn from_log_entry(entry: &LogEntry, kind: &str, version: &str) -> Self {
+    /// * `kind_version` - The typed Rekor entry format
+    pub fn from_log_entry(entry: &LogEntry, kind_version: KindVersion) -> TypesResult<Self> {
         // Convert hex log_id to base64 using the type-safe method
         let log_id_base64 = entry
             .log_id
@@ -177,8 +174,7 @@ impl TlogEntryBuilder {
         let mut builder = Self {
             log_index: entry.log_index,
             log_id: log_id_base64,
-            kind: kind.to_string(),
-            kind_version: version.to_string(),
+            kind_version,
             integrated_time: entry.integrated_time,
             canonicalized_body: entry.body.as_bytes().to_vec(),
             inclusion_promise: None,
@@ -194,31 +190,17 @@ impl TlogEntryBuilder {
             }
 
             if let Some(proof) = &verification.inclusion_proof {
-                // Rekor V1 API returns hashes as hex, bundle format expects base64
-                // Convert root_hash from hex to Sha256Hash
-                let root_hash = Sha256Hash::from_hex(&proof.root_hash)
-                    .unwrap_or_else(|_| Sha256Hash::from_bytes([0u8; 32]));
-
-                // Convert all proof hashes from hex to Sha256Hash
-                let hashes: Vec<Sha256Hash> = proof
-                    .hashes
-                    .iter()
-                    .filter_map(|h| Sha256Hash::from_hex(h).ok())
-                    .collect();
-
                 builder.inclusion_proof = Some(InclusionProof {
                     log_index: LogIndex::new(proof.log_index),
-                    root_hash,
+                    root_hash: proof.root_hash,
                     tree_size: proof.tree_size,
-                    hashes,
-                    checkpoint: CheckpointData {
-                        envelope: proof.checkpoint.clone(),
-                    },
+                    hashes: proof.hashes.clone(),
+                    checkpoint: CheckpointData::new(proof.checkpoint.clone())?,
                 });
             }
         }
 
-        builder
+        Ok(builder)
     }
 
     /// Set the log index.
@@ -256,17 +238,15 @@ impl TlogEntryBuilder {
         tree_size: u64,
         hashes: Vec<Sha256Hash>,
         checkpoint: String,
-    ) -> Self {
+    ) -> TypesResult<Self> {
         self.inclusion_proof = Some(InclusionProof {
             log_index: LogIndex::new(log_index),
             root_hash,
             tree_size,
             hashes,
-            checkpoint: CheckpointData {
-                envelope: checkpoint,
-            },
+            checkpoint: CheckpointData::new(checkpoint)?,
         });
-        self
+        Ok(self)
     }
 
     /// Build the transparency log entry.
@@ -276,10 +256,7 @@ impl TlogEntryBuilder {
             log_id: LogId {
                 key_id: LogKeyId::new(self.log_id),
             },
-            kind_version: KindVersion {
-                kind: self.kind,
-                version: self.kind_version,
-            },
+            kind_version: self.kind_version,
             integrated_time: self.integrated_time,
             inclusion_promise: self.inclusion_promise,
             inclusion_proof: self.inclusion_proof,

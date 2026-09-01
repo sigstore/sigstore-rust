@@ -9,7 +9,9 @@ use sigstore_bundle::ValidationOptions;
 use sigstore_crypto::{parse_certificate_info, KeyAlgorithm, SigningScheme, VerificationKey};
 use sigstore_trust_root::TrustedRoot;
 
-use sigstore_types::{Artifact, Bundle, HashAlgorithm, SignatureContent, Statement};
+use sigstore_types::{
+    Artifact, Bundle, HashAlgorithm, Sha256Hash, Sha512Hash, SignatureContent, Statement,
+};
 
 /// How the signing certificate is verified.
 ///
@@ -439,7 +441,7 @@ fn compute_artifact_digest_algo(artifact: &Artifact<'_>, algo: HashAlgorithm) ->
         Artifact::Blob(bytes) => match algo {
             HashAlgorithm::Sha2256 => Ok(sigstore_crypto::sha256(bytes).as_bytes().to_vec()),
             HashAlgorithm::Sha2384 => Ok(sigstore_crypto::sha384(bytes)),
-            HashAlgorithm::Sha2512 => Ok(sigstore_crypto::sha512(bytes)),
+            HashAlgorithm::Sha2512 => Ok(sigstore_crypto::sha512(bytes).as_bytes().to_vec()),
         },
         Artifact::Digest(digest) => {
             if digest.algorithm() != algo {
@@ -497,23 +499,26 @@ fn verify_dsse_artifact_binding(
     }
     let matches = match artifact {
         Artifact::Blob(bytes) => {
-            let sha256 = hex::encode(sigstore_crypto::sha256(bytes));
-            let sha512 = hex::encode(sigstore_crypto::sha512(bytes));
+            let sha256 = sigstore_crypto::sha256(bytes);
+            let sha512 = sigstore_crypto::sha512(bytes);
             statement.matches_sha256(&sha256) || statement.matches_sha512(&sha512)
         }
-        Artifact::Digest(digest) => {
-            let value = hex::encode(digest.as_bytes());
-            match digest.algorithm() {
-                HashAlgorithm::Sha2256 => statement.matches_sha256(&value),
-                HashAlgorithm::Sha2512 => statement.matches_sha512(&value),
-                algorithm => {
-                    return Err(Error::Verification(format!(
-                        "unsupported pre-computed artifact digest algorithm: {}",
-                        algorithm
-                    )))
-                }
+        Artifact::Digest(digest) => match digest.algorithm() {
+            HashAlgorithm::Sha2256 => statement.matches_sha256(
+                &Sha256Hash::try_from_slice(digest.as_bytes())
+                    .expect("typed SHA-256 digest has 32 bytes"),
+            ),
+            HashAlgorithm::Sha2512 => statement.matches_sha512(
+                &Sha512Hash::try_from_slice(digest.as_bytes())
+                    .expect("typed SHA-512 digest has 64 bytes"),
+            ),
+            algorithm => {
+                return Err(Error::Verification(format!(
+                    "unsupported pre-computed artifact digest algorithm: {}",
+                    algorithm
+                )))
             }
-        }
+        },
     };
 
     if !matches {
