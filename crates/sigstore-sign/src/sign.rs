@@ -307,6 +307,7 @@ impl Signer {
     /// # }
     /// ```
     pub async fn sign<'a>(&self, artifact: impl Into<Artifact<'a>>) -> Result<Bundle> {
+        self.validate_configuration()?;
         let artifact_hash = match artifact.into() {
             Artifact::Blob(blob) => sha256_yielding(blob).await?,
             Artifact::Digest(digest) => {
@@ -328,17 +329,21 @@ impl Signer {
     /// Reads happen while this future is polled and may block its executor
     /// thread. Async applications should prefer [`Signer::sign_async_reader`].
     pub async fn sign_reader(&self, reader: impl std::io::Read) -> Result<Bundle> {
+        self.validate_configuration()?;
         self.sign_sha256(sha256_yielding(reader).await?).await
     }
 
     /// Sign an artifact read asynchronously to EOF in constant memory.
     pub async fn sign_async_reader(&self, reader: impl AsyncRead + Unpin) -> Result<Bundle> {
+        self.validate_configuration()?;
         self.sign_sha256(sha256_async(reader).await?).await
     }
 
+    /// Sign an already hashed artifact.
+    ///
+    /// Callers validate the configuration before hashing so a misconfigured
+    /// signer fails immediately rather than after streaming a large artifact.
     async fn sign_sha256(&self, artifact_hash: Sha256Hash) -> Result<Bundle> {
-        self.validate_configuration()?;
-
         // 1. Generate ephemeral key pair
         let key_pair = self.generate_ephemeral_keypair()?;
 
