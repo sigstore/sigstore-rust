@@ -46,7 +46,7 @@ pub struct LogEntry {
     /// UUID of the entry (the key in the response map)
     #[serde(skip)]
     pub uuid: EntryUuid,
-    /// Body of the entry (base64 encoded canonicalized body)
+    /// Canonicalized JSON body of the entry.
     pub body: CanonicalizedBody,
     /// Integrated time. Always present in Rekor V1 API responses; `None` for
     /// entries converted from the V2 API, which has no integrated time.
@@ -89,11 +89,13 @@ pub struct RekorInclusionProof {
     /// Checkpoint (signed tree head)
     pub checkpoint: String,
     /// Hashes in the proof path (hex-encoded in V1 API)
-    pub hashes: Vec<String>,
+    #[serde(with = "hex_sha256_vec")]
+    pub hashes: Vec<Sha256Hash>,
     /// Log index
     pub log_index: u64,
     /// Root hash (hex-encoded in V1 API)
-    pub root_hash: String,
+    #[serde(with = "hex_sha256")]
+    pub root_hash: Sha256Hash,
     /// Tree size
     pub tree_size: u64,
 }
@@ -103,7 +105,8 @@ pub struct RekorInclusionProof {
 #[serde(rename_all = "camelCase")]
 pub struct LogInfo {
     /// Root hash of the tree
-    pub root_hash: String,
+    #[serde(with = "hex_sha256")]
+    pub root_hash: Sha256Hash,
     /// Signed tree head (checkpoint)
     pub signed_tree_head: String,
     /// Tree ID
@@ -120,13 +123,60 @@ pub struct LogInfo {
 #[serde(rename_all = "camelCase")]
 pub struct InactiveShard {
     /// Root hash
-    pub root_hash: String,
+    #[serde(with = "hex_sha256")]
+    pub root_hash: Sha256Hash,
     /// Signed tree head
     pub signed_tree_head: String,
     /// Tree ID
     pub tree_i_d: String,
     /// Tree size
     pub tree_size: u64,
+}
+
+mod hex_sha256 {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use sigstore_types::Sha256Hash;
+
+    pub fn serialize<S>(value: &Sha256Hash, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&value.to_hex())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Sha256Hash, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Sha256Hash::from_hex(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+mod hex_sha256_vec {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use sigstore_types::Sha256Hash;
+
+    pub fn serialize<S>(values: &[Sha256Hash], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        values
+            .iter()
+            .map(Sha256Hash::to_hex)
+            .collect::<Vec<_>>()
+            .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Sha256Hash>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Vec::<String>::deserialize(deserializer)?
+            .into_iter()
+            .map(|value| Sha256Hash::from_hex(&value).map_err(serde::de::Error::custom))
+            .collect()
+    }
 }
 
 /// Response from creating a log entry (map of UUID to LogEntry)

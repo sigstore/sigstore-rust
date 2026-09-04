@@ -47,6 +47,39 @@ impl MediaType {
     }
 }
 
+impl std::ops::Deref for MediaType {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl std::fmt::Display for MediaType {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Serialize for MediaType {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for MediaType {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::from_str(&value).map_err(serde::de::Error::custom)
+    }
+}
+
 impl FromStr for MediaType {
     type Err = Error;
 
@@ -81,7 +114,7 @@ pub enum BundleVersion {
 #[serde(rename_all = "camelCase")]
 pub struct Bundle {
     /// Media type identifying the bundle version
-    pub media_type: String,
+    pub media_type: MediaType,
     /// Verification material (certificate chain or public key)
     pub verification_material: VerificationMaterial,
     /// The content being signed (message signature or DSSE envelope)
@@ -106,8 +139,8 @@ impl Bundle {
     }
 
     /// Get the bundle version from the media type
-    pub fn version(&self) -> Result<MediaType> {
-        MediaType::from_str(&self.media_type)
+    pub fn version(&self) -> MediaType {
+        self.media_type
     }
 
     /// Get the signing certificate if present
@@ -261,14 +294,68 @@ pub struct LogId {
     pub key_id: LogKeyId,
 }
 
-/// Entry kind and version
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KindVersion {
-    /// Entry kind (e.g., "hashedrekord")
-    pub kind: String,
-    /// Entry version (e.g., "0.0.1")
-    pub version: String,
+/// Supported Rekor entry format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KindVersion {
+    HashedRekordV001,
+    HashedRekordV002,
+    DsseV001,
+    IntotoV002,
+}
+
+impl KindVersion {
+    pub fn kind(self) -> &'static str {
+        match self {
+            Self::HashedRekordV001 | Self::HashedRekordV002 => "hashedrekord",
+            Self::DsseV001 => "dsse",
+            Self::IntotoV002 => "intoto",
+        }
+    }
+
+    pub fn version(self) -> &'static str {
+        match self {
+            Self::HashedRekordV001 | Self::DsseV001 => "0.0.1",
+            Self::HashedRekordV002 | Self::IntotoV002 => "0.0.2",
+        }
+    }
+}
+
+impl Serialize for KindVersion {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("KindVersion", 2)?;
+        state.serialize_field("kind", self.kind())?;
+        state.serialize_field("version", self.version())?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for KindVersion {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WireKindVersion {
+            kind: String,
+            version: String,
+        }
+
+        let value = WireKindVersion::deserialize(deserializer)?;
+        match (value.kind.as_str(), value.version.as_str()) {
+            ("hashedrekord", "0.0.1") => Ok(Self::HashedRekordV001),
+            ("hashedrekord", "0.0.2") => Ok(Self::HashedRekordV002),
+            ("dsse", "0.0.1") => Ok(Self::DsseV001),
+            ("intoto", "0.0.2") => Ok(Self::IntotoV002),
+            _ => Err(serde::de::Error::custom(format!(
+                "unsupported Rekor entry format: {}/{}",
+                value.kind, value.version
+            ))),
+        }
+    }
 }
 
 /// Inclusion promise (Signed Entry Timestamp)
@@ -320,24 +407,68 @@ mod sha256_hash_vec {
     }
 }
 
-/// Checkpoint data in inclusion proof
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+/// A checkpoint parsed at the bundle deserialization boundary.
+///
+/// The original envelope is retained because checkpoint signatures cover its
+/// exact bytes; consumers use the parsed representation for semantic fields.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CheckpointData {
-    /// Text representation of the checkpoint
-    #[serde(default)]
-    pub envelope: String,
+    envelope: String,
+    checkpoint: Option<Checkpoint>,
 }
 
 impl CheckpointData {
-    /// Parse the checkpoint text
-    pub fn parse(&self) -> Result<Checkpoint> {
-        Checkpoint::from_text(&self.envelope)
+    pub fn new(envelope: impl Into<String>) -> Result<Self> {
+        let envelope = envelope.into();
+        let checkpoint = if envelope.is_empty() {
+            None
+        } else {
+            Some(Checkpoint::from_text(&envelope)?)
+        };
+        Ok(Self {
+            envelope,
+            checkpoint,
+        })
     }
 
-    /// Check if checkpoint data is empty
+    pub fn envelope(&self) -> &str {
+        &self.envelope
+    }
+
+    pub fn checkpoint(&self) -> Option<&Checkpoint> {
+        self.checkpoint.as_ref()
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.envelope.is_empty()
+        self.checkpoint.is_none()
+    }
+}
+
+impl Serialize for CheckpointData {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("CheckpointData", 1)?;
+        state.serialize_field("envelope", &self.envelope)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for CheckpointData {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WireCheckpointData {
+            #[serde(default)]
+            envelope: String,
+        }
+
+        let wire = WireCheckpointData::deserialize(deserializer)?;
+        Self::new(wire.envelope).map_err(serde::de::Error::custom)
     }
 }
 
@@ -359,8 +490,8 @@ pub struct Rfc3161Timestamp {
 }
 
 /// Default media type for bundles that don't specify one (pre-v0.1 format)
-fn default_media_type() -> String {
-    "application/vnd.dev.sigstore.bundle+json;version=0.1".to_string()
+fn default_media_type() -> MediaType {
+    MediaType::Bundle0_1
 }
 
 // Custom Deserialize implementation for Bundle
@@ -374,7 +505,7 @@ impl<'de> Deserialize<'de> for Bundle {
         struct BundleHelper {
             // Cosign V1 bundles may not have mediaType - default to v0.1
             #[serde(default = "default_media_type")]
-            media_type: String,
+            media_type: MediaType,
             verification_material: VerificationMaterial,
             #[serde(flatten)]
             content: SignatureContent,
@@ -434,7 +565,7 @@ mod tests {
         let json = r#"{
             "rootHash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
             "treeSize": "1",
-            "checkpoint": {"envelope": "test\n1\nAAA=\n\n— test AAAA\n"}
+            "checkpoint": {"envelope": "test\n1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n\n— test AAAAAAAA\n"}
         }"#;
         let proof: InclusionProof = serde_json::from_str(json).unwrap();
         assert_eq!(proof.log_index.value(), 0);
@@ -476,7 +607,7 @@ mod tests {
             assert_eq!(statement.subject[0].name, "");
             assert_eq!(
                 statement.subject[0].digest.sha256,
-                Some("abc123".to_string())
+                Some(Sha256Hash::from_bytes([0; 32]))
             );
         } else {
             panic!("expected DSSE envelope");

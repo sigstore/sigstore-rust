@@ -9,7 +9,9 @@ use rustls_pki_types::{CertificateDer, UnixTime};
 use sigstore_crypto::CertificateInfo;
 use sigstore_trust_root::{TrustedRoot, TsaAuthority};
 use sigstore_types::bundle::VerificationMaterialContent;
-use sigstore_types::{Bundle, DerCertificate, DerPublicKey, SignatureBytes, SignatureContent};
+use sigstore_types::{
+    Bundle, DerCertificate, DerPublicKey, KindVersion, SignatureBytes, SignatureContent,
+};
 use webpki::{anchor_from_trusted_cert, EndEntityCert, KeyUsage, ALL_VERIFICATION_ALGS};
 
 /// Extract and decode the signing certificate from verification material
@@ -129,9 +131,7 @@ pub fn has_v2_tlog_entries(bundle: &Bundle) -> bool {
         .verification_material
         .tlog_entries
         .iter()
-        .any(|entry| {
-            entry.kind_version.kind == "hashedrekord" && entry.kind_version.version == "0.0.2"
-        })
+        .any(|entry| entry.kind_version == KindVersion::HashedRekordV002)
 }
 
 /// Extract integrated time from V1 tlog entries that have inclusion promises.
@@ -157,9 +157,10 @@ fn extract_v1_integrated_times_with_promise(
 
     for entry in &bundle.verification_material.tlog_entries {
         // Rekor v1 uses 0.0.1 for hashedrekord/dsse and 0.0.2 for intoto.
-        let is_v1 = (entry.kind_version.version == "0.0.1"
-            && matches!(entry.kind_version.kind.as_str(), "hashedrekord" | "dsse"))
-            || (entry.kind_version.kind == "intoto" && entry.kind_version.version == "0.0.2");
+        let is_v1 = matches!(
+            entry.kind_version,
+            KindVersion::HashedRekordV001 | KindVersion::DsseV001 | KindVersion::IntotoV002
+        );
 
         if !is_v1 || entry.inclusion_promise.is_none() {
             continue;

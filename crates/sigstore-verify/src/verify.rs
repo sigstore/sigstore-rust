@@ -10,7 +10,9 @@ use sigstore_bundle::ValidationOptions;
 use sigstore_crypto::{parse_certificate_info, KeyAlgorithm, SigningScheme, VerificationKey};
 use sigstore_trust_root::TrustedRoot;
 
-use sigstore_types::{Artifact, Bundle, HashAlgorithm, SignatureContent, Statement};
+use sigstore_types::{
+    Artifact, Bundle, HashAlgorithm, Sha256Hash, Sha512Hash, SignatureContent, Statement,
+};
 
 /// Artifact input for verification.
 #[derive(Debug)]
@@ -604,12 +606,14 @@ fn verify_dsse_artifact_binding(
     }
     let sha256_matches = artifact
         .digest(HashAlgorithm::Sha2256)
-        .map(|digest| statement.matches_sha256(&hex::encode(digest)))
-        .unwrap_or(false);
+        .ok()
+        .and_then(|digest| Sha256Hash::try_from_slice(&digest).ok())
+        .is_some_and(|digest| statement.matches_sha256(&digest));
     let sha512_matches = artifact
         .digest(HashAlgorithm::Sha2512)
-        .map(|digest| statement.matches_sha512(&hex::encode(digest)))
-        .unwrap_or(false);
+        .ok()
+        .and_then(|digest| Sha512Hash::try_from_slice(&digest).ok())
+        .is_some_and(|digest| statement.matches_sha512(&digest));
     let matches = sha256_matches || sha512_matches;
 
     if !matches {

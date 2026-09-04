@@ -370,7 +370,7 @@ fn test_full_verification_flow() {
 
     // Extract tlog entry info
     let entry = &bundle.verification_material.tlog_entries[0];
-    assert_eq!(entry.kind_version.kind, "dsse");
+    assert_eq!(entry.kind_version.kind(), "dsse");
     assert_eq!(entry.log_index, LogIndex::new(166143216));
 
     // Verify inclusion proof
@@ -413,7 +413,7 @@ fn test_full_verification_flow_happy_path() {
 
     // Extract tlog entry info
     let entry = &bundle.verification_material.tlog_entries[0];
-    assert_eq!(entry.kind_version.kind, "dsse");
+    assert_eq!(entry.kind_version.kind(), "dsse");
     assert_eq!(entry.log_index, LogIndex::new(155690850));
 
     // Verify inclusion proof
@@ -468,11 +468,10 @@ fn test_checkpoint_parsing() {
     let entry = &bundle.verification_material.tlog_entries[0];
     let proof = entry.inclusion_proof.as_ref().unwrap();
 
-    // Parse checkpoint
     let checkpoint = proof
         .checkpoint
-        .parse()
-        .expect("Failed to parse checkpoint");
+        .checkpoint()
+        .expect("checkpoint should be parsed during bundle deserialization");
 
     assert_eq!(
         checkpoint.origin,
@@ -521,7 +520,7 @@ fn test_parse_dsse_bundle_from_python() {
     // Verify tlog entry exists
     assert_eq!(bundle.verification_material.tlog_entries.len(), 1);
     let entry = &bundle.verification_material.tlog_entries[0];
-    assert_eq!(entry.kind_version.kind, "intoto");
+    assert_eq!(entry.kind_version.kind(), "intoto");
 }
 
 /// Regression test for TOB-SIGSTORE-9: DSSE bundles with multiple signatures
@@ -542,18 +541,8 @@ fn test_dsse_bundle_with_2_signatures_rejected_at_parse() {
 }
 
 #[test]
-fn test_parse_bundle_invalid_version_still_parses() {
-    // This bundle has an invalid mediaType ("this is completely wrong")
-    // Parsing should still succeed, but validation may fail
-    let bundle_result = Bundle::from_json(BUNDLE_INVALID_VERSION);
-
-    // The bundle should still parse (we don't validate media type strictly during parse)
-    // Note: Depending on implementation, this might fail. Let's see what happens.
-    if let Ok(bundle) = bundle_result {
-        // If it parses, the media type should be wrong
-        assert_eq!(bundle.media_type, "this is completely wrong");
-    }
-    // If it fails to parse, that's also acceptable behavior
+fn test_parse_bundle_rejects_invalid_version() {
+    assert!(Bundle::from_json(BUNDLE_INVALID_VERSION).is_err());
 }
 
 #[test]
@@ -566,7 +555,7 @@ fn test_parse_cve_2022_36056_bundle() {
 
     // Check it's a hashedrekord type
     let entry = &bundle.verification_material.tlog_entries[0];
-    assert_eq!(entry.kind_version.kind, "hashedrekord");
+    assert_eq!(entry.kind_version.kind(), "hashedrekord");
 
     // Bundle structure should be valid
     let result = validate_bundle(&bundle);
@@ -747,18 +736,8 @@ fn test_bundle_no_checkpoint() {
     // The inclusion proof should exist but lack the checkpoint
     let proof = proof.unwrap();
 
-    // Checkpoint should be empty (default value)
-    assert!(
-        proof.checkpoint.envelope.is_empty(),
-        "Checkpoint should be empty when missing from bundle"
-    );
-
-    // Parsing empty checkpoint should fail
-    let checkpoint_result = proof.checkpoint.parse();
-    assert!(
-        checkpoint_result.is_err(),
-        "Checkpoint parsing should fail when checkpoint is missing"
-    );
+    assert!(proof.checkpoint.is_empty());
+    assert!(proof.checkpoint.checkpoint().is_none());
 }
 
 /// Test bundle with empty transparency log entries
@@ -938,7 +917,7 @@ fn test_parse_conda_attestation_bundle() {
     // Should have tlog entry
     assert!(!bundle.verification_material.tlog_entries.is_empty());
     let entry = &bundle.verification_material.tlog_entries[0];
-    assert_eq!(entry.kind_version.kind, "dsse");
+    assert_eq!(entry.kind_version.kind(), "dsse");
 
     // Should have inclusion proof
     assert!(
@@ -1027,10 +1006,7 @@ fn test_parse_cosign_v3_blob_bundle() {
         Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).expect("Failed to parse cosign v3 blob bundle");
 
     // Check media type
-    assert_eq!(
-        bundle.media_type,
-        "application/vnd.dev.sigstore.bundle.v0.3+json"
-    );
+    assert_eq!(bundle.media_type, sigstore_types::MediaType::Bundle0_3);
 
     // Check it's a message signature (not DSSE)
     assert!(
@@ -1044,8 +1020,8 @@ fn test_parse_cosign_v3_blob_bundle() {
     // Check tlog entry
     assert_eq!(bundle.verification_material.tlog_entries.len(), 1);
     let entry = &bundle.verification_material.tlog_entries[0];
-    assert_eq!(entry.kind_version.kind, "hashedrekord");
-    assert_eq!(entry.kind_version.version, "0.0.1");
+    assert_eq!(entry.kind_version.kind(), "hashedrekord");
+    assert_eq!(entry.kind_version.version(), "0.0.1");
 
     // Check it has both inclusion proof and inclusion promise
     assert!(entry.inclusion_proof.is_some(), "Expected inclusion proof");
@@ -1212,16 +1188,8 @@ fn test_verify_fails_with_unknown_log_entry_kind() {
         .push(corrupted_entry);
     let corrupted_bundle_json = serde_json::to_string(&json_val).unwrap();
 
-    let bundle =
-        Bundle::from_json(&corrupted_bundle_json).expect("Failed to parse corrupted bundle");
-    let artifact_digest =
-        extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default();
-
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
-    assert!(result.is_err());
-    let err_msg = result.err().unwrap().to_string();
-    assert!(err_msg.contains("unsupported log entry kind"));
+    let error = Bundle::from_json(&corrupted_bundle_json).unwrap_err();
+    assert!(error.to_string().contains("unsupported Rekor entry format"));
 }
 
 #[test]
@@ -1235,19 +1203,8 @@ fn test_verify_fails_with_unknown_log_entry_version() {
         .push(corrupted_entry);
     let corrupted_bundle_json = serde_json::to_string(&json_val).unwrap();
 
-    let bundle =
-        Bundle::from_json(&corrupted_bundle_json).expect("Failed to parse corrupted bundle");
-    let artifact_digest =
-        extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default();
-
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
-    assert!(result.is_err());
-    let err_msg = result.err().unwrap().to_string();
-    assert!(
-        err_msg.contains("unsupported dsse entry version")
-            || err_msg.contains("unsupported dsse entry version")
-    );
+    let error = Bundle::from_json(&corrupted_bundle_json).unwrap_err();
+    assert!(error.to_string().contains("unsupported Rekor entry format"));
 }
 
 #[test]
@@ -1262,16 +1219,8 @@ fn test_verify_fails_with_mismatched_log_entry_kind() {
         .push(corrupted_entry);
     let corrupted_bundle_json = serde_json::to_string(&json_val).unwrap();
 
-    let bundle =
-        Bundle::from_json(&corrupted_bundle_json).expect("Failed to parse corrupted bundle");
-    let artifact_digest =
-        extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default();
-
-    let result = verify(artifact_digest, &bundle, &policy, &production_root());
-    assert!(result.is_err());
-    let err_msg = result.err().unwrap().to_string();
-    assert!(err_msg.contains("unsupported log entry kind for DSSE envelope"));
+    let error = Bundle::from_json(&corrupted_bundle_json).unwrap_err();
+    assert!(error.to_string().contains("unsupported Rekor entry format"));
 }
 
 #[test]
@@ -1296,7 +1245,7 @@ fn test_verify_fails_with_mismatched_hashedrekord_version_for_dsse() {
     assert!(result.is_err());
     let err_msg = result.err().unwrap().to_string();
 
-    assert!(err_msg.contains("unsupported hashedrekord entry version for DSSE envelope"));
+    assert!(err_msg.contains("incompatible with a DSSE envelope"));
 }
 
 fn staging_root() -> TrustedRoot {
@@ -1552,39 +1501,13 @@ fn test_verify_dsse_with_key_succeeds_with_correct_artifact() {
 /// with the bundle content (CVE-2022-36056 class), like Verifier::verify does.
 #[test]
 fn test_verify_with_key_fails_with_mismatched_log_entry_kind() {
-    use sigstore_verify::verify_with_key;
-
     let mut json_val: serde_json::Value = serde_json::from_str(CONDA_ATTESTATION_BUNDLE).unwrap();
     json_val["verificationMaterial"]["tlogEntries"][0]["kindVersion"]["kind"] =
         serde_json::json!("not-a-known-kind");
     let corrupted_bundle_json = serde_json::to_string(&json_val).unwrap();
 
-    let bundle =
-        Bundle::from_json(&corrupted_bundle_json).expect("Failed to parse corrupted bundle");
-
-    let cert = bundle
-        .signing_certificate()
-        .expect("Should have a signing certificate");
-    let cert_info = sigstore_crypto::parse_certificate_info(cert.as_bytes())
-        .expect("Failed to parse certificate info");
-
-    let result = verify_with_key(
-        CONDA_PACKAGE,
-        &bundle,
-        &cert_info.public_key,
-        &production_root(),
-    );
-
-    assert!(
-        result.is_err(),
-        "Key-based verification must fail when the log entry kind does not match the bundle content"
-    );
-    let err_msg = result.err().unwrap().to_string();
-    assert!(
-        err_msg.contains("unsupported log entry kind"),
-        "Unexpected error: {}",
-        err_msg
-    );
+    let error = Bundle::from_json(&corrupted_bundle_json).unwrap_err();
+    assert!(error.to_string().contains("unsupported Rekor entry format"));
 }
 
 /// The certificate must be validated against *every* verified timestamp, not

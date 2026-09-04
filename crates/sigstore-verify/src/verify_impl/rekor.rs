@@ -9,7 +9,8 @@ use base64::Engine;
 use sigstore_rekor::body::RekorEntryBody;
 use sigstore_types::bundle::VerificationMaterialContent;
 use sigstore_types::{
-    Bundle, DerCertificate, DerPublicKey, HashAlgorithm, SignatureContent, TransparencyLogEntry,
+    Bundle, DerCertificate, DerPublicKey, HashAlgorithm, KindVersion, SignatureContent,
+    TransparencyLogEntry,
 };
 use x509_cert::der::{Decode, Encode};
 
@@ -26,76 +27,37 @@ pub(crate) fn verify_tlog_consistency_with_key(
     managed_key: Option<&DerPublicKey>,
 ) -> Result<()> {
     for entry in &bundle.verification_material.tlog_entries {
-        match &bundle.content {
-            // DSSE envelope handling depends on Rekor version:
-            // * Rekor 1 gives us a "dsse 0.0.1" entry (or "intoto 0.0.2")
-            // * Rekor 2 gives us a "hashedrekord 0.0.2" entry
-            SignatureContent::DsseEnvelope(envelope) => match entry.kind_version.kind.as_str() {
-                "hashedrekord" => match entry.kind_version.version.as_str() {
-                    "0.0.2" => {
-                        super::hashedrekord::verify_hashedrekord_entry(
-                            entry,
-                            bundle,
-                            artifact,
-                            managed_key,
-                        )?;
-                    }
-                    version => {
-                        return Err(Error::Verification(format!(
-                            "unsupported hashedrekord entry version for DSSE envelope: {}",
-                            version
-                        )))
-                    }
-                },
-                "dsse" => match entry.kind_version.version.as_str() {
-                    "0.0.1" => verify_dsse_v001(entry, envelope, bundle)?,
-                    version => {
-                        return Err(Error::Verification(format!(
-                            "unsupported dsse entry version: {}",
-                            version
-                        )))
-                    }
-                },
-                "intoto" => match entry.kind_version.version.as_str() {
-                    "0.0.2" => verify_intoto_v002(entry, envelope, bundle, managed_key)?,
-                    version => {
-                        return Err(Error::Verification(format!(
-                            "unsupported intoto entry version: {}",
-                            version
-                        )))
-                    }
-                },
-                kind => {
-                    return Err(Error::Verification(format!(
-                        "unsupported log entry kind for DSSE envelope: {}",
-                        kind
-                    )))
-                }
-            },
-            SignatureContent::MessageSignature(_) => match entry.kind_version.kind.as_str() {
-                "hashedrekord" => match entry.kind_version.version.as_str() {
-                    "0.0.1" | "0.0.2" => {
-                        super::hashedrekord::verify_hashedrekord_entry(
-                            entry,
-                            bundle,
-                            artifact,
-                            managed_key,
-                        )?;
-                    }
-                    version => {
-                        return Err(Error::Verification(format!(
-                            "unsupported hashedrekord entry version: {}",
-                            version
-                        )))
-                    }
-                },
-                kind => {
-                    return Err(Error::Verification(format!(
-                        "unsupported log entry kind for MessageSignature: {}",
-                        kind
-                    )))
-                }
-            },
+        match (&bundle.content, entry.kind_version) {
+            (SignatureContent::DsseEnvelope(_), KindVersion::HashedRekordV002)
+            | (
+                SignatureContent::MessageSignature(_),
+                KindVersion::HashedRekordV001 | KindVersion::HashedRekordV002,
+            ) => super::hashedrekord::verify_hashedrekord_entry(
+                entry,
+                bundle,
+                artifact,
+                managed_key,
+            )?,
+            (SignatureContent::DsseEnvelope(envelope), KindVersion::DsseV001) => {
+                verify_dsse_v001(entry, envelope, bundle)?
+            }
+            (SignatureContent::DsseEnvelope(envelope), KindVersion::IntotoV002) => {
+                verify_intoto_v002(entry, envelope, bundle, managed_key)?
+            }
+            (SignatureContent::DsseEnvelope(_), format) => {
+                return Err(Error::Verification(format!(
+                    "Rekor entry {}/{} is incompatible with a DSSE envelope",
+                    format.kind(),
+                    format.version()
+                )))
+            }
+            (SignatureContent::MessageSignature(_), format) => {
+                return Err(Error::Verification(format!(
+                    "Rekor entry {}/{} is incompatible with a message signature",
+                    format.kind(),
+                    format.version()
+                )))
+            }
         }
     }
 
@@ -120,8 +82,8 @@ fn verify_dsse_v001(
 ) -> Result<()> {
     let body = RekorEntryBody::from_base64_json(
         &entry.canonicalized_body.to_base64(),
-        &entry.kind_version.kind,
-        &entry.kind_version.version,
+        entry.kind_version.kind(),
+        entry.kind_version.version(),
     )
     .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
 
@@ -201,8 +163,8 @@ fn verify_intoto_v002(
 ) -> Result<()> {
     let body = RekorEntryBody::from_base64_json(
         &entry.canonicalized_body.to_base64(),
-        &entry.kind_version.kind,
-        &entry.kind_version.version,
+        entry.kind_version.kind(),
+        entry.kind_version.version(),
     )
     .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
 

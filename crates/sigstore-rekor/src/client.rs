@@ -6,7 +6,7 @@ use crate::entry::{
     SearchIndex,
 };
 use crate::error::{Error, Result};
-use sigstore_types::{Checkpoint, TransparencyLogEntry};
+use sigstore_types::{Checkpoint, KindVersion, TransparencyLogEntry};
 use std::num::NonZeroU8;
 use std::time::Duration;
 
@@ -382,16 +382,6 @@ impl RekorV2Client {
         }
     }
 
-    /// Create a client for the public Sigstore Rekor v2 instance.
-    pub fn public() -> Self {
-        Self::new(RekorApiVersion::V2.default_url())
-    }
-
-    /// Create a client for the Sigstore staging Rekor v2 instance.
-    pub fn staging() -> Self {
-        Self::new(RekorApiVersion::V2.default_staging_url())
-    }
-
     /// Create a Rekor v2 hashedrekord entry.
     ///
     /// Rekor v2 returns the protobuf `TransparencyLogEntry` JSON representation
@@ -569,16 +559,17 @@ impl RekorClientBuilder {
 }
 
 fn validate_v2_entry(entry: &TransparencyLogEntry, request: &HashedRekordV2) -> Result<()> {
-    if entry.kind_version.kind != "hashedrekord" || entry.kind_version.version != "0.0.2" {
+    if entry.kind_version != KindVersion::HashedRekordV002 {
         return Err(Error::InvalidResponse(format!(
             "expected hashedrekord/0.0.2, received {}/{}",
-            entry.kind_version.kind, entry.kind_version.version
+            entry.kind_version.kind(),
+            entry.kind_version.version()
         )));
     }
     let body = RekorEntryBody::from_base64_json(
         &entry.canonicalized_body.to_base64(),
-        &entry.kind_version.kind,
-        &entry.kind_version.version,
+        entry.kind_version.kind(),
+        entry.kind_version.version(),
     )?;
     let RekorEntryBody::HashedRekordV002(body) = body else {
         return Err(Error::InvalidResponse(

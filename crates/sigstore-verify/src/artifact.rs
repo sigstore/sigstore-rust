@@ -127,7 +127,7 @@ impl<'a> PreparedArtifact<'a> {
             return Ok(match algorithm {
                 HashAlgorithm::Sha2256 => sigstore_crypto::sha256(blob).as_bytes().to_vec(),
                 HashAlgorithm::Sha2384 => sigstore_crypto::sha384(blob),
-                HashAlgorithm::Sha2512 => sigstore_crypto::sha512(blob),
+                HashAlgorithm::Sha2512 => sigstore_crypto::sha512(blob).as_bytes().to_vec(),
             });
         }
 
