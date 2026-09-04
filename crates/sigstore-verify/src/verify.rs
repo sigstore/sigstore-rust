@@ -4,14 +4,15 @@
 
 use crate::artifact::PreparedArtifact;
 use crate::error::{Error, Result};
-use base64::Engine;
 use sigstore_bundle::validate_bundle_with_options;
 use sigstore_bundle::ValidationOptions;
 use sigstore_crypto::{parse_certificate_info, KeyAlgorithm, SigningScheme, VerificationKey};
 use sigstore_trust_root::TrustedRoot;
 
+use sigstore_types::bundle::VerificationMaterialContent;
 use sigstore_types::{
-    Artifact, Bundle, HashAlgorithm, Sha256Hash, Sha512Hash, SignatureContent, Statement,
+    Artifact, Bundle, HashAlgorithm, KindVersion, Sha256Hash, Sha512Hash, SignatureContent,
+    Statement,
 };
 
 /// Artifact input for verification.
@@ -101,7 +102,31 @@ pub enum CertificatePolicy {
     },
 }
 
-/// Policy for verifying signatures
+/// Policy for verifying signatures made with a caller-supplied public key.
+#[derive(Debug, Clone)]
+pub struct PublicKeyVerificationPolicy {
+    /// Verify transparency log inclusion.
+    pub verify_tlog: bool,
+}
+
+impl Default for PublicKeyVerificationPolicy {
+    fn default() -> Self {
+        Self { verify_tlog: true }
+    }
+}
+
+impl PublicKeyVerificationPolicy {
+    /// Skip transparency log inclusion verification.
+    ///
+    /// WARNING: This accepts bundles without proof that the signature event
+    /// was incorporated into the log. Log-entry consistency is still checked.
+    pub fn skip_tlog_unsafe(mut self) -> Self {
+        self.verify_tlog = false;
+        self
+    }
+}
+
+/// Policy for verifying certificate-based signatures.
 #[derive(Debug, Clone)]
 pub struct VerificationPolicy {
     /// Expected identity (email or URI)
@@ -553,6 +578,17 @@ impl Verifier {
 
         Ok(result)
     }
+
+    /// Verify a managed-key bundle using a caller-supplied public key.
+    pub fn verify_with_key<'a>(
+        &self,
+        artifact: impl Into<Artifact<'a>>,
+        bundle: &Bundle,
+        public_key: &sigstore_types::DerPublicKey,
+        policy: &PublicKeyVerificationPolicy,
+    ) -> Result<VerificationResult> {
+        verify_with_key(artifact, bundle, public_key, policy, &self.trusted_root)
+    }
 }
 
 fn compute_artifact_digest_algo(
@@ -797,26 +833,6 @@ fn public_key_algorithm(public_key: &sigstore_types::DerPublicKey) -> Result<Key
     }
 }
 
-fn verify_public_key_hint(hint: &str, public_key: &sigstore_types::DerPublicKey) -> Result<()> {
-    let expected = sigstore_crypto::sha256(public_key.as_bytes());
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(hint)
-        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(hint))
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(hint))
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(hint))
-        .map_err(|_| {
-            Error::Verification("public key hint is not a supported SHA-256 key hint".to_string())
-        })?;
-
-    if decoded != expected.as_bytes() {
-        return Err(Error::Verification(
-            "public key hint does not match supplied public key".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
 /// Verify an artifact against a bundle using a provided public key
 ///
 /// This is used for managed key verification where the bundle contains a public key
@@ -831,7 +847,7 @@ fn verify_public_key_hint(hint: &str, public_key: &sigstore_types::DerPublicKey)
 /// # Example
 ///
 /// ```no_run
-/// use sigstore_verify::verify_with_key;
+/// use sigstore_verify::{verify_with_key, PublicKeyVerificationPolicy};
 /// use sigstore_trust_root::TrustedRoot;
 /// use sigstore_types::{Bundle, DerPublicKey};
 ///
@@ -843,7 +859,13 @@ fn verify_public_key_hint(hint: &str, public_key: &sigstore_types::DerPublicKey)
 /// let key_pem = std::fs::read_to_string("key.pub")?;
 /// let public_key = DerPublicKey::from_pem(&key_pem)?;
 ///
-/// verify_with_key(&artifact, &bundle, &public_key, &trusted_root)?;
+/// verify_with_key(
+///     &artifact,
+///     &bundle,
+///     &public_key,
+///     &PublicKeyVerificationPolicy::default(),
+///     &trusted_root,
+/// )?;
 /// # Ok(())
 /// # }
 /// ```
@@ -851,13 +873,14 @@ pub fn verify_with_key<'a, R: std::io::Read>(
     artifact: impl Into<ArtifactSource<'a, R>>,
     bundle: &Bundle,
     public_key: &sigstore_types::DerPublicKey,
+    policy: &PublicKeyVerificationPolicy,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
     let artifact = match artifact.into() {
         ArtifactSource::Artifact(artifact) => PreparedArtifact::from_artifact(artifact),
         ArtifactSource::Reader(reader) => PreparedArtifact::from_reader(reader, bundle)?,
     };
-    verify_with_key_prepared(artifact, bundle, public_key, trusted_root)
+    verify_with_key_prepared(artifact, bundle, public_key, policy, trusted_root)
 }
 
 /// Verify a managed-key bundle from a synchronous artifact reader.
@@ -865,12 +888,14 @@ pub fn verify_with_key_reader(
     reader: impl std::io::Read,
     bundle: &Bundle,
     public_key: &sigstore_types::DerPublicKey,
+    policy: &PublicKeyVerificationPolicy,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
     verify_with_key(
         crate::verify::reader(reader),
         bundle,
         public_key,
+        policy,
         trusted_root,
     )
 }
@@ -880,12 +905,14 @@ pub async fn verify_with_key_async_reader(
     reader: impl futures::io::AsyncRead + Unpin,
     bundle: &Bundle,
     public_key: &sigstore_types::DerPublicKey,
+    policy: &PublicKeyVerificationPolicy,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
     verify_with_key_async(
         crate::verify::async_reader(reader),
         bundle,
         public_key,
+        policy,
         trusted_root,
     )
     .await
@@ -896,6 +923,7 @@ pub async fn verify_with_key_async<'a, R: futures::io::AsyncRead + Unpin>(
     artifact: impl Into<AsyncArtifactSource<'a, R>>,
     bundle: &Bundle,
     public_key: &sigstore_types::DerPublicKey,
+    policy: &PublicKeyVerificationPolicy,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
     let artifact = match artifact.into() {
@@ -904,27 +932,31 @@ pub async fn verify_with_key_async<'a, R: futures::io::AsyncRead + Unpin>(
             PreparedArtifact::from_async_reader(reader, bundle).await?
         }
     };
-    verify_with_key_prepared(artifact, bundle, public_key, trusted_root)
+    verify_with_key_prepared(artifact, bundle, public_key, policy, trusted_root)
 }
 
 fn verify_with_key_prepared(
     artifact: PreparedArtifact<'_>,
     bundle: &Bundle,
     public_key: &sigstore_types::DerPublicKey,
+    policy: &PublicKeyVerificationPolicy,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
-    let result = VerificationResult::new();
-
-    if let sigstore_types::bundle::VerificationMaterialContent::PublicKey { hint } =
-        &bundle.verification_material.content
-    {
-        verify_public_key_hint(hint, public_key)?;
+    if !matches!(
+        &bundle.verification_material.content,
+        VerificationMaterialContent::PublicKey { .. }
+    ) {
+        return Err(Error::Verification(
+            "bundle contains a certificate but public-key verification was requested".to_string(),
+        ));
     }
+
+    let mut result = VerificationResult::new();
 
     // Validate bundle structure (structural only; the cryptographic checks
     // follow below)
     let options = ValidationOptions {
-        require_inclusion_proof: true,
+        require_inclusion_proof: policy.verify_tlog,
         require_timestamp: false,
     };
     validate_bundle_with_options(bundle, &options)
@@ -934,9 +966,25 @@ fn verify_with_key_prepared(
     let signing_scheme = signing_scheme_for_content(key_algorithm, &bundle.content)?;
 
     // Verify transparency log entries (Merkle inclusion proofs, checkpoints,
-    // SETs) without certificate time validation
-    for entry in &bundle.verification_material.tlog_entries {
-        crate::verify_impl::tlog::verify_entry_inclusion(entry, trusted_root)?;
+    // SETs) without certificate time validation.
+    if policy.verify_tlog {
+        for entry in &bundle.verification_material.tlog_entries {
+            crate::verify_impl::tlog::verify_entry_inclusion(entry, trusted_root)?;
+
+            let is_rekor_v1 = matches!(
+                entry.kind_version,
+                KindVersion::HashedRekordV001 | KindVersion::DsseV001 | KindVersion::IntotoV002
+            );
+            if is_rekor_v1 && entry.inclusion_promise.is_some() {
+                if let Some(time) = entry.integrated_time {
+                    crate::verify_impl::tlog::validate_integrated_time_not_in_future(
+                        time,
+                        jiff::Timestamp::now(),
+                    )?;
+                    result.integrated_time = Some(time);
+                }
+            }
+        }
     }
 
     // Verify the signature
@@ -986,24 +1034,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn public_key_hint_accepts_all_protojson_base64_variants() {
-        let key = sigstore_types::DerPublicKey::from_bytes(b"test public key");
-        let digest = sigstore_crypto::sha256(key.as_bytes());
-        for hint in [
-            base64::engine::general_purpose::STANDARD.encode(digest),
-            base64::engine::general_purpose::STANDARD_NO_PAD.encode(digest),
-            base64::engine::general_purpose::URL_SAFE.encode(digest),
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest),
-        ] {
-            verify_public_key_hint(&hint, &key).unwrap();
-        }
-
-        // Prefixes are not part of the protobuf field's encoding.
-        let prefixed = format!(
-            "sha256:{}",
-            base64::engine::general_purpose::STANDARD.encode(digest)
+    fn public_key_policy_defaults_to_tlog_verification() {
+        assert!(PublicKeyVerificationPolicy::default().verify_tlog);
+        assert!(
+            !PublicKeyVerificationPolicy::default()
+                .skip_tlog_unsafe()
+                .verify_tlog
         );
-        assert!(verify_public_key_hint(&prefixed, &key).is_err());
     }
 
     #[test]

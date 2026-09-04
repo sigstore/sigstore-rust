@@ -6,7 +6,10 @@ use sigstore_trust_root::{SigstoreInstance, TrustedRoot, SIGSTORE_PRODUCTION_TRU
 use sigstore_types::{ArtifactDigest, DigestBytes, HashAlgorithm, LogIndex, Sha256Hash};
 use sigstore_verify::bundle::{validate_bundle, validate_bundle_with_options, ValidationOptions};
 use sigstore_verify::types::Bundle;
-use sigstore_verify::{verify, verify_async_reader, verify_reader, VerificationPolicy, Verifier};
+use sigstore_verify::{
+    verify, verify_async_reader, verify_reader, PublicKeyVerificationPolicy, VerificationPolicy,
+    Verifier,
+};
 use x509_cert::der::Decode;
 
 /// Extract the expected artifact digest from a bundle
@@ -1393,108 +1396,83 @@ fn managed_key_public_key() -> sigstore_types::DerPublicKey {
 }
 
 #[test]
-fn test_verify_with_key_validates_public_key_hint() {
+fn test_verify_with_key_treats_public_key_hint_as_opaque() {
     use sigstore_verify::verify_with_key;
 
-    let mut json: serde_json::Value = serde_json::from_str(MANAGED_KEY_BUNDLE).unwrap();
-    json["verificationMaterial"]["publicKey"]["hint"] =
-        serde_json::json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
-    let bundle = Bundle::from_json(&serde_json::to_string(&json).unwrap()).unwrap();
-    let public_key = managed_key_public_key();
+    for hint in [
+        "opaque-key-name",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    ] {
+        let mut json: serde_json::Value = serde_json::from_str(MANAGED_KEY_BUNDLE).unwrap();
+        json["verificationMaterial"]["publicKey"]["hint"] = serde_json::json!(hint);
+        let bundle = Bundle::from_json(&serde_json::to_string(&json).unwrap()).unwrap();
+        let result = verify_with_key(
+            MANAGED_KEY_ARTIFACT,
+            &bundle,
+            &managed_key_public_key(),
+            &PublicKeyVerificationPolicy::default(),
+            &production_root(),
+        );
 
-    let result = verify_with_key(
+        assert!(
+            result.is_ok(),
+            "opaque hint {hint:?} was rejected: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn test_verifier_with_key_accepts_digest_and_reports_integrated_time() {
+    let bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
+    let expected_time = bundle.verification_material.tlog_entries[0].integrated_time;
+    let verifier = Verifier::new(&production_root());
+
+    let result = verifier
+        .verify_with_key(
+            sigstore_crypto::sha256(MANAGED_KEY_ARTIFACT),
+            &bundle,
+            &managed_key_public_key(),
+            &PublicKeyVerificationPolicy::default(),
+        )
+        .unwrap();
+
+    assert_eq!(result.integrated_time, expected_time);
+}
+
+#[test]
+fn test_verify_with_key_can_skip_tlog_inclusion() {
+    use sigstore_verify::verify_with_key;
+
+    let mut bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
+    bundle.verification_material.tlog_entries[0].inclusion_proof = None;
+
+    verify_with_key(
         MANAGED_KEY_ARTIFACT,
         &bundle,
-        &public_key,
+        &managed_key_public_key(),
+        &PublicKeyVerificationPolicy::default().skip_tlog_unsafe(),
         &production_root(),
-    );
-
-    assert!(result.is_err());
-    assert!(result
-        .err()
-        .unwrap()
-        .to_string()
-        .contains("public key hint does not match supplied public key"));
+    )
+    .unwrap();
 }
 
 #[test]
-fn test_verify_with_key_accepts_managed_key_bundle_digest_only() {
+fn test_verify_with_key_rejects_certificate_bundle() {
     use sigstore_verify::verify_with_key;
 
-    let bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
-    let public_key = managed_key_public_key();
-    let digest = sigstore_crypto::sha256(MANAGED_KEY_ARTIFACT);
-
-    let result = verify_with_key(digest, &bundle, &public_key, &production_root());
-
-    assert!(
-        result.is_ok(),
-        "managed-key digest-only verification failed: {:?}",
-        result.err()
-    );
-}
-
-#[test]
-fn test_verify_dsse_with_key_fails_with_tampered_artifact() {
-    use sigstore_verify::verify_with_key;
-
-    let bundle =
-        Bundle::from_json(CONDA_ATTESTATION_BUNDLE).expect("Failed to parse conda attestation");
-
-    // Extract the public key from the signing certificate inside the bundle
-    let cert = bundle
-        .signing_certificate()
-        .expect("Should have a signing certificate");
-    let cert_info = sigstore_crypto::parse_certificate_info(cert.as_bytes())
-        .expect("Failed to parse certificate info");
-    let public_key = cert_info.public_key;
-
-    // Use a completely different/tampered package content
-    let tampered_package = b"this is not the original package content";
-
-    // Verify using key-based verification. This should fail because the tampered package
-    // does not match the subject in the in-toto statement payload of the DSSE envelope.
-    let result = verify_with_key(
-        tampered_package.as_slice(),
-        &bundle,
-        &public_key,
-        &production_root(),
-    );
-
-    assert!(
-        result.is_err(),
-        "Key-based verification of DSSE envelope must fail when artifact does not match the payload subjects. Result was: {:?}",
-        result
-    );
-}
-
-/// Key-based verification of an untampered DSSE bundle succeeds, including
-/// the transparency log consistency checks.
-#[test]
-fn test_verify_dsse_with_key_succeeds_with_correct_artifact() {
-    use sigstore_verify::verify_with_key;
-
-    let bundle =
-        Bundle::from_json(CONDA_ATTESTATION_BUNDLE).expect("Failed to parse conda attestation");
-
-    let cert = bundle
-        .signing_certificate()
-        .expect("Should have a signing certificate");
-    let cert_info = sigstore_crypto::parse_certificate_info(cert.as_bytes())
-        .expect("Failed to parse certificate info");
-
+    let bundle = Bundle::from_json(CONDA_ATTESTATION_BUNDLE).unwrap();
     let result = verify_with_key(
         CONDA_PACKAGE,
         &bundle,
-        &cert_info.public_key,
+        &managed_key_public_key(),
+        &PublicKeyVerificationPolicy::default(),
         &production_root(),
     );
 
-    assert!(
-        result.is_ok(),
-        "Key-based verification of untampered DSSE bundle should succeed: {:?}",
-        result.err()
-    );
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("bundle contains a certificate but public-key verification was requested"));
 }
 
 /// verify_with_key must reject bundles whose transparency log entry disagrees
