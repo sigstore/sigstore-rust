@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-bundle-v0.11.0...sigstore-bundle-v0.12.0) - 2026-09-04
+
+### Added
+
+- complete and harden Rekor v2 support ([#176](https://github.com/sigstore/sigstore-rust/pull/176))
+
+### Fixed
+
+- *(verify)* [**breaking**] remove clock skew, and use `jiff` Timestamp in the interfaces ([#164](https://github.com/sigstore/sigstore-rust/pull/164))
+
+### Other
+
+- *(types)* [**breaking**] deserialize semantic bundle values eagerly ([#196](https://github.com/sigstore/sigstore-rust/pull/196))
+
 ## [0.9.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-bundle-v0.8.0...sigstore-bundle-v0.9.0) - 2026-06-17
 
 ### Other
