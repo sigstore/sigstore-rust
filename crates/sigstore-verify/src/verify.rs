@@ -10,10 +10,7 @@ use sigstore_crypto::{parse_certificate_info, KeyAlgorithm, SigningScheme, Verif
 use sigstore_trust_root::TrustedRoot;
 
 use sigstore_types::bundle::VerificationMaterialContent;
-use sigstore_types::{
-    Artifact, Bundle, HashAlgorithm, KindVersion, Sha256Hash, Sha512Hash, SignatureContent,
-    Statement,
-};
+use sigstore_types::{Artifact, Bundle, KindVersion, SignatureContent, Statement};
 
 /// How the signing certificate is verified.
 ///
@@ -472,16 +469,7 @@ impl Verifier {
 
         // For MessageSignature bundles, verify the messageDigest matches the artifact
         if let SignatureContent::MessageSignature(msg_sig) = &bundle.content {
-            if let Some(ref digest) = msg_sig.message_digest {
-                let artifact_hash = compute_artifact_digest_algo(&artifact, digest.algorithm)?;
-
-                // Compare the digest in the bundle with the computed artifact hash
-                if digest.digest != artifact_hash {
-                    return Err(Error::Verification(
-                        "message digest in bundle does not match artifact hash".to_string(),
-                    ));
-                }
-            }
+            verify_message_digest_binding(msg_sig, &artifact)?;
 
             // Cryptographically verify the signature over the artifact. This runs
             // regardless of `policy.verify_tlog` so the signature is always checked;
@@ -647,15 +635,7 @@ impl Verifier {
         // Verify the signature
         match &bundle.content {
             SignatureContent::MessageSignature(msg_sig) => {
-                // Verify message digest matches artifact
-                if let Some(ref digest) = msg_sig.message_digest {
-                    let artifact_hash = compute_artifact_digest_algo(&artifact, digest.algorithm)?;
-                    if digest.digest != artifact_hash {
-                        return Err(Error::Verification(
-                            "message digest in bundle does not match artifact hash".to_string(),
-                        ));
-                    }
-                }
+                verify_message_digest_binding(msg_sig, &artifact)?;
 
                 // Verify signature over the artifact
                 verify_signature_over_artifact(
@@ -687,11 +667,21 @@ impl Verifier {
     }
 }
 
-fn compute_artifact_digest_algo(
+/// Check that a `MessageSignature`'s declared `messageDigest`, if any, matches
+/// the artifact.
+fn verify_message_digest_binding(
+    msg_sig: &sigstore_types::bundle::MessageSignature,
     artifact: &PreparedArtifact<'_>,
-    algo: HashAlgorithm,
-) -> Result<Vec<u8>> {
-    artifact.digest(algo)
+) -> Result<()> {
+    if let Some(digest) = &msg_sig.message_digest {
+        let artifact_digest = artifact.digest(digest.algorithm)?;
+        if digest.digest != artifact_digest.as_bytes() {
+            return Err(Error::Verification(
+                "message digest in bundle does not match artifact hash".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Verify the DSSE envelope's signature over its PAE with the given key.
@@ -736,17 +726,12 @@ fn verify_dsse_artifact_binding(
             "in-toto statement has no subjects: cannot bind artifact to attestation".to_string(),
         ));
     }
-    let sha256_matches = artifact
-        .digest(HashAlgorithm::Sha2256)
-        .ok()
-        .and_then(|digest| Sha256Hash::try_from_slice(&digest).ok())
-        .is_some_and(|digest| statement.matches_sha256(&digest));
-    let sha512_matches = artifact
-        .digest(HashAlgorithm::Sha2512)
-        .ok()
-        .and_then(|digest| Sha512Hash::try_from_slice(&digest).ok())
-        .is_some_and(|digest| statement.matches_sha512(&digest));
-    let matches = sha256_matches || sha512_matches;
+    let matches = artifact
+        .sha256()
+        .is_ok_and(|digest| statement.matches_sha256(&digest))
+        || artifact
+            .sha512()
+            .is_ok_and(|digest| statement.matches_sha512(&digest));
 
     if !matches {
         return Err(Error::Verification(
@@ -784,7 +769,12 @@ fn verify_signature_over_artifact(
             ))
         })?;
         let digest = artifact.digest(expected)?;
-        sigstore_crypto::verify_signature_prehashed(public_key, &digest, signature, scheme)
+        sigstore_crypto::verify_signature_prehashed(
+            public_key,
+            digest.as_bytes(),
+            signature,
+            scheme,
+        )
     };
     result.map_err(|e| Error::Verification(format!("signature verification failed: {}", e)))
 }
@@ -934,6 +924,7 @@ pub fn verify_with_key<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sigstore_types::HashAlgorithm;
 
     #[test]
     fn public_key_policy_defaults_to_tlog_verification() {

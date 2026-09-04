@@ -37,7 +37,7 @@ pub(crate) fn verify_hashedrekord_entry(
 
     // Compute hash from artifact (bytes or pre-computed digest) or DSSE envelope
     let hash = match &bundle.content {
-        SignatureContent::MessageSignature(_) => compute_artifact_digest(artifact)?,
+        SignatureContent::MessageSignature(_) => artifact.sha256()?,
         SignatureContent::DsseEnvelope(envelope) => sigstore_crypto::sha256(&envelope.pae()),
     };
 
@@ -82,17 +82,6 @@ pub(crate) fn verify_hashedrekord_entry(
     validate_integrated_time(entry, bundle)?;
 
     Ok(())
-}
-
-/// Compute the SHA-256 digest from an artifact for Rekor inclusion proof
-fn compute_artifact_digest(artifact: &PreparedArtifact<'_>) -> Result<Sha256Hash> {
-    Sha256Hash::try_from_slice(&artifact.digest(sigstore_types::HashAlgorithm::Sha2256)?).map_err(
-        |_| {
-            Error::Verification(
-                "Rekor entry verification requires a 32-byte SHA-256 digest".to_string(),
-            )
-        },
-    )
 }
 
 /// Validate artifact hash matches expected hash

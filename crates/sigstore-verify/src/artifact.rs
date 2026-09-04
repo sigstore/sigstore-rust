@@ -1,7 +1,9 @@
 use crate::error::{Error, Result};
 use futures::io::{AsyncRead, AsyncReadExt};
 use sigstore_crypto::ArtifactHasher;
-use sigstore_types::{Artifact, ArtifactDigest, Bundle, HashAlgorithm, SignatureContent};
+use sigstore_types::{
+    Artifact, ArtifactDigest, Bundle, HashAlgorithm, Sha256Hash, Sha512Hash, SignatureContent,
+};
 use std::io::Read;
 
 /// Yield control back to the async executor once.
@@ -122,19 +124,22 @@ impl<'a> PreparedArtifact<'a> {
         self.blob
     }
 
-    pub(crate) fn digest(&self, algorithm: HashAlgorithm) -> Result<Vec<u8>> {
+    /// The artifact digest for `algorithm`.
+    ///
+    /// Blob input is hashed on demand. Digest and reader input can only
+    /// supply the algorithms they were prepared with, so any other request is
+    /// an error that names what was supplied.
+    pub(crate) fn digest(&self, algorithm: HashAlgorithm) -> Result<ArtifactDigest> {
         if let Some(blob) = self.blob {
-            return Ok(match algorithm {
-                HashAlgorithm::Sha2256 => sigstore_crypto::sha256(blob).as_bytes().to_vec(),
-                HashAlgorithm::Sha2384 => sigstore_crypto::sha384(blob),
-                HashAlgorithm::Sha2512 => sigstore_crypto::sha512(blob).as_bytes().to_vec(),
-            });
+            let mut hasher = ArtifactHasher::new(algorithm);
+            hasher.update(blob);
+            return Ok(hasher.finalize());
         }
 
         self.digests
             .iter()
             .find(|digest| digest.algorithm() == algorithm)
-            .map(|digest| digest.as_bytes().to_vec())
+            .cloned()
             .ok_or_else(|| {
                 let supplied = self
                     .digests
@@ -146,5 +151,17 @@ impl<'a> PreparedArtifact<'a> {
                     "verification requires an {algorithm} artifact digest; supplied: {supplied}"
                 ))
             })
+    }
+
+    pub(crate) fn sha256(&self) -> Result<Sha256Hash> {
+        let digest = self.digest(HashAlgorithm::Sha2256)?;
+        Sha256Hash::try_from_slice(digest.as_bytes())
+            .map_err(|e| Error::Verification(e.to_string()))
+    }
+
+    pub(crate) fn sha512(&self) -> Result<Sha512Hash> {
+        let digest = self.digest(HashAlgorithm::Sha2512)?;
+        Sha512Hash::try_from_slice(digest.as_bytes())
+            .map_err(|e| Error::Verification(e.to_string()))
     }
 }
