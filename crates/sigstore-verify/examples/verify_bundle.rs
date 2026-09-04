@@ -46,8 +46,8 @@
 
 use regex::Regex;
 use sigstore_trust_root::TrustedRoot;
-use sigstore_types::{Artifact, Bundle, Sha256Hash};
-use sigstore_verify::{verify, verify_reader, VerificationPolicy};
+use sigstore_types::{Bundle, Sha256Hash};
+use sigstore_verify::{VerificationPolicy, Verifier};
 
 use std::env;
 use std::fs;
@@ -213,6 +213,7 @@ async fn main() {
     }
 
     // Verify
+    let verifier = Verifier::new(&trusted_root);
     let result = if is_digest {
         // Parse digest (sha256:hex...)
         let hex_digest = artifact_or_digest.strip_prefix("sha256:").unwrap();
@@ -223,8 +224,7 @@ async fn main() {
                 process::exit(1);
             }
         };
-        let artifact = Artifact::from(&digest);
-        verify(artifact, &bundle, &policy, &trusted_root)
+        verifier.verify(digest, &bundle, &policy)
     } else {
         // Stream artifact file in constant memory.
         let artifact = match fs::File::open(artifact_or_digest) {
@@ -234,7 +234,7 @@ async fn main() {
                 process::exit(1);
             }
         };
-        verify_reader(artifact, &bundle, &policy, &trusted_root)
+        verifier.verify_reader(artifact, &bundle, &policy)
     };
 
     match result {

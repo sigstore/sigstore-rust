@@ -6,10 +6,7 @@ use sigstore_trust_root::{SigstoreInstance, TrustedRoot, SIGSTORE_PRODUCTION_TRU
 use sigstore_types::{ArtifactDigest, DigestBytes, HashAlgorithm, LogIndex, Sha256Hash};
 use sigstore_verify::bundle::{validate_bundle, validate_bundle_with_options, ValidationOptions};
 use sigstore_verify::types::Bundle;
-use sigstore_verify::{
-    verify, verify_async_reader, verify_reader, PublicKeyVerificationPolicy, VerificationPolicy,
-    Verifier,
-};
+use sigstore_verify::{verify, PublicKeyVerificationPolicy, VerificationPolicy, Verifier};
 use x509_cert::der::Decode;
 
 /// Extract the expected artifact digest from a bundle
@@ -1061,13 +1058,9 @@ fn test_verify_cosign_bundle_from_sync_reader() {
     let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
     let policy = VerificationPolicy::default().require_issuer("https://github.com/login/oauth");
 
-    verify_reader(
-        std::io::Cursor::new(artifact),
-        &bundle,
-        &policy,
-        &production_root(),
-    )
-    .unwrap();
+    Verifier::new(&production_root())
+        .verify_reader(std::io::Cursor::new(artifact), &bundle, &policy)
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1076,14 +1069,10 @@ async fn test_verify_cosign_bundle_from_async_reader() {
     let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
     let policy = VerificationPolicy::default().require_issuer("https://github.com/login/oauth");
 
-    verify_async_reader(
-        futures::io::Cursor::new(artifact),
-        &bundle,
-        &policy,
-        &production_root(),
-    )
-    .await
-    .unwrap();
+    Verifier::new(&production_root())
+        .verify_async_reader(futures::io::Cursor::new(artifact), &bundle, &policy)
+        .await
+        .unwrap();
 }
 
 /// Replace `bundle`'s tlog entries with the first entry of `donor`.
@@ -1437,6 +1426,35 @@ fn test_verifier_with_key_accepts_digest_and_reports_integrated_time() {
         .unwrap();
 
     assert_eq!(result.integrated_time, expected_time);
+}
+
+#[test]
+fn test_verifier_with_key_from_sync_reader() {
+    let bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
+
+    Verifier::new(&production_root())
+        .verify_with_key_reader(
+            std::io::Cursor::new(MANAGED_KEY_ARTIFACT),
+            &bundle,
+            &managed_key_public_key(),
+            &PublicKeyVerificationPolicy::default(),
+        )
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_verifier_with_key_from_async_reader() {
+    let bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
+
+    Verifier::new(&production_root())
+        .verify_with_key_async_reader(
+            futures::io::Cursor::new(MANAGED_KEY_ARTIFACT),
+            &bundle,
+            &managed_key_public_key(),
+            &PublicKeyVerificationPolicy::default(),
+        )
+        .await
+        .unwrap();
 }
 
 #[test]

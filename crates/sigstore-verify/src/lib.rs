@@ -41,8 +41,6 @@ pub use sigstore_types as types;
 
 pub use error::{Error, Result};
 pub use verify::{
-    async_reader, reader, verify, verify_async, verify_async_reader, verify_reader,
-    verify_with_key, verify_with_key_async, verify_with_key_async_reader, verify_with_key_reader,
-    ArtifactSource, AsyncArtifactSource, CertificatePolicy, PublicKeyVerificationPolicy,
-    VerificationPolicy, VerificationResult, Verifier,
+    verify, verify_with_key, CertificatePolicy, PublicKeyVerificationPolicy, VerificationPolicy,
+    VerificationResult, Verifier,
 };

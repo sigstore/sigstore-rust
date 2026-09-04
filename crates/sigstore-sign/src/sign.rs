@@ -23,72 +23,6 @@ use sigstore_types::{
     TransparencyLogEntry,
 };
 
-/// Artifact input for signing.
-#[derive(Debug)]
-pub enum ArtifactSource<'a, R = std::io::Empty> {
-    /// Raw artifact bytes or a pre-computed digest.
-    Artifact(Artifact<'a>),
-    /// Artifact bytes streamed from a reader.
-    Reader(R),
-}
-
-/// Reader input for [`ArtifactSource`].
-#[derive(Debug)]
-pub struct Reader<R>(R);
-
-/// Wrap a reader so it can be passed to `sign(...).`
-pub fn reader<R>(reader: R) -> Reader<R> {
-    Reader(reader)
-}
-
-impl<'a, A> From<A> for ArtifactSource<'a>
-where
-    A: Into<Artifact<'a>>,
-{
-    fn from(artifact: A) -> Self {
-        Self::Artifact(artifact.into())
-    }
-}
-
-impl<'a, R> From<Reader<R>> for ArtifactSource<'a, R> {
-    fn from(reader: Reader<R>) -> Self {
-        Self::Reader(reader.0)
-    }
-}
-
-/// Artifact input for async signing.
-#[derive(Debug)]
-pub enum AsyncArtifactSource<'a, R = futures::io::Empty> {
-    /// Raw artifact bytes or a pre-computed digest.
-    Artifact(Artifact<'a>),
-    /// Artifact bytes streamed from an async reader.
-    Reader(R),
-}
-
-/// Async reader input for [`AsyncArtifactSource`].
-#[derive(Debug)]
-pub struct AsyncReader<R>(R);
-
-/// Wrap an async reader so it can be passed to `sign_async(...).`
-pub fn async_reader<R>(reader: R) -> AsyncReader<R> {
-    AsyncReader(reader)
-}
-
-impl<'a, A> From<A> for AsyncArtifactSource<'a>
-where
-    A: Into<Artifact<'a>>,
-{
-    fn from(artifact: A) -> Self {
-        Self::Artifact(artifact.into())
-    }
-}
-
-impl<'a, R> From<AsyncReader<R>> for AsyncArtifactSource<'a, R> {
-    fn from(reader: AsyncReader<R>) -> Self {
-        Self::Reader(reader.0)
-    }
-}
-
 /// Number of bytes hashed between yields to the async executor.
 const HASH_YIELD_CHUNK_SIZE: usize = 64 * 1024;
 
@@ -437,13 +371,19 @@ impl Signer {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn sign<'a, R: std::io::Read>(
-        &self,
-        artifact: impl Into<ArtifactSource<'a, R>>,
-    ) -> Result<Bundle> {
+    pub async fn sign<'a>(&self, artifact: impl Into<Artifact<'a>>) -> Result<Bundle> {
         let artifact_hash = match artifact.into() {
-            ArtifactSource::Artifact(artifact) => self.sha256_artifact(artifact).await?,
-            ArtifactSource::Reader(reader) => sha256_reader_yielding(reader).await?,
+            Artifact::Blob(blob) => sha256_yielding(blob).await.finalize(),
+            Artifact::Digest(digest) => {
+                if digest.algorithm() != HashAlgorithm::Sha2256 {
+                    return Err(Error::Signing(format!(
+                        "hashedrekord signing requires a SHA-256 artifact digest, got {}",
+                        digest.algorithm()
+                    )));
+                }
+                Sha256Hash::try_from_slice(digest.as_bytes())
+                    .map_err(|e| Error::Signing(e.to_string()))?
+            }
         };
         self.sign_sha256(artifact_hash).await
     }
@@ -453,40 +393,13 @@ impl Signer {
     /// Reads happen while this future is polled and may block its executor
     /// thread. Async applications should prefer [`Signer::sign_async_reader`].
     pub async fn sign_reader(&self, reader: impl std::io::Read) -> Result<Bundle> {
-        self.sign(crate::sign::reader(reader)).await
+        self.sign_sha256(sha256_reader_yielding(reader).await?)
+            .await
     }
 
     /// Sign an artifact read asynchronously to EOF in constant memory.
     pub async fn sign_async_reader(&self, reader: impl AsyncRead + Unpin) -> Result<Bundle> {
-        self.sign_async(crate::sign::async_reader(reader)).await
-    }
-
-    /// Sign an artifact or async reader.
-    pub async fn sign_async<'a, R: AsyncRead + Unpin>(
-        &self,
-        artifact: impl Into<AsyncArtifactSource<'a, R>>,
-    ) -> Result<Bundle> {
-        let artifact_hash = match artifact.into() {
-            AsyncArtifactSource::Artifact(artifact) => self.sha256_artifact(artifact).await?,
-            AsyncArtifactSource::Reader(reader) => sha256_async_reader(reader).await?,
-        };
-        self.sign_sha256(artifact_hash).await
-    }
-
-    async fn sha256_artifact(&self, artifact: Artifact<'_>) -> Result<Sha256Hash> {
-        match artifact {
-            Artifact::Blob(blob) => Ok(sha256_yielding(blob).await.finalize()),
-            Artifact::Digest(digest) => {
-                if digest.algorithm() != HashAlgorithm::Sha2256 {
-                    return Err(Error::Signing(format!(
-                        "hashedrekord signing requires a SHA-256 artifact digest, got {}",
-                        digest.algorithm()
-                    )));
-                }
-                Sha256Hash::try_from_slice(digest.as_bytes())
-                    .map_err(|e| Error::Signing(e.to_string()))
-            }
-        }
+        self.sign_sha256(sha256_async_reader(reader).await?).await
     }
 
     async fn sign_sha256(&self, artifact_hash: Sha256Hash) -> Result<Bundle> {
