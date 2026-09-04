@@ -63,13 +63,7 @@ fn validate_integrated_time(
     not_before: jiff::Timestamp,
     not_after: jiff::Timestamp,
 ) -> Result<()> {
-    // Check that integrated time is not in the future
-    if time > now {
-        return Err(Error::Verification(format!(
-            "integrated time {} is in the future (current time: {})",
-            time, now
-        )));
-    }
+    validate_integrated_time_not_in_future(time, now)?;
 
     // Check that integrated time is within certificate validity period
     if time < not_before {
@@ -86,6 +80,19 @@ fn validate_integrated_time(
         )));
     }
 
+    Ok(())
+}
+
+pub(crate) fn validate_integrated_time_not_in_future(
+    time: jiff::Timestamp,
+    now: jiff::Timestamp,
+) -> Result<()> {
+    if time > now {
+        return Err(Error::Verification(format!(
+            "integrated time {} is in the future (current time: {})",
+            time, now
+        )));
+    }
     Ok(())
 }
 
