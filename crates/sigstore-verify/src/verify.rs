@@ -1140,6 +1140,26 @@ mod tests {
         assert!(artifact.digest(HashAlgorithm::Sha2512).is_ok());
     }
 
+    /// SHA-512 subjects (sigstore-python and npm provenance bundles) must bind
+    /// a streamed artifact too: the reader pass hashes with SHA-512 only.
+    #[test]
+    fn test_dsse_binding_sha512_subject_from_reader() {
+        let artifact_bytes: &[u8] = b"hello world";
+        let hash_hex = sigstore_crypto::sha512(artifact_bytes).to_hex();
+        let envelope = in_toto_envelope(&format!(
+            r#"{{"_type":"https://in-toto.io/Statement/v1","subject":[{{"name":"artifact","digest":{{"sha512":"{hash_hex}"}}}}],"predicateType":"https://example.com/predicate/v1","predicate":{{}}}}"#
+        ));
+        let content = SignatureContent::DsseEnvelope(envelope.clone());
+
+        let artifact = PreparedArtifact::from_reader(artifact_bytes, &content, None).unwrap();
+        assert!(artifact.digest(HashAlgorithm::Sha2256).is_err());
+        assert!(artifact.digest(HashAlgorithm::Sha2512).is_ok());
+        assert!(verify_dsse_artifact_binding(&envelope, &artifact).is_ok());
+
+        let other = PreparedArtifact::from_reader(&b"other"[..], &content, None).unwrap();
+        assert!(verify_dsse_artifact_binding(&envelope, &other).is_err());
+    }
+
     #[test]
     fn test_dsse_binding_matching_subject_ok() {
         let artifact_bytes = b"hello world";

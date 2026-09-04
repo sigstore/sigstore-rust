@@ -956,6 +956,62 @@ fn test_verify_conda_package_attestation() {
     assert!(verification.integrated_time.is_some());
 }
 
+fn conda_attestation_policy() -> VerificationPolicy {
+    VerificationPolicy::default()
+        .require_identity("https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main")
+        .require_issuer("https://token.actions.githubusercontent.com")
+}
+
+/// DSSE bundles bind the artifact only through the in-toto subjects, so the
+/// streaming path hashes with the subject algorithms (SHA-256 here) and must
+/// verify end to end from a reader.
+#[test]
+fn test_verify_conda_package_attestation_from_sync_reader() {
+    let bundle = Bundle::from_json(CONDA_ATTESTATION_BUNDLE).unwrap();
+
+    let verification = Verifier::new(&production_root())
+        .verify_reader(
+            std::io::Cursor::new(CONDA_PACKAGE),
+            &bundle,
+            &conda_attestation_policy(),
+        )
+        .unwrap();
+    assert!(verification.integrated_time.is_some());
+}
+
+#[tokio::test]
+async fn test_verify_conda_package_attestation_from_async_reader() {
+    let bundle = Bundle::from_json(CONDA_ATTESTATION_BUNDLE).unwrap();
+
+    Verifier::new(&production_root())
+        .verify_async_reader(
+            futures::io::Cursor::new(CONDA_PACKAGE),
+            &bundle,
+            &conda_attestation_policy(),
+        )
+        .await
+        .unwrap();
+}
+
+/// A streamed artifact that does not match the attestation subject must be
+/// rejected, like the tampered blob above.
+#[test]
+fn test_verify_conda_package_tampered_from_reader() {
+    let bundle = Bundle::from_json(CONDA_ATTESTATION_BUNDLE).unwrap();
+
+    let err = Verifier::new(&production_root())
+        .verify_reader(
+            std::io::Cursor::new(b"this is not the original package content"),
+            &bundle,
+            &conda_attestation_policy(),
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("does not match any subject"),
+        "unexpected error: {err}"
+    );
+}
+
 /// Test that verification fails with wrong identity
 #[test]
 fn test_verify_conda_package_wrong_identity() {
