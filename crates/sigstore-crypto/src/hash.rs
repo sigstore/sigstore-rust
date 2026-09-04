@@ -51,7 +51,7 @@ impl ArtifactHasher {
 
     pub fn finalize(self) -> ArtifactDigest {
         ArtifactDigest::new(self.algorithm, self.context.finish().as_ref())
-            .expect("cryptographic backend returned the algorithm's documented digest length")
+            .expect("backend digest length does not match the algorithm's documented length")
     }
 }
 
