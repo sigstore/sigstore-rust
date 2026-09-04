@@ -274,7 +274,7 @@ impl Verifier {
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
         self.verify_prepared(
-            PreparedArtifact::from_artifact(artifact.into()),
+            PreparedArtifact::from_artifact(artifact.into(), &bundle.content),
             bundle,
             policy,
         )
@@ -291,7 +291,7 @@ impl Verifier {
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
         self.verify_prepared(
-            PreparedArtifact::from_reader(reader, bundle)?,
+            PreparedArtifact::from_reader(reader, &bundle.content)?,
             bundle,
             policy,
         )
@@ -305,7 +305,7 @@ impl Verifier {
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
         self.verify_prepared(
-            PreparedArtifact::from_async_reader(reader, bundle).await?,
+            PreparedArtifact::from_async_reader(reader, &bundle.content).await?,
             bundle,
             policy,
         )
@@ -534,7 +534,7 @@ impl Verifier {
         policy: &PublicKeyVerificationPolicy,
     ) -> Result<VerificationResult> {
         self.verify_with_key_prepared(
-            PreparedArtifact::from_artifact(artifact.into()),
+            PreparedArtifact::from_artifact(artifact.into(), &bundle.content),
             bundle,
             public_key,
             policy,
@@ -555,7 +555,7 @@ impl Verifier {
         policy: &PublicKeyVerificationPolicy,
     ) -> Result<VerificationResult> {
         self.verify_with_key_prepared(
-            PreparedArtifact::from_reader(reader, bundle)?,
+            PreparedArtifact::from_reader(reader, &bundle.content)?,
             bundle,
             public_key,
             policy,
@@ -572,7 +572,7 @@ impl Verifier {
         policy: &PublicKeyVerificationPolicy,
     ) -> Result<VerificationResult> {
         self.verify_with_key_prepared(
-            PreparedArtifact::from_async_reader(reader, bundle).await?,
+            PreparedArtifact::from_async_reader(reader, &bundle.content).await?,
             bundle,
             public_key,
             policy,
@@ -1016,13 +1016,23 @@ mod tests {
         )
     }
 
+    fn prepared_blob<'a>(
+        blob: &'a [u8],
+        envelope: &sigstore_types::DsseEnvelope,
+    ) -> PreparedArtifact<'a> {
+        PreparedArtifact::from_artifact(
+            Artifact::from(blob),
+            &SignatureContent::DsseEnvelope(envelope.clone()),
+        )
+    }
+
     #[test]
     fn test_dsse_binding_matching_subject_ok() {
         let artifact_bytes = b"hello world";
         let hash_hex = sigstore_crypto::sha256(artifact_bytes).to_hex();
         let envelope = in_toto_envelope(&statement_with_subject_sha256(&hash_hex));
 
-        let artifact = PreparedArtifact::from_artifact(Artifact::from(artifact_bytes.as_slice()));
+        let artifact = prepared_blob(artifact_bytes, &envelope);
         assert!(verify_dsse_artifact_binding(&envelope, &artifact).is_ok());
     }
 
@@ -1031,7 +1041,7 @@ mod tests {
         let hash_hex = sigstore_crypto::sha256(b"some other artifact").to_hex();
         let envelope = in_toto_envelope(&statement_with_subject_sha256(&hash_hex));
 
-        let artifact = PreparedArtifact::from_artifact(Artifact::from(b"hello world".as_slice()));
+        let artifact = prepared_blob(b"hello world", &envelope);
         let err = verify_dsse_artifact_binding(&envelope, &artifact).unwrap_err();
         assert!(err
             .to_string()
@@ -1043,7 +1053,7 @@ mod tests {
         let payload = r#"{"_type":"https://in-toto.io/Statement/v1","subject":[],"predicateType":"https://example.com/predicate/v1","predicate":{}}"#;
         let envelope = in_toto_envelope(payload);
 
-        let artifact = PreparedArtifact::from_artifact(Artifact::from(b"hello world".as_slice()));
+        let artifact = prepared_blob(b"hello world", &envelope);
         let err = verify_dsse_artifact_binding(&envelope, &artifact).unwrap_err();
         assert!(err.to_string().contains("no subjects"));
     }
@@ -1056,7 +1066,7 @@ mod tests {
             unused_signature(),
         );
 
-        let artifact = PreparedArtifact::from_artifact(Artifact::from(b"hello world".as_slice()));
+        let artifact = prepared_blob(b"hello world", &envelope);
         let err = verify_dsse_artifact_binding(&envelope, &artifact).unwrap_err();
         assert!(err.to_string().contains("unsupported DSSE payload type"));
     }

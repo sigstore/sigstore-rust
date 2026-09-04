@@ -289,8 +289,10 @@ mod tests {
 
     fn verify_consistency(bundle: &Bundle) -> Result<()> {
         let digest = [0u8; 32];
-        let artifact =
-            PreparedArtifact::from_artifact(Artifact::from(Sha256Hash::from_bytes(digest)));
+        let artifact = PreparedArtifact::from_artifact(
+            Artifact::from(Sha256Hash::from_bytes(digest)),
+            &bundle.content,
+        );
         verify_tlog_consistency(bundle, &artifact)
     }
 
@@ -316,8 +318,10 @@ mod tests {
             hint: sigstore_crypto::sha256(public_key.as_bytes()).to_base64(),
         };
         let digest = [0u8; 32];
-        let artifact =
-            PreparedArtifact::from_artifact(Artifact::from(Sha256Hash::from_bytes(digest)));
+        let artifact = PreparedArtifact::from_artifact(
+            Artifact::from(Sha256Hash::from_bytes(digest)),
+            &bundle.content,
+        );
         verify_tlog_consistency_with_key(&bundle, &artifact, Some(&public_key)).unwrap();
 
         let wrong_key = DerPublicKey::new(vec![1, 2, 3]);
