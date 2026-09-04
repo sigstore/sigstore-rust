@@ -291,7 +291,11 @@ impl Verifier {
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
         self.verify_prepared(
-            PreparedArtifact::from_reader(reader, &bundle.content)?,
+            PreparedArtifact::from_reader(
+                reader,
+                &bundle.content,
+                certificate_signing_scheme(bundle),
+            )?,
             bundle,
             policy,
         )
@@ -305,7 +309,12 @@ impl Verifier {
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
         self.verify_prepared(
-            PreparedArtifact::from_async_reader(reader, &bundle.content).await?,
+            PreparedArtifact::from_async_reader(
+                reader,
+                &bundle.content,
+                certificate_signing_scheme(bundle),
+            )
+            .await?,
             bundle,
             policy,
         )
@@ -555,7 +564,11 @@ impl Verifier {
         policy: &PublicKeyVerificationPolicy,
     ) -> Result<VerificationResult> {
         self.verify_with_key_prepared(
-            PreparedArtifact::from_reader(reader, &bundle.content)?,
+            PreparedArtifact::from_reader(
+                reader,
+                &bundle.content,
+                public_key_signing_scheme(bundle, public_key),
+            )?,
             bundle,
             public_key,
             policy,
@@ -572,7 +585,12 @@ impl Verifier {
         policy: &PublicKeyVerificationPolicy,
     ) -> Result<VerificationResult> {
         self.verify_with_key_prepared(
-            PreparedArtifact::from_async_reader(reader, &bundle.content).await?,
+            PreparedArtifact::from_async_reader(
+                reader,
+                &bundle.content,
+                public_key_signing_scheme(bundle, public_key),
+            )
+            .await?,
             bundle,
             public_key,
             policy,
@@ -810,6 +828,30 @@ fn signing_scheme_for_content(
     }
 }
 
+/// The scheme a certificate bundle's signature will be verified with, derived
+/// before the artifact is read so one streaming pass can produce the digest
+/// that scheme consumes.
+///
+/// `None` when the certificate cannot be read: streamed input then hashes with
+/// every algorithm and verification reports the certificate problem itself.
+fn certificate_signing_scheme(bundle: &Bundle) -> Option<SigningScheme> {
+    let cert =
+        crate::verify_impl::helpers::extract_certificate(&bundle.verification_material.content)
+            .ok()?;
+    let cert_info = parse_certificate_info(cert.as_bytes()).ok()?;
+    signing_scheme_for_content(cert_info.key_algorithm, &bundle.content).ok()
+}
+
+/// [`certificate_signing_scheme`] for managed-key bundles, whose key is
+/// supplied by the caller.
+fn public_key_signing_scheme(
+    bundle: &Bundle,
+    public_key: &sigstore_types::DerPublicKey,
+) -> Option<SigningScheme> {
+    let key_algorithm = public_key_algorithm(public_key).ok()?;
+    signing_scheme_for_content(key_algorithm, &bundle.content).ok()
+}
+
 fn verify_message_signature_crypto(
     cert_info: &sigstore_crypto::CertificateInfo,
     msg_sig: &sigstore_types::bundle::MessageSignature,
@@ -1024,6 +1066,61 @@ mod tests {
             Artifact::from(blob),
             &SignatureContent::DsseEnvelope(envelope.clone()),
         )
+    }
+
+    fn message_signature_content(message_digest: Option<HashAlgorithm>) -> SignatureContent {
+        SignatureContent::MessageSignature(sigstore_types::bundle::MessageSignature {
+            message_digest: message_digest.map(|algorithm| sigstore_types::bundle::MessageDigest {
+                algorithm,
+                digest: sigstore_types::DigestBytes::from_bytes(vec![0; 32]),
+            }),
+            signature: sigstore_types::SignatureBytes::from_bytes(b"sig"),
+        })
+    }
+
+    fn has_digest(artifact: &PreparedArtifact<'_>, algorithm: HashAlgorithm) -> bool {
+        artifact.digest(algorithm).is_ok()
+    }
+
+    /// A P-384 key signs over SHA-384 while hashedrekord binds SHA-256. When
+    /// the bundle omits `messageDigest`, streamed input must still produce
+    /// the scheme's digest or prehashed verification cannot run.
+    #[test]
+    fn test_streamed_message_signature_hashes_the_schemes_digest() {
+        let content = message_signature_content(None);
+        let bytes: &[u8] = b"hello world";
+
+        let artifact =
+            PreparedArtifact::from_reader(bytes, &content, Some(SigningScheme::EcdsaP384Sha384))
+                .unwrap();
+        assert!(has_digest(&artifact, HashAlgorithm::Sha2256));
+        assert!(has_digest(&artifact, HashAlgorithm::Sha2384));
+        assert!(!has_digest(&artifact, HashAlgorithm::Sha2512));
+
+        // Unknown key material: hash everything so verification can proceed
+        // far enough to report the real problem.
+        let artifact = PreparedArtifact::from_reader(bytes, &content, None).unwrap();
+        assert!(has_digest(&artifact, HashAlgorithm::Sha2256));
+        assert!(has_digest(&artifact, HashAlgorithm::Sha2384));
+        assert!(has_digest(&artifact, HashAlgorithm::Sha2512));
+
+        // Ed25519 has no external digest; only the binding digest is hashed
+        // and prehashed verification fails closed later.
+        let artifact =
+            PreparedArtifact::from_reader(bytes, &content, Some(SigningScheme::Ed25519)).unwrap();
+        assert!(has_digest(&artifact, HashAlgorithm::Sha2256));
+        assert!(!has_digest(&artifact, HashAlgorithm::Sha2384));
+
+        // Blob input is verified over the bytes themselves, so the scheme's
+        // digest is not computed; the declared messageDigest still is.
+        let artifact = PreparedArtifact::from_artifact(
+            Artifact::from(bytes),
+            &message_signature_content(Some(HashAlgorithm::Sha2384)),
+        );
+        assert!(artifact.blob().is_some());
+        assert!(has_digest(&artifact, HashAlgorithm::Sha2256));
+        assert!(has_digest(&artifact, HashAlgorithm::Sha2384));
+        assert!(!has_digest(&artifact, HashAlgorithm::Sha2512));
     }
 
     #[test]
