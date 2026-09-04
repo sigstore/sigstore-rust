@@ -2,7 +2,7 @@ use crate::error::{Error, Result};
 use futures::io::{AsyncRead, AsyncReadExt};
 use sigstore_crypto::ArtifactHasher;
 use sigstore_types::{
-    Artifact, ArtifactDigest, HashAlgorithm, Sha256Hash, Sha512Hash, SignatureContent,
+    Artifact, ArtifactDigest, HashAlgorithm, Sha256Hash, Sha512Hash, SignatureContent, Statement,
 };
 use std::io::Read;
 
@@ -45,22 +45,38 @@ pub(crate) struct PreparedArtifact<'a> {
 }
 
 /// The digest algorithms verification can request for this bundle content.
-fn required_hashers(content: &SignatureContent) -> Vec<ArtifactHasher> {
-    let mut algorithms = vec![HashAlgorithm::Sha2256];
+fn required_algorithms(content: &SignatureContent) -> Vec<HashAlgorithm> {
     match content {
         // hashedrekord binds SHA-256; the signature itself may be over the
         // declared messageDigest algorithm (SHA-384 for ECDSA-P256-SHA384).
         SignatureContent::MessageSignature(signature) => {
+            let mut algorithms = vec![HashAlgorithm::Sha2256];
             if let Some(digest) = &signature.message_digest {
                 if !algorithms.contains(&digest.algorithm) {
                     algorithms.push(digest.algorithm);
                 }
             }
+            algorithms
         }
-        // in-toto subjects may be bound by SHA-256 or SHA-512.
-        SignatureContent::DsseEnvelope(_) => algorithms.push(HashAlgorithm::Sha2512),
+        // Only the in-toto subjects bind the artifact, so hash with the
+        // algorithms they use. If the payload is not a readable statement,
+        // hash both so the binding check later reports the real problem.
+        SignatureContent::DsseEnvelope(envelope) => {
+            std::str::from_utf8(envelope.payload.as_bytes())
+                .ok()
+                .and_then(|payload| serde_json::from_str::<Statement>(payload).ok())
+                .map(|statement| statement.subject_algorithms())
+                .filter(|algorithms| !algorithms.is_empty())
+                .unwrap_or_else(|| vec![HashAlgorithm::Sha2256, HashAlgorithm::Sha2512])
+        }
     }
-    algorithms.into_iter().map(ArtifactHasher::new).collect()
+}
+
+fn required_hashers(content: &SignatureContent) -> Vec<ArtifactHasher> {
+    required_algorithms(content)
+        .into_iter()
+        .map(ArtifactHasher::new)
+        .collect()
 }
 
 impl<'a> PreparedArtifact<'a> {

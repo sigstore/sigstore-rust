@@ -1027,6 +1027,23 @@ mod tests {
     }
 
     #[test]
+    fn test_dsse_prepared_blob_hashes_only_subject_algorithms() {
+        let sha256_only = in_toto_envelope(&statement_with_subject_sha256(
+            &sigstore_crypto::sha256(b"hello world").to_hex(),
+        ));
+        let artifact = prepared_blob(b"hello world", &sha256_only);
+        assert!(artifact.digest(HashAlgorithm::Sha2256).is_ok());
+        assert!(artifact.digest(HashAlgorithm::Sha2512).is_err());
+
+        // An unreadable statement falls back to hashing both, so the binding
+        // check can report the real problem.
+        let unreadable = in_toto_envelope("not json");
+        let artifact = prepared_blob(b"hello world", &unreadable);
+        assert!(artifact.digest(HashAlgorithm::Sha2256).is_ok());
+        assert!(artifact.digest(HashAlgorithm::Sha2512).is_ok());
+    }
+
+    #[test]
     fn test_dsse_binding_matching_subject_ok() {
         let artifact_bytes = b"hello world";
         let hash_hex = sigstore_crypto::sha256(artifact_bytes).to_hex();

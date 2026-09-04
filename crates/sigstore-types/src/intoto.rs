@@ -6,7 +6,7 @@
 //!
 //! Specification: <https://github.com/in-toto/attestation/blob/main/spec/v1/statement.md>
 
-use crate::{Sha256Hash, Sha512Hash};
+use crate::{HashAlgorithm, Sha256Hash, Sha512Hash};
 use serde::{Deserialize, Serialize};
 
 /// In-toto Statement v1
@@ -101,6 +101,21 @@ impl<'de> Deserialize<'de> for Digest {
 }
 
 impl Statement {
+    /// The digest algorithms used by at least one subject.
+    ///
+    /// Verifiers use this to hash an artifact only with the algorithms that
+    /// can actually bind it to this statement.
+    pub fn subject_algorithms(&self) -> Vec<HashAlgorithm> {
+        let mut algorithms = Vec::new();
+        if self.subject.iter().any(|s| s.digest.sha256.is_some()) {
+            algorithms.push(HashAlgorithm::Sha2256);
+        }
+        if self.subject.iter().any(|s| s.digest.sha512.is_some()) {
+            algorithms.push(HashAlgorithm::Sha2512);
+        }
+        algorithms
+    }
+
     /// Check if any subject in the statement matches the given SHA-256 hash
     pub fn matches_sha256(&self, hash: &Sha256Hash) -> bool {
         self.subject
@@ -147,6 +162,25 @@ option_hex_digest!(option_hex_sha512, Sha512Hash);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subject_algorithms_lists_each_used_algorithm_once() {
+        let statement: Statement = serde_json::from_str(
+            r#"{"_type":"https://in-toto.io/Statement/v1","predicateType":"p","predicate":{},
+                "subject":[
+                    {"name":"a","digest":{"sha256":"b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"}},
+                    {"name":"b","digest":{"sha256":"b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"}}
+                ]}"#,
+        )
+        .unwrap();
+        assert_eq!(statement.subject_algorithms(), vec![HashAlgorithm::Sha2256]);
+
+        let none: Statement = serde_json::from_str(
+            r#"{"_type":"https://in-toto.io/Statement/v1","predicateType":"p","predicate":{},"subject":[]}"#,
+        )
+        .unwrap();
+        assert!(none.subject_algorithms().is_empty());
+    }
 
     #[test]
     fn test_statement_deserialization() {
