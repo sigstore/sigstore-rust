@@ -2121,6 +2121,7 @@ dependencies = [
  "base64",
  "const-oid",
  "der",
+ "futures-io",
  "hex",
  "jiff",
  "pem",
@@ -2227,6 +2228,7 @@ version = "0.11.0"
 dependencies = [
  "base64",
  "futures",
+ "futures-io",
  "hex",
  "jiff",
  "serde",
@@ -2333,6 +2335,7 @@ dependencies = [
  "cms",
  "const-oid",
  "futures",
+ "futures-io",
  "hex",
  "jiff",
  "pem",

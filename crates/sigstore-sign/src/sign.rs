@@ -3,9 +3,11 @@
 //! This module provides the main entry point for signing artifacts with Sigstore.
 
 use crate::error::{Error, Result};
-use futures::io::{AsyncRead, AsyncReadExt};
+use futures_io::AsyncRead;
 use sigstore_bundle::{BundleV03, TlogEntryBuilder};
-use sigstore_crypto::{KeyPair, Sha256Hasher, SigningScheme};
+use sigstore_crypto::{
+    hash_async_reader, hash_reader_yielding, KeyPair, Sha256Hasher, SigningScheme,
+};
 use sigstore_fulcio::FulcioClient;
 use sigstore_oidc::IdentityToken;
 use sigstore_rekor::{
@@ -23,93 +25,32 @@ use sigstore_types::{
     TransparencyLogEntry,
 };
 
-/// Number of bytes hashed between yields to the async executor.
-const HASH_YIELD_CHUNK_SIZE: usize = 64 * 1024;
-
-/// Yield control back to the async executor once.
-///
-/// Runtime-agnostic equivalent of `tokio::task::yield_now()`: the future
-/// wakes its own waker and returns `Pending` on the first poll, then `Ready`.
-fn yield_now() -> impl std::future::Future<Output = ()> {
-    struct YieldNow {
-        yielded: bool,
-    }
-
-    impl std::future::Future for YieldNow {
-        type Output = ();
-
-        fn poll(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<()> {
-            if self.yielded {
-                std::task::Poll::Ready(())
-            } else {
-                self.yielded = true;
-                cx.waker().wake_by_ref();
-                std::task::Poll::Pending
-            }
-        }
-    }
-
-    YieldNow { yielded: false }
+/// Hash in-memory `data` into `hasher`, yielding to the executor between
+/// chunks so unbounded caller input cannot starve other tasks (TOB-SIGSTORE-8).
+async fn update_yielding(hasher: &mut Sha256Hasher, data: &[u8]) {
+    hash_reader_yielding(data, std::slice::from_mut(hasher))
+        .await
+        .expect("reading from an in-memory slice cannot fail");
 }
 
-async fn update_sha256_yielding(hasher: &mut Sha256Hasher, data: &[u8]) {
-    for chunk in data.chunks(HASH_YIELD_CHUNK_SIZE) {
-        hasher.update(chunk);
-        yield_now().await;
-    }
-}
-
-/// Compute a SHA-256 digest over `data` in chunks, yielding to the async
-/// executor between chunks.
+/// SHA-256 a blocking reader to EOF, yielding to the executor between chunks.
 ///
-/// Hashing is CPU-bound: doing it in one shot over unbounded caller input
-/// would occupy the executor thread for the whole duration and starve other
-/// tasks (TOB-SIGSTORE-8). Hashing in [`HASH_YIELD_CHUNK_SIZE`] chunks keeps
-/// each non-yielding stretch short so other tasks can make progress.
-///
-/// Returns the hasher so callers can either [`Sha256Hasher::finalize`] it or
-/// sign the digest directly via [`KeyPair::sign_prehashed`].
-async fn sha256_yielding(data: &[u8]) -> Sha256Hasher {
+/// The reads themselves run on the executor thread; see
+/// [`sigstore_crypto::hash_reader_yielding`].
+async fn sha256_yielding(reader: impl std::io::Read) -> Result<Sha256Hash> {
     let mut hasher = Sha256Hasher::new();
-    update_sha256_yielding(&mut hasher, data).await;
-    hasher
-}
-
-async fn sha256_reader_yielding(mut reader: impl std::io::Read) -> Result<Sha256Hash> {
-    let mut hasher = Sha256Hasher::new();
-    let mut buffer = [0_u8; HASH_YIELD_CHUNK_SIZE];
-    loop {
-        let read = std::io::Read::read(&mut reader, &mut buffer).map_err(Error::ArtifactRead)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        yield_now().await;
-    }
+    hash_reader_yielding(reader, std::slice::from_mut(&mut hasher))
+        .await
+        .map_err(Error::ArtifactRead)?;
     Ok(hasher.finalize())
 }
 
-async fn sha256_async_reader(mut reader: impl AsyncRead + Unpin) -> Result<Sha256Hash> {
+/// SHA-256 an async reader to EOF, yielding to the executor between chunks.
+async fn sha256_async(reader: impl AsyncRead + Unpin) -> Result<Sha256Hash> {
     let mut hasher = Sha256Hasher::new();
-    let mut buffer = [0_u8; HASH_YIELD_CHUNK_SIZE];
-    loop {
-        let read = reader
-            .read(&mut buffer)
-            .await
-            .map_err(Error::ArtifactRead)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        // AsyncRead is allowed to remain ready indefinitely (for example,
-        // futures::io::Cursor), so the read itself is not necessarily a
-        // scheduling point. Yield explicitly to keep large inputs from
-        // monopolizing the executor thread.
-        yield_now().await;
-    }
+    hash_async_reader(reader, std::slice::from_mut(&mut hasher))
+        .await
+        .map_err(Error::ArtifactRead)?;
     Ok(hasher.finalize())
 }
 
@@ -129,24 +70,18 @@ fn dsse_pae_hasher(payload_type: &str, payload_len: usize) -> Sha256Hasher {
 /// Hash a DSSE PAE in chunks without first allocating a full PAE copy.
 async fn sha256_pae_yielding(payload_type: &str, payload: &[u8]) -> Sha256Hasher {
     let mut hasher = dsse_pae_hasher(payload_type, payload.len());
-    update_sha256_yielding(&mut hasher, payload).await;
+    update_yielding(&mut hasher, payload).await;
     hasher
 }
 
-/// Copy a DSSE payload into its owned envelope representation while hashing
-/// its PAE in the same yielding pass.
+/// Copy a DSSE payload into its owned envelope representation and hash its
+/// PAE cooperatively, without allocating a full PAE copy.
 async fn prepare_dsse_payload_yielding(
     payload_type: &str,
     data: &[u8],
 ) -> (PayloadBytes, Sha256Hasher) {
-    let mut payload = Vec::with_capacity(data.len());
-    let mut hasher = dsse_pae_hasher(payload_type, data.len());
-    for chunk in data.chunks(HASH_YIELD_CHUNK_SIZE) {
-        payload.extend_from_slice(chunk);
-        hasher.update(chunk);
-        yield_now().await;
-    }
-    (PayloadBytes::new(payload), hasher)
+    let hasher = sha256_pae_yielding(payload_type, data).await;
+    (PayloadBytes::new(data.to_vec()), hasher)
 }
 
 /// Configuration for signing operations
@@ -373,7 +308,7 @@ impl Signer {
     /// ```
     pub async fn sign<'a>(&self, artifact: impl Into<Artifact<'a>>) -> Result<Bundle> {
         let artifact_hash = match artifact.into() {
-            Artifact::Blob(blob) => sha256_yielding(blob).await.finalize(),
+            Artifact::Blob(blob) => sha256_yielding(blob).await?,
             Artifact::Digest(digest) => {
                 if digest.algorithm() != HashAlgorithm::Sha2256 {
                     return Err(Error::Signing(format!(
@@ -393,13 +328,12 @@ impl Signer {
     /// Reads happen while this future is polled and may block its executor
     /// thread. Async applications should prefer [`Signer::sign_async_reader`].
     pub async fn sign_reader(&self, reader: impl std::io::Read) -> Result<Bundle> {
-        self.sign_sha256(sha256_reader_yielding(reader).await?)
-            .await
+        self.sign_sha256(sha256_yielding(reader).await?).await
     }
 
     /// Sign an artifact read asynchronously to EOF in constant memory.
     pub async fn sign_async_reader(&self, reader: impl AsyncRead + Unpin) -> Result<Bundle> {
-        self.sign_sha256(sha256_async_reader(reader).await?).await
+        self.sign_sha256(sha256_async(reader).await?).await
     }
 
     async fn sign_sha256(&self, artifact_hash: Sha256Hash) -> Result<Bundle> {
@@ -810,54 +744,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sha256_yielding_matches_one_shot() {
-        for size in [
-            0,
-            1,
-            HASH_YIELD_CHUNK_SIZE - 1,
-            HASH_YIELD_CHUNK_SIZE,
-            HASH_YIELD_CHUNK_SIZE + 1,
-            3 * HASH_YIELD_CHUNK_SIZE + 17,
-        ] {
-            let data: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
-            let chunked = sha256_yielding(&data).await.finalize();
-            assert_eq!(chunked, sigstore_crypto::sha256(&data), "size {size}");
-        }
-    }
-
-    #[tokio::test]
-    async fn reader_hashing_matches_blob_hashing() {
-        let data = vec![42_u8; HASH_YIELD_CHUNK_SIZE * 2 + 7];
-        let expected = sigstore_crypto::sha256(&data);
-        assert_eq!(
-            sha256_reader_yielding(std::io::Cursor::new(&data))
-                .await
-                .unwrap(),
-            expected
-        );
-        assert_eq!(
-            sha256_async_reader(futures::io::Cursor::new(&data))
-                .await
-                .unwrap(),
-            expected
-        );
-    }
-
-    #[test]
-    fn async_reader_hashing_yields_even_when_reads_are_ready() {
-        let mut future = Box::pin(sha256_async_reader(futures::io::Cursor::new(vec![42_u8])));
-        let waker = futures::task::noop_waker();
-        let mut context = std::task::Context::from_waker(&waker);
-        assert!(matches!(
-            std::future::Future::poll(future.as_mut(), &mut context),
-            std::task::Poll::Pending
-        ));
-    }
-
-    #[tokio::test]
     async fn test_dsse_pae_yielding_matches_materialized_pae() {
         let payload_type = "application/vnd.in-toto+json";
-        for size in [0, 1, HASH_YIELD_CHUNK_SIZE, HASH_YIELD_CHUNK_SIZE + 1] {
+        // Straddle the 64 KiB chunk boundary used by the yielding hasher.
+        for size in [0, 1, 64 * 1024, 64 * 1024 + 1] {
             let data: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
             let (payload, hasher) = prepare_dsse_payload_yielding(payload_type, &data).await;
             assert_eq!(payload.as_bytes(), data);

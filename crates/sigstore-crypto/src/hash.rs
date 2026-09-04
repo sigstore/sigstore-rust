@@ -1,8 +1,15 @@
 //! Hashing utilities using aws-lc-rs
 
 use aws_lc_rs::digest::{self, Context, SHA256, SHA384, SHA512};
+use futures_io::AsyncRead;
 use sigstore_types::{ArtifactDigest, HashAlgorithm, Sha256Hash, Sha512Hash};
+use std::future::Future;
 use std::io::{self, Read};
+use std::pin::Pin;
+use std::task::{Context as TaskContext, Poll};
+
+/// Bytes read and hashed between yields to the async executor.
+const HASH_CHUNK_SIZE: usize = 64 * 1024;
 
 /// Hash data using SHA-256, returning a typed hash
 pub fn sha256(data: &[u8]) -> Sha256Hash {
@@ -52,6 +59,27 @@ impl ArtifactHasher {
     pub fn finalize(self) -> ArtifactDigest {
         ArtifactDigest::new(self.algorithm, self.context.finish().as_ref())
             .expect("backend digest length does not match the algorithm's documented length")
+    }
+}
+
+/// An incremental hasher that can absorb more input.
+///
+/// Implemented by every hasher in this module so the reader helpers below can
+/// feed one pass over the input into any combination of them.
+pub trait HashUpdate {
+    /// Absorb `data`.
+    fn update(&mut self, data: &[u8]);
+}
+
+impl HashUpdate for ArtifactHasher {
+    fn update(&mut self, data: &[u8]) {
+        ArtifactHasher::update(self, data);
+    }
+}
+
+impl HashUpdate for Sha256Hasher {
+    fn update(&mut self, data: &[u8]) {
+        Sha256Hasher::update(self, data);
     }
 }
 
@@ -108,17 +136,113 @@ impl Default for Sha256Hasher {
 /// let file = File::open("large-file.tar.gz").unwrap();
 /// let hash = sha256_reader(file).unwrap();
 /// ```
-pub fn sha256_reader(mut reader: impl Read) -> io::Result<Sha256Hash> {
+pub fn sha256_reader(reader: impl Read) -> io::Result<Sha256Hash> {
     let mut hasher = Sha256Hasher::new();
-    let mut buf = [0u8; 8192];
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
+    hash_reader(reader, std::slice::from_mut(&mut hasher))?;
     Ok(hasher.finalize())
+}
+
+/// Feed `reader` to EOF into every hasher in constant memory.
+///
+/// Reads block the calling thread. Inside an async task use
+/// [`hash_reader_yielding`] or [`hash_async_reader`] instead.
+pub fn hash_reader<H: HashUpdate>(mut reader: impl Read, hashers: &mut [H]) -> io::Result<()> {
+    let mut buffer = [0_u8; HASH_CHUNK_SIZE];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(());
+        }
+        for hasher in hashers.iter_mut() {
+            hasher.update(&buffer[..read]);
+        }
+    }
+}
+
+/// Feed a blocking `reader` to EOF into every hasher, yielding to the async
+/// executor after each chunk.
+///
+/// Hashing is CPU-bound: doing it in one shot over unbounded caller input
+/// would occupy the executor thread for the whole duration and starve other
+/// tasks (TOB-SIGSTORE-8). Reading and hashing in 64 KiB chunks
+/// keeps each non-yielding stretch short. In-memory input works too, since
+/// `&[u8]` implements [`Read`].
+///
+/// The reads themselves still block the executor thread; prefer
+/// [`hash_async_reader`] when the input has an async source.
+pub async fn hash_reader_yielding<H: HashUpdate>(
+    reader: impl Read,
+    hashers: &mut [H],
+) -> io::Result<()> {
+    hash_async_reader(BlockingReader(reader), hashers).await
+}
+
+/// Feed an async `reader` to EOF into every hasher, yielding to the executor
+/// after each chunk.
+///
+/// `AsyncRead` implementations may return `Ready` indefinitely (an in-memory
+/// cursor, for example), so awaiting a read is not by itself a scheduling
+/// point. Yielding explicitly after each hashed chunk keeps large inputs from
+/// monopolizing the executor thread (TOB-SIGSTORE-8).
+pub async fn hash_async_reader<H: HashUpdate>(
+    mut reader: impl AsyncRead + Unpin,
+    hashers: &mut [H],
+) -> io::Result<()> {
+    let mut buffer = [0_u8; HASH_CHUNK_SIZE];
+    loop {
+        let read =
+            std::future::poll_fn(|cx| Pin::new(&mut reader).poll_read(cx, &mut buffer)).await?;
+        if read == 0 {
+            return Ok(());
+        }
+        for hasher in hashers.iter_mut() {
+            hasher.update(&buffer[..read]);
+        }
+        yield_now().await;
+    }
+}
+
+/// Adapter presenting a blocking [`Read`] as an always-ready [`AsyncRead`].
+struct BlockingReader<R>(R);
+
+// The wrapped reader is only ever used through `&mut`, never pinned, so the
+// adapter can move freely regardless of `R`.
+impl<R> Unpin for BlockingReader<R> {}
+
+impl<R: Read> AsyncRead for BlockingReader<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _cx: &mut TaskContext<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        Poll::Ready(self.0.read(buf))
+    }
+}
+
+/// Yield control back to the async executor once.
+///
+/// Runtime-agnostic equivalent of `tokio::task::yield_now()`: the future
+/// wakes its own waker and returns `Pending` on the first poll, then `Ready`.
+fn yield_now() -> impl Future<Output = ()> {
+    struct YieldNow {
+        yielded: bool,
+    }
+
+    impl Future for YieldNow {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<()> {
+            if self.yielded {
+                Poll::Ready(())
+            } else {
+                self.yielded = true;
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }
+    }
+
+    YieldNow { yielded: false }
 }
 
 #[cfg(test)]
@@ -171,5 +295,110 @@ mod tests {
 
         let direct = sha256(data);
         assert_eq!(hash, direct);
+    }
+
+    fn chunk_boundary_sizes() -> [usize; 6] {
+        [
+            0,
+            1,
+            HASH_CHUNK_SIZE - 1,
+            HASH_CHUNK_SIZE,
+            HASH_CHUNK_SIZE + 1,
+            3 * HASH_CHUNK_SIZE + 17,
+        ]
+    }
+
+    fn patterned(size: usize) -> Vec<u8> {
+        (0..size).map(|i| (i % 251) as u8).collect()
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        // Every future here only ever yields once per chunk and re-wakes
+        // itself, so a spin loop with a no-op waker is a sufficient executor.
+        let waker = futures_task_noop_waker();
+        let mut cx = TaskContext::from_waker(&waker);
+        let mut future = Box::pin(future);
+        loop {
+            if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
+                return output;
+            }
+        }
+    }
+
+    fn futures_task_noop_waker() -> std::task::Waker {
+        use std::task::{RawWaker, RawWakerVTable, Waker};
+        fn noop(_: *const ()) {}
+        fn clone(p: *const ()) -> RawWaker {
+            RawWaker::new(p, &VTABLE)
+        }
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
+        // SAFETY: the vtable functions ignore the data pointer entirely.
+        unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+    }
+
+    #[test]
+    fn reader_helpers_match_one_shot_hashing_across_chunk_boundaries() {
+        for size in chunk_boundary_sizes() {
+            let data = patterned(size);
+            let expected = sha256(&data);
+
+            let mut hashers = [
+                ArtifactHasher::new(HashAlgorithm::Sha2256),
+                ArtifactHasher::new(HashAlgorithm::Sha2512),
+            ];
+            hash_reader(data.as_slice(), &mut hashers).unwrap();
+            let [h256, h512] = hashers;
+            assert_eq!(
+                h256.finalize().as_bytes(),
+                expected.as_bytes(),
+                "size {size}"
+            );
+            assert_eq!(
+                h512.finalize().as_bytes(),
+                sha512(&data).as_bytes(),
+                "size {size}"
+            );
+
+            let mut hasher = Sha256Hasher::new();
+            block_on(hash_reader_yielding(
+                data.as_slice(),
+                std::slice::from_mut(&mut hasher),
+            ))
+            .unwrap();
+            assert_eq!(hasher.finalize(), expected, "size {size}");
+
+            let mut hasher = Sha256Hasher::new();
+            block_on(hash_async_reader(
+                BlockingReader(data.as_slice()),
+                std::slice::from_mut(&mut hasher),
+            ))
+            .unwrap();
+            assert_eq!(hasher.finalize(), expected, "size {size}");
+        }
+    }
+
+    #[test]
+    fn async_hashing_yields_even_when_reads_are_ready() {
+        let mut hasher = Sha256Hasher::new();
+        let mut future = Box::pin(hash_async_reader(
+            BlockingReader(&[42_u8][..]),
+            std::slice::from_mut(&mut hasher),
+        ));
+        let waker = futures_task_noop_waker();
+        let mut cx = TaskContext::from_waker(&waker);
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+    }
+
+    #[test]
+    fn reader_errors_are_propagated() {
+        struct Failing;
+        impl Read for Failing {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::Other, "disk on fire"))
+            }
+        }
+        let mut hasher = Sha256Hasher::new();
+        let err = hash_reader(Failing, std::slice::from_mut(&mut hasher)).unwrap_err();
+        assert_eq!(err.to_string(), "disk on fire");
     }
 }

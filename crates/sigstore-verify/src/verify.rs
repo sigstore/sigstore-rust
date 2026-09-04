@@ -300,7 +300,7 @@ impl Verifier {
     /// Verify an artifact read asynchronously to EOF in constant memory.
     pub async fn verify_async_reader(
         &self,
-        reader: impl futures::io::AsyncRead + Unpin,
+        reader: impl futures_io::AsyncRead + Unpin,
         bundle: &Bundle,
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
@@ -566,7 +566,7 @@ impl Verifier {
     /// EOF in constant memory.
     pub async fn verify_with_key_async_reader(
         &self,
-        reader: impl futures::io::AsyncRead + Unpin,
+        reader: impl futures_io::AsyncRead + Unpin,
         bundle: &Bundle,
         public_key: &sigstore_types::DerPublicKey,
         policy: &PublicKeyVerificationPolicy,

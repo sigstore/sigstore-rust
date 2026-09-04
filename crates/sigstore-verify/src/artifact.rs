@@ -1,37 +1,10 @@
 use crate::error::{Error, Result};
-use futures::io::{AsyncRead, AsyncReadExt};
-use sigstore_crypto::ArtifactHasher;
+use futures_io::AsyncRead;
+use sigstore_crypto::{hash_async_reader, hash_reader, ArtifactHasher};
 use sigstore_types::{
     Artifact, ArtifactDigest, HashAlgorithm, Sha256Hash, Sha512Hash, SignatureContent, Statement,
 };
 use std::io::Read;
-
-/// Yield control back to the async executor once.
-///
-/// `AsyncRead` implementations may return `Ready` indefinitely, so awaiting a
-/// read is not by itself a reliable scheduling point.
-fn yield_now() -> impl std::future::Future<Output = ()> {
-    struct YieldNow(bool);
-
-    impl std::future::Future for YieldNow {
-        type Output = ();
-
-        fn poll(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<()> {
-            if self.0 {
-                std::task::Poll::Ready(())
-            } else {
-                self.0 = true;
-                cx.waker().wake_by_ref();
-                std::task::Poll::Pending
-            }
-        }
-    }
-
-    YieldNow(false)
-}
 
 /// Artifact data normalized for the verification core.
 ///
@@ -100,44 +73,22 @@ impl<'a> PreparedArtifact<'a> {
     }
 
     pub(crate) fn from_reader(
-        mut reader: impl Read,
+        reader: impl Read,
         content: &SignatureContent,
     ) -> Result<PreparedArtifact<'static>> {
         let mut hashers = required_hashers(content);
-        let mut buffer = [0_u8; 64 * 1024];
-        loop {
-            let read = reader.read(&mut buffer).map_err(Error::ArtifactRead)?;
-            if read == 0 {
-                break;
-            }
-            for hasher in &mut hashers {
-                hasher.update(&buffer[..read]);
-            }
-        }
+        hash_reader(reader, &mut hashers).map_err(Error::ArtifactRead)?;
         Ok(Self::from_digests(Self::finalize(hashers)))
     }
 
     pub(crate) async fn from_async_reader(
-        mut reader: impl AsyncRead + Unpin,
+        reader: impl AsyncRead + Unpin,
         content: &SignatureContent,
     ) -> Result<PreparedArtifact<'static>> {
         let mut hashers = required_hashers(content);
-        let mut buffer = [0_u8; 64 * 1024];
-        loop {
-            let read = reader
-                .read(&mut buffer)
-                .await
-                .map_err(Error::ArtifactRead)?;
-            if read == 0 {
-                break;
-            }
-            for hasher in &mut hashers {
-                hasher.update(&buffer[..read]);
-            }
-            // Always-ready readers (including in-memory cursors) do not yield
-            // when awaited. Cooperate explicitly after each hashing chunk.
-            yield_now().await;
-        }
+        hash_async_reader(reader, &mut hashers)
+            .await
+            .map_err(Error::ArtifactRead)?;
         Ok(Self::from_digests(Self::finalize(hashers)))
     }
 
