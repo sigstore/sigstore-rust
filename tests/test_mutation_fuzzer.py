@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from mutation_fuzzer import BundleMutationFuzzer
+from mutation_fuzzer import BundleMutationFuzzer, get_mutations_for_bundle
 
 
 class HarnessChecks(unittest.TestCase):
@@ -37,6 +37,17 @@ class HarnessChecks(unittest.TestCase):
         with patch("mutation_fuzzer.subprocess.run", side_effect=subprocess.TimeoutExpired(command, 30)):
             with self.assertRaisesRegex(RuntimeError, "timed out"):
                 fuzzer.verify_bundle(bundle, artifact, root)
+
+    def test_rekor_v2_mutates_authenticated_checkpoint_not_unsigned_hints(self):
+        bundle = {"verificationMaterial": {"tlogEntries": [{"kindVersion": {"kind": "hashedrekord", "version": "0.0.2"}}]}}
+        names = {mutation.name for mutation in get_mutations_for_bundle(bundle)}
+        self.assertIn("checkpoint_wrong_root_hash", names)
+        self.assertNotIn("inclusion_proof_wrong_root_hash", names)
+        self.assertNotIn("integrated_time_future", names)
+        bundle["verificationMaterial"]["tlogEntries"][0]["kindVersion"]["version"] = "0.0.1"
+        names = {mutation.name for mutation in get_mutations_for_bundle(bundle)}
+        self.assertIn("inclusion_proof_wrong_root_hash", names)
+        self.assertIn("integrated_time_future", names)
 
     def test_always_rejecting_executable_cannot_pass(self):
         with tempfile.TemporaryDirectory() as directory:
