@@ -137,8 +137,8 @@ async fn main() {
 
     // Build verification policy - for GitHub Actions attestations, we expect
     // the identity to be the workflow file path and issuer to be GitHub
-    let policy =
-        VerificationPolicy::default().require_issuer("https://token.actions.githubusercontent.com");
+    let policy = VerificationPolicy::any_identity()
+        .require_issuer("https://token.actions.githubusercontent.com");
 
     // Verify
     println!();

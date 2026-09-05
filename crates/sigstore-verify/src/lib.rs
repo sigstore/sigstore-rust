@@ -15,7 +15,7 @@
 //! let bundle = Bundle::from_json(&bundle_json)?;
 //! let artifact = std::fs::read("artifact.txt")?;
 //!
-//! let policy = VerificationPolicy::default()
+//! let policy = VerificationPolicy::any_identity()
 //!     .require_identity("user@example.com")
 //!     .require_issuer("https://accounts.google.com");
 //!
