@@ -73,7 +73,7 @@ fn test_parse_v3_bundle() {
     // Check tlog entries
     assert_eq!(bundle.verification_material.tlog_entries.len(), 1);
     let entry = &bundle.verification_material.tlog_entries[0];
-    assert_eq!(entry.log_index, LogIndex::new(25915956));
+    assert_eq!(entry.log_index, LogIndex::new(25915956).unwrap());
     assert_eq!(
         entry.integrated_time,
         Some(jiff::Timestamp::from_second(1712085549).unwrap())
@@ -86,7 +86,7 @@ fn test_parse_v3_bundle() {
 
     // Check inclusion proof details
     let proof = entry.inclusion_proof.as_ref().unwrap();
-    assert_eq!(proof.log_index, LogIndex::new(25901137));
+    assert_eq!(proof.log_index, LogIndex::new(25901137).unwrap());
     assert_eq!(proof.tree_size, 25901138);
     assert_eq!(proof.hashes.len(), 11);
 }
