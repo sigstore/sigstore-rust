@@ -1,3 +1,5 @@
+#![cfg(feature = "client")]
+
 use base64::Engine;
 use sigstore_rekor::{HashedRekordV2, RekorV2Client, RekorV2KeyDetails};
 use sigstore_types::{DerCertificate, KindVersion, Sha256Hash, SignatureBytes};

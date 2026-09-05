@@ -9,9 +9,10 @@ rust-version.workspace = true
 
 [features]
 default = ["rustls"]
-rustls = ["reqwest/rustls"]
-native-tls = ["reqwest/native-tls"]
-cache = ["sigstore-cache"]
+client = ["dep:reqwest"]
+rustls = ["client", "reqwest/rustls"]
+native-tls = ["client", "reqwest/native-tls"]
+cache = ["client", "dep:sigstore-cache"]
 
 [dependencies]
 sigstore-types = { workspace = true }
@@ -20,7 +21,7 @@ sigstore-cache = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 jiff = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, optional = true }
 thiserror = { workspace = true }
 base64 = { workspace = true }
 
