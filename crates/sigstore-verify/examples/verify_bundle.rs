@@ -296,7 +296,7 @@ async fn main() {
                         process::exit(1);
                     }
                 };
-                if let Some(id) = &result.identity {
+                if let Some(id) = result.identity() {
                     if !re.is_match(id) {
                         eprintln!("\nVerification: FAILED");
                         eprintln!("  Identity '{}' does not match regexp '{}'", id, re_str);
@@ -310,18 +310,20 @@ async fn main() {
             }
 
             println!("\nVerification: SUCCESS");
-            if let Some(id) = &result.identity {
+            if let Some(id) = result.identity() {
                 println!("  Identity: {}", id);
             }
-            if let Some(iss) = &result.issuer {
+            if let Some(iss) = result.issuer() {
                 println!("  Issuer: {}", iss);
             }
-            if let Some(time) = result.integrated_time {
+            if let Some(time) = result.integrated_time() {
                 println!("  Signed at: {}", time);
             }
-            for warning in &result.warnings {
-                println!("  Warning: {}", warning);
-            }
+            println!("  Certificate verified: {}", result.certificate_verified());
+            println!(
+                "  Transparency-log inclusion verified: {}",
+                result.tlog_verified()
+            );
             process::exit(0);
         }
         Err(e) => {

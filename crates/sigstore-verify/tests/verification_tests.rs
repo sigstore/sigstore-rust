@@ -231,7 +231,7 @@ fn test_verify_with_policy() {
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
 
     let verification = result.unwrap();
-    assert!(verification.integrated_time.is_some());
+    assert!(verification.integrated_time().is_some());
 }
 
 #[test]
@@ -248,7 +248,7 @@ fn test_verify_extracts_integrated_time() {
 
     // The integrated time in the bundle is 1738060096 (2025-01-28)
     assert_eq!(
-        result.integrated_time,
+        result.integrated_time(),
         Some(jiff::Timestamp::from_second(1738060096).unwrap())
     );
 }
@@ -385,7 +385,7 @@ fn test_full_verification_flow() {
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root()).unwrap();
     assert_eq!(
-        result.integrated_time,
+        result.integrated_time(),
         Some(jiff::Timestamp::from_second(1738060096).unwrap())
     );
 }
@@ -428,7 +428,7 @@ fn test_full_verification_flow_happy_path() {
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root()).unwrap();
     assert_eq!(
-        result.integrated_time,
+        result.integrated_time(),
         Some(jiff::Timestamp::from_second(1734374576).unwrap())
     );
 }
@@ -946,14 +946,14 @@ fn test_verify_conda_package_attestation() {
 
     let verification = result.unwrap();
     assert_eq!(
-        verification.identity.as_deref(),
+        verification.identity(),
         Some("https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main")
     );
     assert_eq!(
-        verification.issuer.as_deref(),
+        verification.issuer(),
         Some("https://token.actions.githubusercontent.com")
     );
-    assert!(verification.integrated_time.is_some());
+    assert!(verification.integrated_time().is_some());
 }
 
 fn conda_attestation_policy() -> VerificationPolicy {
@@ -976,7 +976,7 @@ fn test_verify_conda_package_attestation_from_sync_reader() {
             &conda_attestation_policy(),
         )
         .unwrap();
-    assert!(verification.integrated_time.is_some());
+    assert!(verification.integrated_time().is_some());
 }
 
 #[tokio::test]
@@ -1131,6 +1131,51 @@ async fn invalid_certificate_does_not_consume_readers() {
         .await
         .is_err());
     assert_eq!(reader.position(), 0);
+}
+
+#[test]
+fn verification_results_report_only_checked_evidence() {
+    let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
+    let bytes = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
+    let verifier = Verifier::new(&production_root());
+    for (policy, chain, sct, tlog) in [
+        (VerificationPolicy::any_identity(), true, true, true),
+        (
+            VerificationPolicy::any_identity().skip_sct(),
+            true,
+            false,
+            true,
+        ),
+        (
+            VerificationPolicy::any_identity().skip_certificate_chain(),
+            false,
+            false,
+            true,
+        ),
+        (
+            VerificationPolicy::any_identity().skip_tlog_unsafe(),
+            true,
+            true,
+            false,
+        ),
+    ] {
+        let result = verifier.verify(bytes, &bundle, &policy).unwrap();
+        assert_eq!(result.certificate_verified(), chain);
+        assert_eq!(result.sct_verified(), sct);
+        assert_eq!(result.tlog_verified(), tlog);
+        assert_eq!(result.integrated_time().is_some(), tlog);
+        assert!(!result.identity_policy_checked());
+        assert_eq!(result.verified_timestamps().len(), 2);
+        let authorized =
+            VerificationPolicy::new(result.identity().unwrap(), result.issuer().unwrap());
+        assert!(verifier
+            .verify(bytes, &bundle, &authorized)
+            .unwrap()
+            .identity_policy_checked());
+        assert!(verifier
+            .verify(bytes, &bundle, &authorized.require_identity("wrong signer"))
+            .is_err());
+    }
 }
 
 #[test]
@@ -1379,7 +1424,7 @@ fn rekor_v2_does_not_report_unauthenticated_integrated_time() {
     )
     .unwrap();
 
-    assert_eq!(result.integrated_time, None);
+    assert_eq!(result.integrated_time(), None);
 }
 
 #[test]
@@ -1570,7 +1615,12 @@ fn test_verifier_with_key_accepts_digest_and_reports_integrated_time() {
         )
         .unwrap();
 
-    assert_eq!(result.integrated_time, expected_time);
+    assert_eq!(result.integrated_time(), expected_time);
+    assert!(result.tlog_verified());
+    assert!(!result.certificate_verified());
+    assert!(!result.sct_verified());
+    assert!(!result.identity_policy_checked());
+    assert_eq!(result.verified_timestamps(), &[expected_time.unwrap()]);
 }
 
 #[test]
