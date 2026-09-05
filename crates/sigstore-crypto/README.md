@@ -52,4 +52,4 @@ This crate provides cryptographic operations for:
 
 ## License
 
-BSD-3-Clause
+Apache-2.0

@@ -139,4 +139,4 @@ Used by:
 
 ## License
 
-BSD-3-Clause
+Apache-2.0
