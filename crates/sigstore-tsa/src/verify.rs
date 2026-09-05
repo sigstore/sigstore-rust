@@ -274,7 +274,7 @@ pub fn verify_timestamp_for_authority(
     let authorized = authority
         .valid_for
         .as_ref()
-        .map_or(true, |window| window.contains(result.time));
+        .is_none_or(|window| window.contains(result.time));
     if !authorized {
         return Err(Error::TimestampOutsideValidity { time: result.time });
     }
