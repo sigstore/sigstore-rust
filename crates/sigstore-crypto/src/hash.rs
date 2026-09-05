@@ -441,7 +441,7 @@ mod tests {
         struct Failing;
         impl Read for Failing {
             fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
-                Err(io::Error::new(io::ErrorKind::Other, "disk on fire"))
+                Err(io::Error::other("disk on fire"))
             }
         }
         let mut hasher = Sha256Hasher::new();
