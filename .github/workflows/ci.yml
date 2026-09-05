@@ -49,6 +49,16 @@ jobs:
       - run: rustup toolchain install 1.86.0 --profile minimal
       - run: cargo +1.86.0 check --workspace --all-features --locked
 
+  isolated-features:
+    name: Isolated crate features
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - run: python3 scripts/check-features.py
+
   audit:
     name: Cargo Audit
     runs-on: ubuntu-latest
