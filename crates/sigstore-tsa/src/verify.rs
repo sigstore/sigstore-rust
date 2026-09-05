@@ -12,7 +12,7 @@ use cms::signed_data::{SignedData, SignerIdentifier};
 use const_oid::ObjectIdentifier;
 use jiff::Timestamp;
 use rustls_pki_types::CertificateDer;
-use sigstore_crypto::{verify_signature, SigningScheme};
+use sigstore_crypto::{verify_signature, KeyAlgorithm};
 use sigstore_types::{DerPublicKey, SignatureBytes, TsaAuthority};
 use x509_cert::Certificate;
 
@@ -26,9 +26,6 @@ const OID_MESSAGE_DIGEST: ObjectIdentifier = const_oid::db::rfc6268::ID_MESSAGE_
 const OID_SHA256: ObjectIdentifier = const_oid::db::rfc5912::ID_SHA_256;
 const OID_SHA384: ObjectIdentifier = const_oid::db::rfc5912::ID_SHA_384;
 const OID_SHA512: ObjectIdentifier = const_oid::db::rfc5912::ID_SHA_512;
-const OID_EC_PUBLIC_KEY: ObjectIdentifier = const_oid::db::rfc5912::ID_EC_PUBLIC_KEY;
-const OID_SECP256R1: ObjectIdentifier = const_oid::db::rfc5912::SECP_256_R_1;
-const OID_SECP384R1: ObjectIdentifier = const_oid::db::rfc5912::SECP_384_R_1;
 
 /// Verification options for RFC 3161 timestamps.
 ///
@@ -525,37 +522,28 @@ fn verify_ecdsa_signature(
     use x509_cert::der::Encode;
 
     let spki = &certificate.tbs_certificate.subject_public_key_info;
-    if spki.algorithm.oid != OID_EC_PUBLIC_KEY {
-        return Err(Error::SignatureVerificationError(format!(
-            "not an EC key: {}",
-            spki.algorithm.oid
-        )));
-    }
-    let curve_oid = spki
-        .algorithm
-        .parameters
-        .as_ref()
-        .ok_or_else(|| {
-            Error::SignatureVerificationError("missing EC curve parameters".to_string())
-        })?
-        .decode_as::<ObjectIdentifier>()
-        .map_err(|e| {
-            Error::SignatureVerificationError(format!("failed to decode curve OID: {e}"))
-        })?;
-    let scheme = match (&curve_oid, digest_alg_oid) {
-        (&OID_SECP256R1, &OID_SHA256) => SigningScheme::EcdsaP256Sha256,
-        (&OID_SECP384R1, &OID_SHA256) => SigningScheme::EcdsaP384Sha256,
-        (&OID_SECP384R1, &OID_SHA384) => SigningScheme::EcdsaP384Sha384,
-        _ => {
-            return Err(Error::SignatureVerificationError(format!(
-                "unsupported curve/digest combination: {curve_oid} / {digest_alg_oid}"
-            )))
-        }
-    };
     let public_key = DerPublicKey::new(spki.to_der().map_err(|e| {
         Error::SignatureVerificationError(format!("failed to encode signer public key: {e}"))
     })?);
 
+    let algorithm = KeyAlgorithm::from_spki(&public_key)
+        .map_err(|e| Error::SignatureVerificationError(e.to_string()))?;
+    if !matches!(algorithm, KeyAlgorithm::EcdsaP256 | KeyAlgorithm::EcdsaP384) {
+        return Err(Error::SignatureVerificationError("not an EC key".into()));
+    }
+    let hash = match *digest_alg_oid {
+        OID_SHA256 => sigstore_types::HashAlgorithm::Sha2256,
+        OID_SHA384 => sigstore_types::HashAlgorithm::Sha2384,
+        OID_SHA512 => sigstore_types::HashAlgorithm::Sha2512,
+        _ => {
+            return Err(Error::SignatureVerificationError(format!(
+                "unsupported digest algorithm: {digest_alg_oid}"
+            )))
+        }
+    };
+    let scheme = algorithm
+        .resolve_signing_scheme(hash)
+        .map_err(|e| Error::SignatureVerificationError(e.to_string()))?;
     verify_signature(
         &public_key,
         message,
