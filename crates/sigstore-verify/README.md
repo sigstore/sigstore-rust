@@ -23,6 +23,14 @@ This crate provides high-level APIs for verifying Sigstore signatures. It handle
 5. Verify timestamps if present
 6. Check identity against policy (optional)
 
+## Verifier construction
+
+`Verifier::new(&root)?` prepares Rekor/CT keyrings and Fulcio trust anchors before
+reading artifacts. Invalid certificates, keys, duplicate log IDs and reversed
+validity windows are errors at construction. Unsupported configured keys must be
+removed explicitly rather than silently ignored. Key/authority activation times
+are still checked when verifying, so long-lived verifiers do not freeze time.
+
 ## Verification results
 
 `VerificationResult` is created only by successful verification and exposes
@@ -61,7 +69,7 @@ let digest = Sha256Hash::from_hex("b94d27b9...")?;
 let result = verify(digest, &bundle, &policy, &root)?;
 
 // Or use a Verifier directly; it also offers the same inputs
-let verifier = Verifier::new(&root);
+let verifier = Verifier::new(&root)?;
 let result = verifier.verify(artifact_bytes.as_slice(), &bundle, &policy)?;
 
 // Stream a large artifact in constant memory

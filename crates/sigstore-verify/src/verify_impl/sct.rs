@@ -6,8 +6,8 @@
 
 use crate::error::{Error, Result};
 use const_oid::db::rfc6962::CT_PRECERT_SCTS;
+use sigstore_crypto::Keyring;
 use sigstore_crypto::SigningScheme;
-use sigstore_trust_root::TrustedRoot;
 use sigstore_types::{Sha256Hash, SignatureBytes};
 use tls_codec::{SerializeBytes, TlsByteVecU16, TlsByteVecU24, TlsSerializeBytes, TlsSize};
 use x509_cert::{
@@ -191,7 +191,7 @@ pub fn extract_sct(
 pub fn verify_sct(
     cert_der: &[u8],
     issuer_spki_der: &[u8],
-    trusted_root: &TrustedRoot,
+    ct_keys: &[(SigningScheme, Keyring)],
 ) -> Result<()> {
     // Parse the certificate
     let cert = Certificate::from_der(cert_der)
@@ -212,9 +212,11 @@ pub fn verify_sct(
     // TrustedRoot constructs the keyring and preserves each CT log's declared
     // key ID and validity window. RFC 6962 timestamps are milliseconds since
     // the Unix epoch, so select the key that was valid when the SCT was issued.
-    let keyring = trusted_root
-        .ctfe_keys(scheme)
-        .map_err(|e| Error::Verification(format!("failed to build CT keyring: {e}")))?;
+    let keyring = &ct_keys
+        .iter()
+        .find(|(candidate, _)| *candidate == scheme)
+        .ok_or_else(|| Error::Verification("unsupported SCT signing scheme".into()))?
+        .1;
     if keyring.is_empty() {
         return Err(Error::Verification(
             "no CT log keys in trusted root".to_string(),

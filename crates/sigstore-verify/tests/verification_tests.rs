@@ -200,7 +200,7 @@ fn test_verifier_creation() {
     // V03_BUNDLE is from sigstore-python tests, so it verifies against the
     // staging root (whose expired Rekor key authenticates the SET / signed time).
     let root = staging_root();
-    let verifier = Verifier::new(&root);
+    let verifier = Verifier::new(&root).unwrap();
     let bundle = Bundle::from_json(V03_BUNDLE).unwrap();
 
     // Extract expected digest from the bundle
@@ -970,6 +970,7 @@ fn test_verify_conda_package_attestation_from_sync_reader() {
     let bundle = Bundle::from_json(CONDA_ATTESTATION_BUNDLE).unwrap();
 
     let verification = Verifier::new(&production_root())
+        .unwrap()
         .verify_reader(
             std::io::Cursor::new(CONDA_PACKAGE),
             &bundle,
@@ -984,6 +985,7 @@ async fn test_verify_conda_package_attestation_from_async_reader() {
     let bundle = Bundle::from_json(CONDA_ATTESTATION_BUNDLE).unwrap();
 
     Verifier::new(&production_root())
+        .unwrap()
         .verify_async_reader(
             futures::io::Cursor::new(CONDA_PACKAGE),
             &bundle,
@@ -1000,6 +1002,7 @@ fn test_verify_conda_package_tampered_from_reader() {
     let bundle = Bundle::from_json(CONDA_ATTESTATION_BUNDLE).unwrap();
 
     let err = Verifier::new(&production_root())
+        .unwrap()
         .verify_reader(
             std::io::Cursor::new(b"this is not the original package content"),
             &bundle,
@@ -1118,7 +1121,7 @@ async fn invalid_certificate_does_not_consume_readers() {
                 raw_bytes: sigstore_types::DerCertificate::new(vec![0]),
             },
         );
-    let verifier = Verifier::new(&production_root());
+    let verifier = Verifier::new(&production_root()).unwrap();
     let mut reader = std::io::Cursor::new(b"do not consume");
     let error = verifier
         .verify_reader(&mut reader, &bundle, &VerificationPolicy::any_identity())
@@ -1154,10 +1157,34 @@ fn inclusion_proof_alone_does_not_authenticate_integrated_time() {
 }
 
 #[test]
+fn verifier_constructor_rejects_invalid_static_trust() {
+    let root = production_root();
+    assert!(Verifier::new(&root).is_ok());
+    let mut bad_key = root.clone();
+    bad_key.tlogs[0].public_key.raw_bytes = sigstore_types::DerPublicKey::new(vec![0]);
+    let mut bad_ca = root.clone();
+    bad_ca.certificate_authorities[0].cert_chain.certificates[0].raw_bytes =
+        sigstore_types::DerCertificate::new(vec![0]);
+    let mut bad_tsa = root.clone();
+    bad_tsa.timestamp_authorities[0].cert_chain.certificates[0].raw_bytes =
+        sigstore_types::DerCertificate::new(vec![0]);
+    let mut duplicate_ct = root.clone();
+    duplicate_ct.ctlogs.push(duplicate_ct.ctlogs[0].clone());
+    let mut reversed_window = root;
+    reversed_window.tlogs[0].public_key.valid_for = Some(sigstore_types::TimeRange::new(
+        jiff::Timestamp::MAX,
+        Some(jiff::Timestamp::MIN),
+    ));
+    for invalid in [bad_key, bad_ca, bad_tsa, duplicate_ct, reversed_window] {
+        assert!(Verifier::new(&invalid).is_err());
+    }
+}
+
+#[test]
 fn verification_results_report_only_checked_evidence() {
     let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
     let bytes = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
-    let verifier = Verifier::new(&production_root());
+    let verifier = Verifier::new(&production_root()).unwrap();
     for (policy, chain, sct, tlog) in [
         (VerificationPolicy::any_identity(), true, true, true),
         (
@@ -1206,6 +1233,7 @@ fn test_verify_cosign_bundle_from_sync_reader() {
         VerificationPolicy::any_identity().require_issuer("https://github.com/login/oauth");
 
     Verifier::new(&production_root())
+        .unwrap()
         .verify_reader(std::io::Cursor::new(artifact), &bundle, &policy)
         .unwrap();
 }
@@ -1218,6 +1246,7 @@ async fn test_verify_cosign_bundle_from_async_reader() {
         VerificationPolicy::any_identity().require_issuer("https://github.com/login/oauth");
 
     Verifier::new(&production_root())
+        .unwrap()
         .verify_async_reader(futures::io::Cursor::new(artifact), &bundle, &policy)
         .await
         .unwrap();
@@ -1580,7 +1609,7 @@ fn managed_dsse_verifier_is_bound_even_when_tlog_verification_is_skipped() {
             inclusion_proof: None,
             canonicalized_body: CanonicalizedBody::new(serde_json::to_vec(&body).unwrap()),
         }];
-        let result = Verifier::new(&production_root()).verify_with_key(
+        let result = Verifier::new(&production_root()).unwrap().verify_with_key(
             b"artifact",
             &bundle,
             &public_key,
@@ -1624,7 +1653,7 @@ fn test_verify_with_key_treats_public_key_hint_as_opaque() {
 fn test_verifier_with_key_accepts_digest_and_reports_integrated_time() {
     let bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
     let expected_time = bundle.verification_material.tlog_entries[0].integrated_time;
-    let verifier = Verifier::new(&production_root());
+    let verifier = Verifier::new(&production_root()).unwrap();
 
     let result = verifier
         .verify_with_key(
@@ -1648,6 +1677,7 @@ fn test_verifier_with_key_from_sync_reader() {
     let bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
 
     Verifier::new(&production_root())
+        .unwrap()
         .verify_with_key_reader(
             std::io::Cursor::new(MANAGED_KEY_ARTIFACT),
             &bundle,
@@ -1662,6 +1692,7 @@ async fn test_verifier_with_key_from_async_reader() {
     let bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
 
     Verifier::new(&production_root())
+        .unwrap()
         .verify_with_key_async_reader(
             futures::io::Cursor::new(MANAGED_KEY_ARTIFACT),
             &bundle,
