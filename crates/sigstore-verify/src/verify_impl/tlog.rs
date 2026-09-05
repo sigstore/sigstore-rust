@@ -7,7 +7,7 @@ use crate::error::{Error, Result};
 use base64::Engine;
 use serde::Serialize;
 use sigstore_crypto::Checkpoint;
-use sigstore_trust_root::TrustedRoot;
+use sigstore_crypto::Keyring;
 use sigstore_types::bundle::InclusionProof;
 use sigstore_types::{Bundle, KindVersion, Sha256Hash, SignatureBytes, TransparencyLogEntry};
 
@@ -26,12 +26,12 @@ use sigstore_types::{Bundle, KindVersion, Sha256Hash, SignatureBytes, Transparen
 ///
 /// # Arguments
 /// * `bundle` - The bundle containing transparency log entries
-/// * `trusted_root` - Trusted root for cryptographic verification
+/// * `rekor_keys` - Trusted root for cryptographic verification
 /// * `not_before` - Certificate validity start time (Unix timestamp)
 /// * `not_after` - Certificate validity end time (Unix timestamp)
 pub fn verify_tlog_entries(
     bundle: &Bundle,
-    trusted_root: &TrustedRoot,
+    rekor_keys: &Keyring,
     not_before: jiff::Timestamp,
     not_after: jiff::Timestamp,
 ) -> Result<Option<jiff::Timestamp>> {
@@ -39,7 +39,7 @@ pub fn verify_tlog_entries(
 
     for entry in &bundle.verification_material.tlog_entries {
         // Verify Merkle inclusion proof, checkpoint signature and SET
-        verify_entry_inclusion(entry, trusted_root)?;
+        verify_entry_inclusion(entry, rekor_keys)?;
 
         // Only a Rekor v1 SET authenticates integratedTime. An inclusion proof
         // authenticates the body, not this separate timestamp field.
@@ -110,22 +110,19 @@ pub(crate) fn validate_integrated_time_not_in_future(
 ///
 /// Time-related checks (integrated time vs. certificate validity) are not
 /// performed here; see [`verify_tlog_entries`].
-pub fn verify_entry_inclusion(
-    entry: &TransparencyLogEntry,
-    trusted_root: &TrustedRoot,
-) -> Result<()> {
+pub fn verify_entry_inclusion(entry: &TransparencyLogEntry, rekor_keys: &Keyring) -> Result<()> {
     if let Some(ref inclusion_proof) = entry.inclusion_proof {
         verify_merkle_inclusion(entry, inclusion_proof)?;
         verify_checkpoint(
             inclusion_proof.checkpoint.envelope(),
             inclusion_proof,
             is_rekor_v2(entry),
-            trusted_root,
+            rekor_keys,
         )?;
     }
 
     if entry.inclusion_promise.is_some() {
-        verify_set(entry, trusted_root)?;
+        verify_set(entry, rekor_keys)?;
     }
 
     Ok(())
@@ -168,7 +165,7 @@ pub fn verify_checkpoint(
     checkpoint_envelope: &str,
     inclusion_proof: &InclusionProof,
     is_v2: bool,
-    trusted_root: &TrustedRoot,
+    rekor_keys: &Keyring,
 ) -> Result<()> {
     // Parse the checkpoint (signed note)
     let checkpoint = Checkpoint::from_text(checkpoint_envelope)
@@ -191,9 +188,7 @@ pub fn verify_checkpoint(
     // validity metadata alongside each parsed verification key. Four-byte
     // checkpoint hints may collide, so try every matching key and do not let
     // an invalid matching signature suppress a later valid log signature.
-    let rekor_keys = trusted_root
-        .rekor_keys()
-        .map_err(|e| Error::Verification(format!("failed to build Rekor keyring: {e}")))?;
+
     let message = checkpoint.signed_data();
     let now = jiff::Timestamp::now();
     let mut found_matching_key = false;
@@ -230,7 +225,7 @@ struct RekorPayload {
 }
 
 /// Verify SET (Signed Entry Timestamp)
-pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> Result<()> {
+pub fn verify_set(entry: &TransparencyLogEntry, rekor_keys: &Keyring) -> Result<()> {
     let promise = entry
         .inclusion_promise
         .as_ref()
@@ -246,9 +241,7 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
         .map_err(|e| Error::Verification(format!("invalid Rekor log ID: {e}")))?;
     let key_id = Sha256Hash::try_from_slice(&decoded_key_id)
         .map_err(|e| Error::Verification(format!("invalid Rekor log ID: {e}")))?;
-    let keyring = trusted_root
-        .rekor_keys()
-        .map_err(|e| Error::Verification(format!("failed to build Rekor keyring: {e}")))?;
+    let keyring = rekor_keys;
     let log_key = if let Some(integrated_ts) = entry.integrated_time {
         keyring.get_key_at(&key_id, integrated_ts).ok_or_else(|| {
             Error::Verification(format!(

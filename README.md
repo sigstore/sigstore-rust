@@ -50,7 +50,7 @@ use sigstore_trust_root::TrustedRoot;
 
 // Load the trusted root via TUF (recommended - ensures up-to-date trust material)
 let root = TrustedRoot::production().await?;
-let verifier = Verifier::new(&root);
+let verifier = Verifier::new(&root)?;
 
 // Parse the bundle (contains signature, certificate, transparency log entry)
 let bundle: sigstore_types::Bundle = serde_json::from_str(&bundle_json)?;

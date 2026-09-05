@@ -10,7 +10,12 @@ use sigstore_crypto::CertificateInfo;
 use sigstore_trust_root::{TrustedRoot, TsaAuthority};
 use sigstore_types::bundle::VerificationMaterialContent;
 use sigstore_types::{Bundle, DerPublicKey, KindVersion, SignatureBytes, SignatureContent};
-use webpki::{anchor_from_trusted_cert, EndEntityCert, KeyUsage, ALL_VERIFICATION_ALGS};
+use webpki::{EndEntityCert, KeyUsage, ALL_VERIFICATION_ALGS};
+
+pub(crate) type FulcioAnchor = (
+    rustls_pki_types::TrustAnchor<'static>,
+    Option<sigstore_types::TimeRange>,
+);
 
 /// Extract signature from bundle content (needed for TSA verification).
 ///
@@ -131,7 +136,7 @@ pub fn has_v2_tlog_entries(bundle: &Bundle) -> bool {
 /// Returns every authenticated integrated time.
 fn extract_v1_integrated_times_with_promise(
     bundle: &Bundle,
-    trusted_root: &TrustedRoot,
+    rekor_keys: &sigstore_crypto::Keyring,
 ) -> Result<Vec<jiff::Timestamp>> {
     let mut times = Vec::new();
 
@@ -147,7 +152,7 @@ fn extract_v1_integrated_times_with_promise(
         }
 
         if let Some(time) = entry.integrated_time {
-            crate::verify_impl::tlog::verify_set(entry, trusted_root)?;
+            crate::verify_impl::tlog::verify_set(entry, rekor_keys)?;
             times.push(time);
         }
     }
@@ -186,11 +191,11 @@ pub fn determine_validation_times(
     bundle: &Bundle,
     signature: &SignatureBytes,
     trusted_root: &TrustedRoot,
+    rekor_keys: &sigstore_crypto::Keyring,
 ) -> Result<Vec<jiff::Timestamp>> {
     let mut times = extract_tsa_timestamps(bundle, signature.as_bytes(), trusted_root)?;
     times.extend(extract_v1_integrated_times_with_promise(
-        bundle,
-        trusted_root,
+        bundle, rekor_keys,
     )?);
 
     if !times.is_empty() {
@@ -252,7 +257,7 @@ pub fn validate_certificate_time(
 pub fn verify_certificate_chain(
     verification_material: &VerificationMaterialContent,
     validation_time: jiff::Timestamp,
-    trusted_root: &TrustedRoot,
+    fulcio_anchors: &[FulcioAnchor],
 ) -> Result<DerPublicKey> {
     // Extract the end-entity certificate and any intermediates from the bundle
     let (ee_cert_der, intermediate_ders) = match verification_material {
@@ -277,24 +282,13 @@ pub fn verify_certificate_chain(
         }
     };
 
-    // Get Fulcio certificates from trusted root to use as trust anchors
-    let fulcio_certs = trusted_root.fulcio_certs();
-
-    if fulcio_certs.is_empty() {
-        return Err(Error::Verification(
-            "no Fulcio certificates in trusted root".to_string(),
-        ));
-    }
-
-    // Build trust anchors from Fulcio root certificates
-    let trust_anchors: Vec<_> = fulcio_certs
+    // Keep window selection dynamic: a long-lived verifier may cross the
+    // activation time of a future authority after construction.
+    let now = jiff::Timestamp::now();
+    let trust_anchors: Vec<_> = fulcio_anchors
         .iter()
-        .filter_map(|cert_der| {
-            let cert = CertificateDer::from(&cert_der[..]);
-            anchor_from_trusted_cert(&cert)
-                .map(|anchor| anchor.to_owned())
-                .ok()
-        })
+        .filter(|(_, window)| window.is_none_or(|range| range.has_started_by(now)))
+        .map(|(anchor, _)| anchor.clone())
         .collect();
 
     if trust_anchors.is_empty() {
@@ -385,7 +379,13 @@ mod tests {
         .unwrap();
         let signature = extract_signature(&bundle.content);
 
-        let times = determine_validation_times(&bundle, &signature, &trusted_root).unwrap();
+        let times = determine_validation_times(
+            &bundle,
+            &signature,
+            &trusted_root,
+            &trusted_root.rekor_keys().unwrap(),
+        )
+        .unwrap();
 
         assert_eq!(
             times.len(),
@@ -450,8 +450,10 @@ mod tests {
         // The canonical flow: the issuer comes from the verified chain, then SCT
         // verification uses it. Before the fix, SCT verification returned
         // Err("SCT signature verification failed: ... signature invalid").
-        let issuer_spki = verify_certificate_chain(material, validation_time, &trusted_root)
-            .expect("certificate chain should verify against the staging root");
+        let verifier = crate::Verifier::new(&trusted_root).unwrap();
+        let issuer_spki =
+            verify_certificate_chain(material, validation_time, &verifier.fulcio_anchors)
+                .expect("certificate chain should verify against the staging root");
         let cert = match material {
             VerificationMaterialContent::Certificate(cert) => &cert.raw_bytes,
             VerificationMaterialContent::X509CertificateChain { certificates } => {
@@ -459,7 +461,7 @@ mod tests {
             }
             _ => panic!("fixture must have a signing certificate"),
         };
-        super::super::sct::verify_sct(cert.as_bytes(), issuer_spki.as_bytes(), &trusted_root)
+        super::super::sct::verify_sct(cert.as_bytes(), issuer_spki.as_bytes(), &verifier.ct_keys)
             .expect("SCT verification should succeed once the correct issuer is selected");
     }
 

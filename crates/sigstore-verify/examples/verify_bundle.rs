@@ -261,7 +261,10 @@ async fn main() {
     }
 
     // Verify
-    let verifier = Verifier::new(&trusted_root);
+    let verifier = Verifier::new(&trusted_root).unwrap_or_else(|e| {
+        eprintln!("Error preparing trusted root: {e}");
+        process::exit(2);
+    });
     let result = if is_digest {
         // Parse digest (sha256:hex...)
         let hex_digest = artifact_or_digest.strip_prefix("sha256:").unwrap();
