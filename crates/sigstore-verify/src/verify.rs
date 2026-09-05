@@ -189,35 +189,77 @@ impl VerificationPolicy {
 /// Result of verification
 ///
 /// This is returned only when verification *succeeds* — any failure is reported
-/// as an [`Err`]. It carries metadata extracted during verification (identity,
-/// issuer, integrated time) plus any non-fatal warnings.
+/// as an [`Err`]. Metadata and evidence are read-only. Check the evidence
+/// getters when accepting results from callers that may use relaxed policies.
+/// Identity/issuer values are certificate claims, not proof of authorization.
+///
+/// ```compile_fail
+/// let result = sigstore_verify::VerificationResult::new();
+/// ```
+/// ```compile_fail
+/// let _: sigstore_verify::VerificationResult = Default::default();
+/// ```
 #[derive(Debug)]
 pub struct VerificationResult {
-    /// Identity from the certificate
-    pub identity: Option<String>,
-    /// Issuer from the certificate
-    pub issuer: Option<String>,
-    /// Integrated time from transparency log
-    pub integrated_time: Option<jiff::Timestamp>,
-    /// Any warnings during verification
-    pub warnings: Vec<String>,
+    identity: Option<String>,
+    issuer: Option<String>,
+    integrated_time: Option<jiff::Timestamp>,
+    certificate_verified: bool,
+    sct_verified: bool,
+    tlog_verified: bool,
+    identity_policy_checked: bool,
+    verified_timestamps: Vec<jiff::Timestamp>,
 }
 
 impl VerificationResult {
     /// Create an empty result to be populated as verification proceeds.
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             identity: None,
             issuer: None,
             integrated_time: None,
-            warnings: Vec::new(),
+            certificate_verified: false,
+            sct_verified: false,
+            tlog_verified: false,
+            identity_policy_checked: false,
+            verified_timestamps: Vec::new(),
         }
     }
-}
 
-impl Default for VerificationResult {
-    fn default() -> Self {
-        Self::new()
+    /// Certificate SAN claim, if present; see [`Self::certificate_verified`].
+    pub fn identity(&self) -> Option<&str> {
+        self.identity.as_deref()
+    }
+    /// Certificate OIDC issuer claim, if present.
+    pub fn issuer(&self) -> Option<&str> {
+        self.issuer.as_deref()
+    }
+    /// An authenticated Rekor v1 integrated time, if inclusion was verified.
+    pub fn integrated_time(&self) -> Option<jiff::Timestamp> {
+        self.integrated_time
+    }
+    /// Whether the signing certificate's chain, EKU and validity were checked.
+    pub fn certificate_verified(&self) -> bool {
+        self.certificate_verified
+    }
+    /// Whether the signing certificate's SCT was verified.
+    pub fn sct_verified(&self) -> bool {
+        self.sct_verified
+    }
+    /// Whether transparency-log inclusion and checkpoints were verified.
+    pub fn tlog_verified(&self) -> bool {
+        self.tlog_verified
+    }
+    /// Whether an identity and/or issuer constraint was matched.
+    ///
+    /// Matching claims is not authorization unless the certificate was also verified.
+    pub fn identity_policy_checked(&self) -> bool {
+        self.identity_policy_checked
+    }
+    /// All authenticated times used during verification (not unsigned hints).
+    /// Managed-key verification does not use TSA tokens for certificate validation.
+    pub fn verified_timestamps(&self) -> &[jiff::Timestamp] {
+        &self.verified_timestamps
     }
 }
 
@@ -418,8 +460,11 @@ impl Verifier {
                     issuer_spki.as_bytes(),
                     &self.trusted_root,
                 )?;
+                result.sct_verified = true;
             }
+            result.certificate_verified = true;
         }
+        result.verified_timestamps = validation_times;
 
         // (3): Verify against the given `VerificationPolicy`.
 
@@ -460,6 +505,8 @@ impl Verifier {
             }
         }
 
+        result.identity_policy_checked = policy.identity.is_some() || policy.issuer.is_some();
+
         // (4): Verify the inclusion proof and signed checkpoint for the log entry.
         // (5): Verify the inclusion promise for the log entry, if present.
         // (6): Verify the timely insertion of the log entry against the validity
@@ -472,6 +519,7 @@ impl Verifier {
                 cert_info.not_after,
             )?;
 
+            result.tlog_verified = true;
             if let Some(time) = integrated_time {
                 result.integrated_time = Some(time);
             }
@@ -643,9 +691,11 @@ impl Verifier {
                             jiff::Timestamp::now(),
                         )?;
                         result.integrated_time = Some(time);
+                        result.verified_timestamps.push(time);
                     }
                 }
             }
+            result.tlog_verified = true;
         }
 
         // Verify the signature

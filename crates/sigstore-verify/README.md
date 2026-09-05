@@ -23,6 +23,15 @@ This crate provides high-level APIs for verifying Sigstore signatures. It handle
 5. Verify timestamps if present
 6. Check identity against policy (optional)
 
+## Verification results
+
+`VerificationResult` is created only by successful verification and exposes
+read-only accessors. `identity()` and `issuer()` are certificate claims;
+`certificate_verified()`, `sct_verified()`, `tlog_verified()` and
+`identity_policy_checked()` describe what was actually checked.
+`verified_timestamps()` excludes unsigned time hints. Relaxed policies must not
+be treated as equivalent to full certificate and log verification.
+
 ## Authorization
 
 `VerificationPolicy` has no default. Prefer `VerificationPolicy::new(identity, issuer)`

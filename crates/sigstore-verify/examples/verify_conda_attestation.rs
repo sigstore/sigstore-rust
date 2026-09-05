@@ -147,19 +147,20 @@ async fn main() {
             println!("Verification: SUCCESS");
             println!();
             println!("Certificate Details:");
-            if let Some(id) = &result.identity {
+            if let Some(id) = result.identity() {
                 println!("  Identity (SAN): {}", id);
             }
-            if let Some(iss) = &result.issuer {
+            if let Some(iss) = result.issuer() {
                 println!("  OIDC Issuer: {}", iss);
             }
-            if let Some(time) = result.integrated_time {
+            if let Some(time) = result.integrated_time() {
                 println!("  Signed at: {}", time);
             }
-            for warning in &result.warnings {
-                println!();
-                println!("Warning: {}", warning);
-            }
+            println!("  Certificate verified: {}", result.certificate_verified());
+            println!(
+                "  Transparency-log inclusion verified: {}",
+                result.tlog_verified()
+            );
             process::exit(0);
         }
         Err(e) => {
