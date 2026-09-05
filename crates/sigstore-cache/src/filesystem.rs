@@ -103,7 +103,25 @@ impl CacheAdapter for FileSystemCache {
                 std::fs::create_dir_all(&dir)?;
                 let mut temp = tempfile::NamedTempFile::new_in(dir)?;
                 temp.write_all(&bytes)?;
-                temp.persist(path).map_err(|e| e.error)?;
+                let mut retries = 0;
+                loop {
+                    match temp.persist(&path) {
+                        Ok(_) => break,
+                        // Windows can temporarily deny replacement while a reader
+                        // holds the previous generation open. Keep the old record
+                        // intact and retry; never delete it before publishing.
+                        Err(error)
+                            if cfg!(windows)
+                                && matches!(error.error.raw_os_error(), Some(5 | 32))
+                                && retries < 10 =>
+                        {
+                            temp = error.file;
+                            retries += 1;
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => return Err(error.error.into()),
+                    }
+                }
                 Ok(())
             })
             .await
