@@ -46,6 +46,24 @@ pub enum SigningScheme {
 }
 
 impl SigningScheme {
+    /// Public-key algorithm required by this signing scheme.
+    pub fn key_algorithm(self) -> KeyAlgorithm {
+        match self {
+            Self::EcdsaP256Sha256 | Self::EcdsaP256Sha384 => KeyAlgorithm::EcdsaP256,
+            Self::EcdsaP384Sha256 | Self::EcdsaP384Sha384 => KeyAlgorithm::EcdsaP384,
+            Self::Ed25519 => KeyAlgorithm::Ed25519,
+            Self::RsaPssSha256
+            | Self::RsaPssSha384
+            | Self::RsaPssSha512
+            | Self::RsaPkcs1Sha256
+            | Self::RsaPkcs1Sha384
+            | Self::RsaPkcs1Sha512 => KeyAlgorithm::Rsa,
+            Self::MlDsa44 => KeyAlgorithm::MlDsa44,
+            Self::MlDsa65 => KeyAlgorithm::MlDsa65,
+            Self::MlDsa87 => KeyAlgorithm::MlDsa87,
+        }
+    }
+
     /// Get the name of this scheme
     pub fn name(&self) -> &'static str {
         match self {
@@ -108,6 +126,12 @@ pub enum KeyAlgorithm {
     Ed25519,
     /// RSA
     Rsa,
+    /// ML-DSA-44
+    MlDsa44,
+    /// ML-DSA-65
+    MlDsa65,
+    /// ML-DSA-87
+    MlDsa87,
 }
 
 impl KeyAlgorithm {
@@ -118,6 +142,9 @@ impl KeyAlgorithm {
             KeyAlgorithm::EcdsaP384 => SigningScheme::EcdsaP384Sha384,
             KeyAlgorithm::Ed25519 => SigningScheme::Ed25519,
             KeyAlgorithm::Rsa => SigningScheme::RsaPkcs1Sha256,
+            KeyAlgorithm::MlDsa44 => SigningScheme::MlDsa44,
+            KeyAlgorithm::MlDsa65 => SigningScheme::MlDsa65,
+            KeyAlgorithm::MlDsa87 => SigningScheme::MlDsa87,
         }
     }
 
@@ -143,7 +170,10 @@ impl KeyAlgorithm {
                     hash_algo
                 ))),
             },
-            KeyAlgorithm::Ed25519 => Ok(SigningScheme::Ed25519),
+            KeyAlgorithm::Ed25519
+            | KeyAlgorithm::MlDsa44
+            | KeyAlgorithm::MlDsa65
+            | KeyAlgorithm::MlDsa87 => Ok(self.default_signing_scheme()),
             KeyAlgorithm::Rsa => match hash_algo {
                 sigstore_types::HashAlgorithm::Sha2256 => Ok(SigningScheme::RsaPkcs1Sha256),
                 sigstore_types::HashAlgorithm::Sha2384 => Ok(SigningScheme::RsaPkcs1Sha384),
