@@ -161,7 +161,7 @@ fn test_tampered_inclusion_proof_fails_verification() {
     // ...but the verification path must reject the invalid Merkle proof.
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default();
+    let policy = VerificationPolicy::any_identity();
 
     let err = verify(artifact_digest, &bundle, &policy, &production_root())
         .expect_err("verification must fail with a tampered inclusion proof");
@@ -184,7 +184,7 @@ fn test_tampered_canonicalized_body_fails_verification() {
 
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default();
+    let policy = VerificationPolicy::any_identity();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     assert!(
@@ -208,7 +208,7 @@ fn test_verifier_creation() {
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
 
     // The bundle's certificate predates the current staging CAs - skip chain checks
-    let policy = VerificationPolicy::default()
+    let policy = VerificationPolicy::any_identity()
         .skip_certificate_chain()
         .skip_tlog_unsafe();
 
@@ -225,7 +225,7 @@ fn test_verify_with_policy() {
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
 
     // Test with default policy (requires tlog verification)
-    let policy = VerificationPolicy::default();
+    let policy = VerificationPolicy::any_identity();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
@@ -242,7 +242,7 @@ fn test_verify_extracts_integrated_time() {
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
 
-    let policy = VerificationPolicy::default();
+    let policy = VerificationPolicy::any_identity();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root()).unwrap();
 
@@ -264,7 +264,7 @@ fn test_skip_tlog_verification() {
     // V03_BUNDLE is from sigstore-python tests (staging) and may not chain to
     // the current staging Fulcio; its signed time still authenticates against
     // the staging root's Rekor key.
-    let policy = VerificationPolicy::default()
+    let policy = VerificationPolicy::any_identity()
         .skip_tlog_unsafe()
         .skip_certificate_chain();
 
@@ -288,7 +288,7 @@ fn test_backdated_integrated_time_rejected_even_when_tlog_skipped() {
 
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default().skip_tlog_unsafe();
+    let policy = VerificationPolicy::any_identity().skip_tlog_unsafe();
 
     let err = verify(artifact_digest, &bundle, &policy, &production_root())
         .expect_err("backdated integratedTime must fail verification");
@@ -302,7 +302,9 @@ fn test_verify_github_bundle_with_explicit_embedded_root() {
         Sha256Hash::from_hex("76f1fe8593bf227cca2c089e3c16dc95014a8d3e89c5dd220530469ca043c428")
             .unwrap();
     let root = TrustedRoot::from_embedded(SigstoreInstance::GitHub).unwrap();
-    let policy = VerificationPolicy::default().skip_tlog_unsafe().skip_sct();
+    let policy = VerificationPolicy::any_identity()
+        .skip_tlog_unsafe()
+        .skip_sct();
 
     let result = verify(artifact_digest, &bundle, &policy, &root);
 
@@ -317,9 +319,7 @@ fn test_verify_github_bundle_with_explicit_embedded_root() {
 
 #[test]
 fn test_policy_builder() {
-    let policy = VerificationPolicy::default()
-        .require_identity("test@example.com")
-        .require_issuer("https://accounts.google.com")
+    let policy = VerificationPolicy::new("test@example.com", "https://accounts.google.com")
         .skip_tlog_unsafe();
 
     assert_eq!(policy.identity, Some("test@example.com".to_string()));
@@ -381,7 +381,7 @@ fn test_full_verification_flow() {
     // Run full verification - extract digest from bundle
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default();
+    let policy = VerificationPolicy::any_identity();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root()).unwrap();
     assert_eq!(
@@ -424,7 +424,7 @@ fn test_full_verification_flow_happy_path() {
     // Run full verification - extract digest from bundle
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default();
+    let policy = VerificationPolicy::any_identity();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root()).unwrap();
     assert_eq!(
@@ -441,7 +441,7 @@ fn test_verification_with_different_bundle_versions() {
     let v03_msg = Bundle::from_json(V03_BUNDLE).unwrap();
     let artifact_digest =
         extract_artifact_digest(&v03_msg).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default()
+    let policy = VerificationPolicy::any_identity()
         .skip_certificate_chain()
         .skip_tlog_unsafe();
 
@@ -452,7 +452,7 @@ fn test_verification_with_different_bundle_versions() {
     let v03_dsse = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
     let dsse_artifact_digest =
         extract_artifact_digest(&v03_dsse).expect("DSSE bundle should have artifact digest");
-    let dsse_policy = VerificationPolicy::default();
+    let dsse_policy = VerificationPolicy::any_identity();
     let result = verify(
         dsse_artifact_digest,
         &v03_dsse,
@@ -648,7 +648,7 @@ fn test_verify_github_actions_provenance_bundle() {
     let result = verify(
         artifact_digest,
         &bundle,
-        &VerificationPolicy::default(),
+        &VerificationPolicy::any_identity(),
         &production_root(),
     );
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
@@ -708,7 +708,7 @@ fn test_bundle_no_cert_v1() {
     // Use extracted digest or dummy - doesn't matter since validation should fail first
     let artifact_digest =
         extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::from_bytes([0u8; 32]));
-    let policy = VerificationPolicy::default();
+    let policy = VerificationPolicy::any_identity();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     assert!(
@@ -759,7 +759,7 @@ fn test_bundle_no_log_entry() {
     // Use extracted digest or dummy - doesn't matter since validation should fail first
     let artifact_digest =
         extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::from_bytes([0u8; 32]));
-    let policy = VerificationPolicy::default();
+    let policy = VerificationPolicy::any_identity();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     assert!(
@@ -804,7 +804,7 @@ fn test_bundle_v3_no_signed_time() {
     // Use extracted digest or dummy - we're testing handling of missing signed time
     let artifact_digest =
         extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::from_bytes([0u8; 32]));
-    let policy = VerificationPolicy::default();
+    let policy = VerificationPolicy::any_identity();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     // Whether this succeeds or fails depends on implementation
@@ -933,7 +933,7 @@ fn test_verify_conda_package_attestation() {
         Bundle::from_json(CONDA_ATTESTATION_BUNDLE).expect("Failed to parse conda attestation");
 
     // Verify with identity requirements for GitHub Actions
-    let policy = VerificationPolicy::default()
+    let policy = VerificationPolicy::any_identity()
         .require_identity("https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main")
         .require_issuer("https://token.actions.githubusercontent.com");
 
@@ -957,7 +957,7 @@ fn test_verify_conda_package_attestation() {
 }
 
 fn conda_attestation_policy() -> VerificationPolicy {
-    VerificationPolicy::default()
+    VerificationPolicy::any_identity()
         .require_identity("https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main")
         .require_issuer("https://token.actions.githubusercontent.com")
 }
@@ -1019,7 +1019,7 @@ fn test_verify_conda_package_wrong_identity() {
         Bundle::from_json(CONDA_ATTESTATION_BUNDLE).expect("Failed to parse conda attestation");
 
     // Use wrong identity
-    let policy = VerificationPolicy::default()
+    let policy = VerificationPolicy::any_identity()
         .require_identity(
             "https://github.com/wrong-org/wrong-repo/.github/workflows/wrong.yaml@refs/heads/main",
         )
@@ -1041,8 +1041,8 @@ fn test_verify_conda_package_tampered() {
     // Use modified package content
     let tampered_package = b"this is not the original package content";
 
-    let policy =
-        VerificationPolicy::default().require_issuer("https://token.actions.githubusercontent.com");
+    let policy = VerificationPolicy::any_identity()
+        .require_issuer("https://token.actions.githubusercontent.com");
 
     let result = verify(tampered_package, &bundle, &policy, &production_root());
     assert!(
@@ -1102,7 +1102,8 @@ fn test_verify_cosign_v3_blob_bundle() {
     // The artifact content that was signed
     let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
 
-    let policy = VerificationPolicy::default().require_issuer("https://github.com/login/oauth");
+    let policy =
+        VerificationPolicy::any_identity().require_issuer("https://github.com/login/oauth");
 
     let result = verify(artifact, &bundle, &policy, &production_root());
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
@@ -1120,13 +1121,13 @@ async fn invalid_certificate_does_not_consume_readers() {
     let verifier = Verifier::new(&production_root());
     let mut reader = std::io::Cursor::new(b"do not consume");
     let error = verifier
-        .verify_reader(&mut reader, &bundle, &VerificationPolicy::default())
+        .verify_reader(&mut reader, &bundle, &VerificationPolicy::any_identity())
         .unwrap_err();
     assert!(error.to_string().contains("failed to parse certificate"));
     assert_eq!(reader.position(), 0);
     let mut reader = futures::io::Cursor::new(b"do not consume");
     assert!(verifier
-        .verify_async_reader(&mut reader, &bundle, &VerificationPolicy::default())
+        .verify_async_reader(&mut reader, &bundle, &VerificationPolicy::any_identity())
         .await
         .is_err());
     assert_eq!(reader.position(), 0);
@@ -1136,7 +1137,8 @@ async fn invalid_certificate_does_not_consume_readers() {
 fn test_verify_cosign_bundle_from_sync_reader() {
     let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
     let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
-    let policy = VerificationPolicy::default().require_issuer("https://github.com/login/oauth");
+    let policy =
+        VerificationPolicy::any_identity().require_issuer("https://github.com/login/oauth");
 
     Verifier::new(&production_root())
         .verify_reader(std::io::Cursor::new(artifact), &bundle, &policy)
@@ -1147,7 +1149,8 @@ fn test_verify_cosign_bundle_from_sync_reader() {
 async fn test_verify_cosign_bundle_from_async_reader() {
     let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
     let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
-    let policy = VerificationPolicy::default().require_issuer("https://github.com/login/oauth");
+    let policy =
+        VerificationPolicy::any_identity().require_issuer("https://github.com/login/oauth");
 
     Verifier::new(&production_root())
         .verify_async_reader(futures::io::Cursor::new(artifact), &bundle, &policy)
@@ -1191,7 +1194,7 @@ fn test_foreign_tlog_entry_rejected_even_when_tlog_skipped() {
 
     // Skip the certificate chain so the foreign entry is rejected on its
     // contents rather than incidentally on its (much older) timestamp.
-    let policy = VerificationPolicy::default()
+    let policy = VerificationPolicy::any_identity()
         .skip_tlog_unsafe()
         .skip_certificate_chain();
 
@@ -1222,7 +1225,7 @@ fn production_root_with_unhintable_tlog_at(index: usize) -> TrustedRoot {
 fn test_malformed_rekor_log_id_is_rejected_regardless_of_position() {
     let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
     let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
-    let policy = VerificationPolicy::default();
+    let policy = VerificationPolicy::any_identity();
 
     let tlog_count = {
         let root: serde_json::Value =
@@ -1311,7 +1314,7 @@ fn test_verify_fails_with_mismatched_hashedrekord_version_for_dsse() {
         Bundle::from_json(&corrupted_bundle_json).expect("Failed to parse corrupted bundle");
     let artifact_digest =
         extract_artifact_digest(&bundle).expect("Bundle should have artifact digest");
-    let policy = VerificationPolicy::default();
+    let policy = VerificationPolicy::any_identity();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     assert!(result.is_err());
@@ -1332,7 +1335,7 @@ fn test_verify_dsse_with_hashedrekord_v002() {
 
     let artifact = include_bytes!("../test_data/bundles/signed-package-2.1.0-hb0f4dca_0.conda");
 
-    let policy = VerificationPolicy::default();
+    let policy = VerificationPolicy::any_identity();
 
     let result = verify(artifact.as_slice(), &bundle, &policy, &staging_root());
     assert!(
@@ -1353,7 +1356,7 @@ fn verifies_sigstore_python_rekor_v2_message_signature_fixture() {
     verify(
         artifact.as_slice(),
         &bundle,
-        &VerificationPolicy::default(),
+        &VerificationPolicy::any_identity(),
         &staging_root(),
     )
     .unwrap();
@@ -1371,7 +1374,7 @@ fn rekor_v2_does_not_report_unauthenticated_integrated_time() {
     let result = verify(
         artifact.as_slice(),
         &bundle,
-        &VerificationPolicy::default(),
+        &VerificationPolicy::any_identity(),
         &staging_root(),
     )
     .unwrap();
@@ -1392,7 +1395,7 @@ fn verifies_sigstore_python_rekor_v2_dsse_fixture() {
     verify(
         subject_digest,
         &bundle,
-        &VerificationPolicy::default(),
+        &VerificationPolicy::any_identity(),
         &staging_root(),
     )
     .unwrap();
@@ -1432,7 +1435,7 @@ fn rekor_v2_accepts_a_valid_log_signature_after_an_invalid_matching_signature() 
     verify(
         artifact.as_slice(),
         &bundle,
-        &VerificationPolicy::default(),
+        &VerificationPolicy::any_identity(),
         &staging_root(),
     )
     .unwrap();
@@ -1454,7 +1457,7 @@ fn rekor_v2_ignores_untrusted_duplicate_inclusion_proof_fields() {
     verify(
         artifact.as_slice(),
         &bundle,
-        &VerificationPolicy::default(),
+        &VerificationPolicy::any_identity(),
         &staging_root(),
     )
     .unwrap();
@@ -1671,7 +1674,7 @@ fn test_certificate_checked_against_every_verified_timestamp() {
         1
     );
 
-    let policy = VerificationPolicy::default().skip_tlog_unsafe();
+    let policy = VerificationPolicy::any_identity().skip_tlog_unsafe();
 
     let err = verify(artifact, &bundle, &policy, &production_root())
         .expect_err("a timestamp outside the certificate's validity must fail verification");
