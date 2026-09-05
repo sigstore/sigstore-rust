@@ -62,6 +62,8 @@ async fn main() {
     let mut identity_regexp: Option<String> = None;
     let mut issuer: Option<String> = None;
     let mut instance: Option<String> = None;
+    let mut trusted_root_path: Option<String> = None;
+    let mut tuf_root_path: Option<String> = None;
     let mut staging = false;
     let mut positional: Vec<String> = Vec::new();
 
@@ -100,6 +102,19 @@ async fn main() {
                 }
                 instance = Some(args[i].clone());
             }
+            "--trusted-root" | "--tuf-root" => {
+                let option = args[i].clone();
+                i += 1;
+                let value = args.get(i).cloned().unwrap_or_else(|| {
+                    eprintln!("Error: {option} requires a file path");
+                    process::exit(2);
+                });
+                if option == "--trusted-root" {
+                    trusted_root_path = Some(value);
+                } else {
+                    tuf_root_path = Some(value);
+                }
+            }
             "--staging" => {
                 staging = true;
             }
@@ -123,6 +138,18 @@ async fn main() {
         eprintln!("Error: Expected exactly 2 positional arguments (artifact/digest and bundle)");
         print_usage(&args[0]);
         process::exit(1);
+    }
+
+    if usize::from(instance.is_some())
+        + usize::from(trusted_root_path.is_some())
+        + usize::from(staging)
+        > 1
+        || (instance.is_some() != tuf_root_path.is_some())
+    {
+        eprintln!(
+            "Error: select only one of --trusted-root, --staging, or --instance with --tuf-root"
+        );
+        process::exit(2);
     }
 
     let artifact_or_digest = &positional[0];
@@ -150,11 +177,23 @@ async fn main() {
     };
 
     // Load trusted root (staging or production Sigstore instance)
-    let trusted_root = if let Some(url) = instance {
+    let trusted_root = if let Some(path) = trusted_root_path {
+        let root = fs::read_to_string(path)
+            .map_err(|e| e.to_string())
+            .and_then(|json| TrustedRoot::from_json(&json).map_err(|e| e.to_string()));
+        root.unwrap_or_else(|e| {
+            eprintln!("Error loading trusted root: {e}");
+            process::exit(2);
+        })
+    } else if let Some(url) = instance {
         println!("  Using: custom instance ({})", url);
+        let bootstrap = fs::read(tuf_root_path.unwrap()).unwrap_or_else(|e| {
+            eprintln!("Error reading trusted TUF bootstrap: {e}");
+            process::exit(2);
+        });
         let config = sigstore_trust_root::tuf::TufConfig::custom(
             &url,
-            sigstore_trust_root::tuf::TufBootstrap::UnsafeCachedRoot,
+            sigstore_trust_root::tuf::TufBootstrap::trusted(bootstrap),
         );
         match TrustedRoot::from_tuf(config).await {
             Ok(root) => root,
@@ -294,7 +333,8 @@ fn print_usage(program: &str) {
     eprintln!("  --certificate-identity <ID>        Required certificate identity (exact match)");
     eprintln!("  --certificate-identity-regexp <RE> Required certificate identity (regex)");
     eprintln!("  --certificate-oidc-issuer <ISSUER> Required OIDC issuer");
-    eprintln!("  --instance <URL>                   Use a custom Sigstore instance");
+    eprintln!("  --trusted-root <FILE>              Use a local Sigstore trusted root (offline)");
+    eprintln!("  --instance <URL> --tuf-root <FILE>  Custom instance with trusted TUF bootstrap");
     eprintln!("  --staging                          Use Sigstore staging instance");
     eprintln!("  -h, --help                         Print this help message");
     eprintln!();

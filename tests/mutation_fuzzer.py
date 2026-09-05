@@ -820,11 +820,23 @@ def get_mutations_for_bundle(bundle: dict) -> list[Mutation]:
         "invalid_base64_certificate",  # Only targets single certificate
     }
 
+    entries = bundle.get("verificationMaterial", {}).get("tlogEntries", [])
+    kind_version = entries[0].get("kindVersion", {}) if entries else {}
+    rekor_v2 = kind_version.get("version") == "0.0.2" and kind_version.get("kind") in {"hashedrekord", "dsse"}
+    # Rekor v2 authenticates tree size/root in the checkpoint, not the duplicate
+    # proof fields. Log IDs are hints, and integratedTime is not signed in v2.
+    v1_authenticated_only = {
+        "inclusion_proof_wrong_root_hash", "inclusion_proof_wrong_tree_size",
+        "wrong_log_id", "integrated_time_future", "integrated_time_ancient",
+        "integrated_time_zero", "integrated_time_negative",
+    }
     applicable = []
     for mutation in ALL_MUTATIONS:
         name = mutation.name
 
         # Filter out mutations that don't apply to this bundle type
+        if rekor_v2 and name in v1_authenticated_only:
+            continue
         if name in dsse_only_mutations and not has_dsse:
             continue
         if name in message_sig_only_mutations and not has_message_sig:
@@ -978,7 +990,21 @@ class BundleMutationFuzzer:
                 text=True,
                 timeout=30
             )
-            return (result.returncode == 0, result.stdout + result.stderr)
+            output = result.stdout + result.stderr
+            if result.returncode == 0:
+                return (True, output)
+            if result.returncode != 1 or any(marker in output for marker in (
+                "panicked at", "Traceback (most recent call last)", "fatal error:",
+            )):
+                raise RuntimeError(f"Verifier crashed or failed to run (exit {result.returncode}): {output[:500]}")
+            rejection_markers = {
+                VerifierType.SIGSTORE_RUST: ("Error parsing bundle:", "Verification error:", "Verification: FAILED"),
+                VerifierType.COSIGN: ("verification failed", "no matching signatures", "invalid bundle"),
+                VerifierType.SIGSTORE_PYTHON: ("Verification failed", "VerificationFailure", "InvalidBundle"),
+            }
+            if not any(marker in output for marker in rejection_markers[self.verifier_type]):
+                raise RuntimeError(f"Unrecognized verifier failure, not a verified rejection: {output[:500]}")
+            return (False, output)
         except subprocess.TimeoutExpired:
             raise RuntimeError("Verifier timed out")
         except FileNotFoundError:
@@ -997,6 +1023,8 @@ class BundleMutationFuzzer:
         if self.verifier_type == VerifierType.SIGSTORE_RUST:
             # Our verify_bundle example
             cmd.extend(["--certificate-identity-regexp", ".*"])
+            if trust_root_path:
+                cmd.extend(["--trusted-root", str(trust_root_path)])
             cmd.append(str(artifact_path))
             cmd.append(str(bundle_path))
 
@@ -1073,6 +1101,9 @@ class BundleMutationFuzzer:
         Returns:
             List of (correctly_rejected, mutation_name, details) tuples
         """
+        success, output = self.verify_bundle(bundle_path, artifact_path, trust_root_path)
+        if not success:
+            raise RuntimeError(f"Unmodified baseline did not verify: {bundle_path}\n{output[:500]}")
         bundle = self.load_bundle(bundle_path)
 
         # Get mutations applicable to this bundle type
@@ -1085,6 +1116,8 @@ class BundleMutationFuzzer:
             # Filter provided mutations to only those applicable to this bundle
             mutations = [m for m in mutations if m.name in applicable_names]
 
+        if not mutations:
+            raise RuntimeError(f"No applicable mutations for {bundle_path}")
         results = []
         for mutation in mutations:
             result = self.run_mutation_test(
@@ -1271,4 +1304,8 @@ def main():
 
 
 if __name__ == "__main__":
-    exit(main())
+    try:
+        sys.exit(main())
+    except (RuntimeError, OSError, ValueError) as error:
+        print(f"Harness error: {error}", file=sys.stderr)
+        sys.exit(2)
