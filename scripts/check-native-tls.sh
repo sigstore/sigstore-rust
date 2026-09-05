@@ -2,8 +2,9 @@
 # Check normal dependencies; Cargo failures must not look like a clean tree.
 set -euo pipefail
 metadata=$(cargo metadata --no-deps --format-version 1)
-for package in $(echo "$metadata" | jq -r '.packages[].name'); do
-    features=$(echo "$metadata" | jq -r --arg package "$package" '
+# jq -j avoids native Windows CRLF leaking into Cargo's package/features arguments.
+for package in $(echo "$metadata" | jq -j '.packages[].name + " "'); do
+    features=$(echo "$metadata" | jq -j --arg package "$package" '
         .packages[] | select(.name == $package) | .features | keys |
         map(select(. == "native-tls" or . == "tuf" or . == "fetch" or . == "cache")) | join(",")
     ')
