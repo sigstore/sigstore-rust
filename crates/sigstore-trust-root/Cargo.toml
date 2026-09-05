@@ -9,13 +9,12 @@ rust-version.workspace = true
 
 [features]
 default = ["tuf", "rustls"]
-rustls = ["sigstore-tuf/rustls"]
-native-tls = ["sigstore-tuf/native-tls"]
+rustls = ["sigstore-tuf?/rustls"]
+native-tls = ["sigstore-tuf?/native-tls"]
 tuf = [
   "sigstore-tuf",
   "tokio",
   "directories",
-  "tracing",
 ]
 
 [dependencies]
@@ -32,7 +31,6 @@ serde_json = { workspace = true }
 
 # Crypto & Certificates
 base64 = { workspace = true }
-x509-cert = { workspace = true }
 rustls-pki-types = { workspace = true }
 
 # Time handling
@@ -45,9 +43,8 @@ hex = { workspace = true }
 # verification) is now provided by the in-workspace `sigstore-tuf` crate, which
 # brings its own HTTP transport and (via the `rustls` feature) TLS backend.
 sigstore-tuf = { workspace = true, features = ["fetch"], optional = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["fs"], optional = true }
 directories = { workspace = true, optional = true }
-tracing = { workspace = true, optional = true }
 
 [[example]]
 # Refreshes the embedded TUF data (root.json files, trusted roots, signing

@@ -15,7 +15,6 @@ spki = { workspace = true }
 const-oid = { workspace = true }
 thiserror = { workspace = true }
 base64 = { workspace = true }
-pem = { workspace = true }
 x509-cert = { workspace = true }
 jiff = { workspace = true }
 futures-io = { workspace = true }

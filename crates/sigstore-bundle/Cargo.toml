@@ -9,21 +9,15 @@ rust-version.workspace = true
 
 [features]
 default = ["rustls"]
-rustls = ["sigstore-tsa/rustls", "sigstore-rekor/rustls"]
-native-tls = ["sigstore-tsa/native-tls", "sigstore-rekor/native-tls"]
+rustls = ["sigstore-rekor/rustls"]
+native-tls = ["sigstore-rekor/native-tls"]
 
 [dependencies]
 sigstore-types = { workspace = true }
-sigstore-crypto = { workspace = true }
-sigstore-tsa = { workspace = true, default-features = false }
 sigstore-rekor = { workspace = true, default-features = false }
-serde = { workspace = true }
 serde_json = { workspace = true }
 jiff = { workspace = true }
 thiserror = { workspace = true }
-base64 = { workspace = true }
-hex = { workspace = true }
 
 [dev-dependencies]
-hex = { workspace = true }
 sigstore-merkle = { workspace = true }

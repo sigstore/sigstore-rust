@@ -21,10 +21,6 @@ sigstore-cache = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
-url = { workspace = true }
 thiserror = { workspace = true }
-base64 = { workspace = true }
 
 [dev-dependencies]
-hex = { workspace = true }
-tokio = { workspace = true }
