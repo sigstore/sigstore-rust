@@ -371,7 +371,7 @@ fn test_full_verification_flow() {
     // Extract tlog entry info
     let entry = &bundle.verification_material.tlog_entries[0];
     assert_eq!(entry.kind_version.kind(), "dsse");
-    assert_eq!(entry.log_index, LogIndex::new(166143216));
+    assert_eq!(entry.log_index, LogIndex::new(166143216).unwrap());
 
     // Verify inclusion proof
     let proof = entry.inclusion_proof.as_ref().expect("Should have proof");
@@ -414,7 +414,7 @@ fn test_full_verification_flow_happy_path() {
     // Extract tlog entry info
     let entry = &bundle.verification_material.tlog_entries[0];
     assert_eq!(entry.kind_version.kind(), "dsse");
-    assert_eq!(entry.log_index, LogIndex::new(155690850));
+    assert_eq!(entry.log_index, LogIndex::new(155690850).unwrap());
 
     // Verify inclusion proof
     let proof = entry.inclusion_proof.as_ref().expect("Should have proof");
@@ -1458,6 +1458,68 @@ fn rekor_v2_ignores_untrusted_duplicate_inclusion_proof_fields() {
         &staging_root(),
     )
     .unwrap();
+}
+
+#[test]
+fn managed_dsse_verifier_is_bound_even_when_tlog_verification_is_skipped() {
+    use sigstore_types::*;
+    let key = sigstore_crypto::KeyPair::generate_ecdsa_p256().unwrap();
+    let public_key = key.public_key_der().unwrap();
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "_type":"https://in-toto.io/Statement/v1", "predicateType":"example", "predicate":{},
+        "subject":[{"name":"artifact","digest":{"sha256":sigstore_crypto::sha256(b"artifact").to_hex()}}]
+    })).unwrap();
+    let signature = key
+        .sign(&pae("application/vnd.in-toto+json", &payload))
+        .unwrap();
+    let envelope = DsseEnvelope::new(
+        "application/vnd.in-toto+json".into(),
+        PayloadBytes::new(payload.clone()),
+        DsseSignature {
+            sig: signature.clone(),
+            keyid: KeyId::default(),
+        },
+    );
+    let mut bundle = sigstore_bundle::BundleV03::new(
+        sigstore_bundle::VerificationMaterialV03::PublicKey {
+            hint: "opaque".into(),
+        },
+        SignatureContent::DsseEnvelope(envelope),
+    )
+    .into_bundle();
+    let other_key = sigstore_crypto::KeyPair::generate_ecdsa_p256()
+        .unwrap()
+        .public_key_der()
+        .unwrap();
+    for (verifier, valid) in [
+        (public_key.to_pem(), true),
+        (other_key.to_pem(), false),
+        ("not even a public key".into(), false),
+    ] {
+        let body = serde_json::json!({"spec":{
+            "envelopeHash":{"algorithm":"sha256","value":"unused"},
+            "payloadHash":{"algorithm":"sha256","value":sigstore_crypto::sha256(&payload).to_hex()},
+            "signatures":[{"signature":signature.to_base64(),"verifier":PemContent::new(verifier.into_bytes())}]
+        }});
+        bundle.verification_material.tlog_entries = vec![TransparencyLogEntry {
+            log_index: LogIndex::new(0).unwrap(),
+            log_id: LogId {
+                key_id: LogKeyId::from_bytes(&[0; 32]),
+            },
+            kind_version: KindVersion::DsseV001,
+            integrated_time: None,
+            inclusion_promise: None,
+            inclusion_proof: None,
+            canonicalized_body: CanonicalizedBody::new(serde_json::to_vec(&body).unwrap()),
+        }];
+        let result = Verifier::new(&production_root()).verify_with_key(
+            b"artifact",
+            &bundle,
+            &public_key,
+            &PublicKeyVerificationPolicy::default().skip_tlog_unsafe(),
+        );
+        assert_eq!(result.is_ok(), valid, "{result:?}");
+    }
 }
 
 fn managed_key_public_key() -> sigstore_types::DerPublicKey {

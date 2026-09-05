@@ -39,7 +39,7 @@ pub(crate) fn verify_tlog_consistency_with_key(
                 managed_key,
             )?,
             (SignatureContent::DsseEnvelope(envelope), KindVersion::DsseV001) => {
-                verify_dsse_v001(entry, envelope, bundle)?
+                verify_dsse_v001(entry, envelope, bundle, managed_key)?
             }
             (SignatureContent::DsseEnvelope(envelope), KindVersion::IntotoV002) => {
                 verify_intoto_v002(entry, envelope, bundle, managed_key)?
@@ -79,6 +79,7 @@ fn verify_dsse_v001(
     entry: &TransparencyLogEntry,
     envelope: &sigstore_types::DsseEnvelope,
     bundle: &Bundle,
+    managed_key: Option<&DerPublicKey>,
 ) -> Result<()> {
     let body = RekorEntryBody::from_base64_json(
         &entry.canonicalized_body.to_base64(),
@@ -87,17 +88,23 @@ fn verify_dsse_v001(
     )
     .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
 
-    let (expected_hash, rekor_signatures) = match &body {
-        RekorEntryBody::DsseV001(dsse_body) => (
-            &dsse_body.spec.payload_hash.value,
-            &dsse_body.spec.signatures,
-        ),
+    let (payload_hash, rekor_signatures) = match &body {
+        RekorEntryBody::DsseV001(dsse_body) => {
+            (&dsse_body.spec.payload_hash, &dsse_body.spec.signatures)
+        }
         _ => {
             return Err(Error::Verification(
                 "expected DSSE v0.0.1 body, got different type".to_string(),
             ))
         }
     };
+
+    if payload_hash.algorithm != HashAlgorithm::Sha2256 {
+        return Err(Error::Verification(
+            "unsupported DSSE payload hash algorithm".into(),
+        ));
+    }
+    let expected_hash = &payload_hash.value;
 
     // Verify payload hash (v0.0.1 uses hex encoding)
     let payload_bytes = envelope.payload.as_bytes();
@@ -111,16 +118,7 @@ fn verify_dsse_v001(
         )));
     }
 
-    // Extract the signing certificate from the bundle. Key-based bundles
-    // carry no certificate (the Rekor verifier is a public key), so only the
-    // signature bytes can be compared for them.
-    let bundle_cert = match &bundle.verification_material.content {
-        VerificationMaterialContent::X509CertificateChain { certificates } => {
-            certificates.first().map(|c| c.raw_bytes.clone())
-        }
-        VerificationMaterialContent::Certificate(cert) => Some(cert.raw_bytes.clone()),
-        VerificationMaterialContent::PublicKey { .. } => None,
-    };
+    let bundle_cert = bundle.signing_certificate();
 
     // Verify that the signature in the bundle matches what's in Rekor
     // This prevents signature substitution attacks
@@ -139,7 +137,7 @@ fn verify_dsse_v001(
             "DSSE signature in bundle does not match any signature in Rekor entry (signature or verifier mismatch)".to_string(),
         ));
     }
-    if let Some(cert) = &bundle_cert {
+    if let Some(cert) = bundle_cert {
         // Convert Rekor's PEM verifier to DER for canonical comparison
         let rekor_cert_der = rekor_sig
             .parse_certificate()
@@ -147,6 +145,26 @@ fn verify_dsse_v001(
         if cert.as_bytes() != rekor_cert_der.as_bytes() {
             return Err(Error::Verification(
                 "DSSE signature in bundle does not match any signature in Rekor entry (signature or verifier mismatch)".to_string(),
+            ));
+        }
+    } else {
+        let expected_key = managed_key.ok_or_else(|| {
+            Error::Verification(
+                "DSSE Rekor signature cannot be bound without the managed public key".into(),
+            )
+        })?;
+        let rekor_key = match rekor_sig.parse_certificate() {
+            Ok(cert) => certificate_public_key(&cert)?,
+            Err(_) => {
+                let pem = std::str::from_utf8(rekor_sig.verifier.as_bytes())
+                    .map_err(|e| Error::Verification(format!("invalid DSSE verifier: {e}")))?;
+                DerPublicKey::from_pem(pem)
+                    .map_err(|e| Error::Verification(format!("invalid DSSE verifier: {e}")))?
+            }
+        };
+        if rekor_key != *expected_key {
+            return Err(Error::Verification(
+                "DSSE managed public key does not match the Rekor verifier".into(),
             ));
         }
     }
