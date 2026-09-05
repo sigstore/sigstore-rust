@@ -12,7 +12,6 @@ sigstore-types = { workspace = true }
 sigstore-crypto = { workspace = true }
 thiserror = { workspace = true }
 base64 = { workspace = true }
-hex = { workspace = true }
 
 [dev-dependencies]
 serde = { workspace = true, features = ["derive"] }
