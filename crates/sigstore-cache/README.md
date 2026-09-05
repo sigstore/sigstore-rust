@@ -94,7 +94,10 @@ let staging_cache = FileSystemCache::staging()?;
 let custom_cache = FileSystemCache::for_instance("https://my-sigstore.example.com")?;
 ```
 
-Using `default_location()` without URL namespacing is still available but not recommended if you use multiple instances.
+`default_location()` uses the production namespace. Give each custom endpoint
+its own cache; in-memory adapters must also not be shared across instances.
+Filesystem entries now store expiration and data in one atomically replaced
+`.entry` file. Legacy `.cache`/`.meta` pairs are ignored and removed by `clear()`.
 
 ## Custom Adapters
 
