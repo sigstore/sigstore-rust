@@ -6,7 +6,7 @@ use crate::artifact::{ArtifactRequirements, PreparedArtifact};
 use crate::error::{Error, Result};
 use sigstore_bundle::validate_bundle_with_options;
 use sigstore_bundle::ValidationOptions;
-use sigstore_crypto::{parse_certificate_info, KeyAlgorithm, SigningScheme, VerificationKey};
+use sigstore_crypto::{parse_certificate_info, KeyAlgorithm, SigningScheme};
 use sigstore_trust_root::TrustedRoot;
 
 use sigstore_types::bundle::VerificationMaterialContent;
@@ -790,7 +790,7 @@ fn prepare_public_key(
         ));
     }
     validate_structure(bundle, policy.verify_tlog)?;
-    signing_scheme_for_content(public_key_algorithm(public_key)?, &bundle.content)
+    signing_scheme_for_content(KeyAlgorithm::from_spki(public_key)?, &bundle.content)
 }
 
 fn verify_message_signature_crypto(
@@ -837,28 +837,6 @@ pub fn verify<'a>(
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
     Verifier::new(trusted_root).verify(artifact, bundle, policy)
-}
-
-/// Derive the key algorithm from the public key's SPKI algorithm identifier.
-///
-/// Parsing goes through [`VerificationKey::from_spki`], so malformed
-/// SPKI structures, unknown algorithm OIDs, and unsupported EC curves are
-/// rejected eagerly with precise errors (TOB-SIGSTORE-6). The scheme itself
-/// is still resolved from the bundle content afterwards, so a declared
-/// SHA-384 message digest keeps selecting ECDSA-P256-SHA384.
-fn public_key_algorithm(public_key: &sigstore_types::DerPublicKey) -> Result<KeyAlgorithm> {
-    let key = VerificationKey::from_spki(public_key)
-        .map_err(|e| Error::Verification(format!("invalid public key: {e}")))?;
-    match key.scheme() {
-        SigningScheme::Ed25519 => Ok(KeyAlgorithm::Ed25519),
-        SigningScheme::EcdsaP256Sha256 | SigningScheme::EcdsaP256Sha384 => {
-            Ok(KeyAlgorithm::EcdsaP256)
-        }
-        other => Err(Error::Verification(format!(
-            "unsupported public key scheme: {}",
-            other.name()
-        ))),
-    }
 }
 
 /// Convenience function to verify a managed-key bundle with a caller-supplied
