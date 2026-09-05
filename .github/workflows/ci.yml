@@ -151,8 +151,13 @@ jobs:
       - name: Make binary executable
         run: chmod +x target/release/examples/verify_bundle
 
-      - name: Clone sigstore-conformance test data
-        run: git clone --depth 1 https://github.com/sigstore/sigstore-conformance.git
+      - name: Test mutation harness
+        run: python3 -m unittest discover -s tests -p test_mutation_fuzzer.py
 
-      - name: Run mutation fuzzer
-        run: python3 tests/mutation_fuzzer.py --verifier-type rust
+      - name: Mutate checked-in message signature and DSSE fixtures offline
+        run: |
+          bundles=crates/sigstore-verify/test_data/bundles
+          roots=crates/sigstore-trust-root/src
+          python3 tests/mutation_fuzzer.py --bundle "$bundles/cosign-v3-blob.sigstore.json" --artifact "$bundles/cosign-v3-blob.txt" --trust-root "$roots/trusted_root.json"
+          python3 tests/mutation_fuzzer.py --bundle "$bundles/conda-attestation.sigstore.json" --artifact "$bundles/signed-package-2.1.0-hb0f4dca_0.conda" --trust-root "$roots/trusted_root.json"
+          python3 tests/mutation_fuzzer.py --bundle "$bundles/conda-attestation-rekor2.sigstore.json" --artifact "$bundles/signed-package-2.1.0-hb0f4dca_0.conda" --trust-root "$roots/trusted_root_staging.json"

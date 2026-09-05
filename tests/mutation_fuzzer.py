@@ -820,11 +820,23 @@ def get_mutations_for_bundle(bundle: dict) -> list[Mutation]:
         "invalid_base64_certificate",  # Only targets single certificate
     }
 
+    entries = bundle.get("verificationMaterial", {}).get("tlogEntries", [])
+    kind_version = entries[0].get("kindVersion", {}) if entries else {}
+    rekor_v2 = kind_version.get("version") == "0.0.2" and kind_version.get("kind") in {"hashedrekord", "dsse"}
+    # Rekor v2 authenticates tree size/root in the checkpoint, not the duplicate
+    # proof fields. Log IDs are hints, and integratedTime is not signed in v2.
+    v1_authenticated_only = {
+        "inclusion_proof_wrong_root_hash", "inclusion_proof_wrong_tree_size",
+        "wrong_log_id", "integrated_time_future", "integrated_time_ancient",
+        "integrated_time_zero", "integrated_time_negative",
+    }
     applicable = []
     for mutation in ALL_MUTATIONS:
         name = mutation.name
 
         # Filter out mutations that don't apply to this bundle type
+        if rekor_v2 and name in v1_authenticated_only:
+            continue
         if name in dsse_only_mutations and not has_dsse:
             continue
         if name in message_sig_only_mutations and not has_message_sig:
