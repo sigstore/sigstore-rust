@@ -168,7 +168,7 @@ pub type ValidityPeriod = TimeRange;
 /// whose window has not started yet are excluded; expired instances are kept
 /// because historical entries/certificates were created while they were valid.
 fn usable_for_verification(valid_for: Option<&ValidityPeriod>, now: Timestamp) -> bool {
-    valid_for.map_or(true, |period| period.has_started_by(now))
+    valid_for.is_none_or(|period| period.has_started_by(now))
 }
 
 fn key_id(log_id: &LogKeyId) -> Result<Sha256Hash> {
@@ -263,7 +263,7 @@ impl TrustedRoot {
                 let valid = tlog
                     .public_key
                     .valid_for
-                    .map_or(true, |period| period.contains(time));
+                    .is_none_or(|period| period.contains(time));
                 if valid {
                     return Ok(tlog.public_key.raw_bytes.clone());
                 }

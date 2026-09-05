@@ -37,7 +37,7 @@ impl TimeRange {
     ///
     /// A missing `end` is unbounded on that side.
     pub fn contains(&self, time: Timestamp) -> bool {
-        time >= self.start && self.end.map_or(true, |end| time <= end)
+        time >= self.start && self.end.is_none_or(|end| time <= end)
     }
 
     /// Whether this window had started by `time` (i.e. `start <= time`),
