@@ -291,7 +291,11 @@ mod tests {
         let digest = [0u8; 32];
         let artifact = PreparedArtifact::from_artifact(
             Artifact::from(Sha256Hash::from_bytes(digest)),
-            &bundle.content,
+            &crate::artifact::ArtifactRequirements::new(
+                &bundle.content,
+                sigstore_crypto::SigningScheme::EcdsaP256Sha256,
+            )
+            .unwrap(),
         );
         verify_tlog_consistency(bundle, &artifact)
     }
@@ -320,7 +324,11 @@ mod tests {
         let digest = [0u8; 32];
         let artifact = PreparedArtifact::from_artifact(
             Artifact::from(Sha256Hash::from_bytes(digest)),
-            &bundle.content,
+            &crate::artifact::ArtifactRequirements::new(
+                &bundle.content,
+                sigstore_crypto::SigningScheme::EcdsaP256Sha256,
+            )
+            .unwrap(),
         );
         verify_tlog_consistency_with_key(&bundle, &artifact, Some(&public_key)).unwrap();
 

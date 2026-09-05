@@ -6,96 +6,118 @@ use sigstore_types::{
 };
 use std::io::Read;
 
-/// Artifact data normalized for the verification core.
-///
-/// Every input is hashed at most once. Blob and reader input are run through
-/// all the digest algorithms the bundle content can ask for in a single pass;
-/// digest input supplies exactly one digest. Blob callers additionally retain
-/// their bytes for schemes that cannot verify prehashed input.
+/// Parse binding requirements before consuming caller input. The statement is
+/// retained for the binding check, rather than parsed a second time after I/O.
+pub(crate) struct ArtifactRequirements {
+    algorithms: Vec<HashAlgorithm>,
+    statement: Option<Statement>,
+    message_scheme: Option<SigningScheme>,
+}
+
+impl ArtifactRequirements {
+    pub(crate) fn new(content: &SignatureContent, scheme: SigningScheme) -> Result<Self> {
+        match content {
+            SignatureContent::MessageSignature(signature) => {
+                let mut algorithms = vec![HashAlgorithm::Sha2256]; // hashedrekord
+                for algorithm in signature
+                    .message_digest
+                    .as_ref()
+                    .map(|d| d.algorithm)
+                    .into_iter()
+                    .chain(scheme.hash_algorithm())
+                {
+                    if !algorithms.contains(&algorithm) {
+                        algorithms.push(algorithm);
+                    }
+                }
+                Ok(Self {
+                    algorithms,
+                    statement: None,
+                    message_scheme: Some(scheme),
+                })
+            }
+            SignatureContent::DsseEnvelope(envelope) => {
+                if envelope.payload_type != "application/vnd.in-toto+json" {
+                    return Err(Error::Verification(format!(
+                        "unsupported DSSE payload type {:?}: cannot bind artifact to attestation",
+                        envelope.payload_type
+                    )));
+                }
+                let statement: Statement = serde_json::from_slice(envelope.payload.as_bytes())
+                    .map_err(|e| {
+                        Error::Verification(format!("failed to parse in-toto statement: {e}"))
+                    })?;
+                if statement.subject.is_empty() {
+                    return Err(Error::Verification(
+                        "in-toto statement has no subjects: cannot bind artifact to attestation"
+                            .into(),
+                    ));
+                }
+                let algorithms = statement.subject_algorithms();
+                if algorithms.is_empty() {
+                    return Err(Error::Verification(
+                        "in-toto statement has no supported subject digest algorithms".into(),
+                    ));
+                }
+                Ok(Self {
+                    algorithms,
+                    statement: Some(statement),
+                    message_scheme: None,
+                })
+            }
+        }
+    }
+
+    fn hashers(&self) -> Vec<ArtifactHasher> {
+        self.algorithms
+            .iter()
+            .copied()
+            .map(ArtifactHasher::new)
+            .collect()
+    }
+
+    fn check_reader(&self) -> Result<()> {
+        if let Some(scheme) = self.message_scheme {
+            if !scheme.supports_prehashed() {
+                return Err(Error::Verification(format!("cannot verify signature from a digest or reader - scheme {} does not support prehashed mode", scheme.name())));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn verify_binding(&self, artifact: &PreparedArtifact<'_>) -> Result<()> {
+        if let Some(statement) = &self.statement {
+            let matches = artifact
+                .sha256()
+                .is_ok_and(|digest| statement.matches_sha256(&digest))
+                || artifact
+                    .sha512()
+                    .is_ok_and(|digest| statement.matches_sha512(&digest));
+            if !matches {
+                return Err(Error::Verification(
+                    "artifact hash does not match any subject in attestation".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Digests computed in one pass. Bytes are retained only for schemes such as
+/// Ed25519 that cannot verify a prehashed message.
 pub(crate) struct PreparedArtifact<'a> {
     blob: Option<&'a [u8]>,
     digests: Vec<ArtifactDigest>,
 }
 
-/// How the signature over a `MessageSignature` artifact will be checked.
-///
-/// Blob input keeps its bytes, so the signature is verified over them directly
-/// and only the digests that bind the artifact to the bundle are needed.
-/// Streamed input keeps nothing but digests, so the signature must be verified
-/// prehashed and the single pass over the reader has to produce the digest the
-/// signing scheme consumes.
-#[derive(Clone, Copy)]
-enum SignatureInput {
-    Bytes,
-    Prehashed(Option<SigningScheme>),
-}
-
-fn require(algorithms: &mut Vec<HashAlgorithm>, algorithm: HashAlgorithm) {
-    if !algorithms.contains(&algorithm) {
-        algorithms.push(algorithm);
-    }
-}
-
-/// The digest algorithms verification can request for this bundle content.
-fn required_algorithms(content: &SignatureContent, input: SignatureInput) -> Vec<HashAlgorithm> {
-    match content {
-        SignatureContent::MessageSignature(signature) => {
-            // hashedrekord binds SHA-256; the declared messageDigest may use
-            // another algorithm and is compared against the artifact as well.
-            let mut algorithms = vec![HashAlgorithm::Sha2256];
-            if let Some(digest) = &signature.message_digest {
-                require(&mut algorithms, digest.algorithm);
-            }
-            match input {
-                SignatureInput::Bytes => {}
-                // Schemes without an external digest (Ed25519) cannot be
-                // verified prehashed at all; verification reports that later.
-                SignatureInput::Prehashed(Some(scheme)) => {
-                    if let Some(algorithm) = scheme.hash_algorithm() {
-                        require(&mut algorithms, algorithm);
-                    }
-                }
-                // The key could not be read before the artifact, so the
-                // scheme's digest is unknown. Hash with every algorithm so
-                // verification can still proceed and report the real problem.
-                SignatureInput::Prehashed(None) => {
-                    for algorithm in [
-                        HashAlgorithm::Sha2256,
-                        HashAlgorithm::Sha2384,
-                        HashAlgorithm::Sha2512,
-                    ] {
-                        require(&mut algorithms, algorithm);
-                    }
-                }
-            }
-            algorithms
-        }
-        // Only the in-toto subjects bind the artifact, so hash with the
-        // algorithms they use. If the payload is not a readable statement,
-        // hash both so the binding check later reports the real problem.
-        SignatureContent::DsseEnvelope(envelope) => {
-            std::str::from_utf8(envelope.payload.as_bytes())
-                .ok()
-                .and_then(|payload| serde_json::from_str::<Statement>(payload).ok())
-                .map(|statement| statement.subject_algorithms())
-                .filter(|algorithms| !algorithms.is_empty())
-                .unwrap_or_else(|| vec![HashAlgorithm::Sha2256, HashAlgorithm::Sha2512])
-        }
-    }
-}
-
-fn required_hashers(content: &SignatureContent, input: SignatureInput) -> Vec<ArtifactHasher> {
-    required_algorithms(content, input)
-        .into_iter()
-        .map(ArtifactHasher::new)
-        .collect()
-}
-
 impl<'a> PreparedArtifact<'a> {
-    pub(crate) fn from_artifact(artifact: Artifact<'a>, content: &SignatureContent) -> Self {
+    pub(crate) fn from_artifact(
+        artifact: Artifact<'a>,
+        requirements: &ArtifactRequirements,
+    ) -> Self {
         match artifact {
             Artifact::Blob(blob) => {
-                let mut hashers = required_hashers(content, SignatureInput::Bytes);
+                let mut hashers = requirements.hashers();
                 for hasher in &mut hashers {
                     hasher.update(blob);
                 }
@@ -111,30 +133,22 @@ impl<'a> PreparedArtifact<'a> {
         }
     }
 
-    /// Hash a blocking reader to EOF.
-    ///
-    /// `scheme` is the signing scheme the signature will be verified with, if
-    /// it could be determined from the bundle's key material up front. It only
-    /// matters for `MessageSignature` bundles: streamed input can only be
-    /// verified prehashed, so this pass must produce the scheme's digest.
     pub(crate) fn from_reader(
         reader: impl Read,
-        content: &SignatureContent,
-        scheme: Option<SigningScheme>,
+        requirements: &ArtifactRequirements,
     ) -> Result<PreparedArtifact<'static>> {
-        let mut hashers = required_hashers(content, SignatureInput::Prehashed(scheme));
+        requirements.check_reader()?;
+        let mut hashers = requirements.hashers();
         hash_reader(reader, &mut hashers).map_err(Error::ArtifactRead)?;
         Ok(Self::from_digests(Self::finalize(hashers)))
     }
 
-    /// Hash an async reader to EOF. See [`PreparedArtifact::from_reader`] for
-    /// the role of `scheme`.
     pub(crate) async fn from_async_reader(
         reader: impl AsyncRead + Unpin,
-        content: &SignatureContent,
-        scheme: Option<SigningScheme>,
+        requirements: &ArtifactRequirements,
     ) -> Result<PreparedArtifact<'static>> {
-        let mut hashers = required_hashers(content, SignatureInput::Prehashed(scheme));
+        requirements.check_reader()?;
+        let mut hashers = requirements.hashers();
         hash_async_reader(reader, &mut hashers)
             .await
             .map_err(Error::ArtifactRead)?;
@@ -156,11 +170,6 @@ impl<'a> PreparedArtifact<'a> {
         self.blob
     }
 
-    /// The artifact digest for `algorithm`.
-    ///
-    /// Blob and reader input were hashed once with every algorithm the bundle
-    /// content can request; digest input supplies a single algorithm. Anything
-    /// else is an error naming what was supplied.
     pub(crate) fn digest(&self, algorithm: HashAlgorithm) -> Result<ArtifactDigest> {
         self.digests
             .iter()
@@ -180,14 +189,45 @@ impl<'a> PreparedArtifact<'a> {
     }
 
     pub(crate) fn sha256(&self) -> Result<Sha256Hash> {
-        let digest = self.digest(HashAlgorithm::Sha2256)?;
-        Sha256Hash::try_from_slice(digest.as_bytes())
+        Sha256Hash::try_from_slice(self.digest(HashAlgorithm::Sha2256)?.as_bytes())
             .map_err(|e| Error::Verification(e.to_string()))
     }
 
     pub(crate) fn sha512(&self) -> Result<Sha512Hash> {
-        let digest = self.digest(HashAlgorithm::Sha2512)?;
-        Sha512Hash::try_from_slice(digest.as_bytes())
+        Sha512Hash::try_from_slice(self.digest(HashAlgorithm::Sha2512)?.as_bytes())
             .map_err(|e| Error::Verification(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sigstore_types::{DsseEnvelope, DsseSignature, PayloadBytes, SignatureBytes};
+
+    #[test]
+    fn scheme_and_subjects_select_the_required_digests() {
+        let message = SignatureContent::MessageSignature(sigstore_types::MessageSignature {
+            message_digest: None,
+            signature: SignatureBytes::from_bytes(b"unused"),
+        });
+        let requirements =
+            ArtifactRequirements::new(&message, SigningScheme::EcdsaP384Sha384).unwrap();
+        let artifact = PreparedArtifact::from_reader(&b"hello"[..], &requirements).unwrap();
+        assert!(artifact.digest(HashAlgorithm::Sha2256).is_ok());
+        assert!(artifact.digest(HashAlgorithm::Sha2384).is_ok());
+        assert!(artifact.digest(HashAlgorithm::Sha2512).is_err());
+        let requirements = ArtifactRequirements::new(&message, SigningScheme::Ed25519).unwrap();
+        let mut reader = std::io::Cursor::new(b"do not read");
+        assert!(PreparedArtifact::from_reader(&mut reader, &requirements).is_err());
+        assert_eq!(reader.position(), 0);
+
+        let hash = sigstore_crypto::sha512(b"hello").to_hex();
+        let content = SignatureContent::DsseEnvelope(DsseEnvelope::new("application/vnd.in-toto+json".into(), PayloadBytes::new(format!(r#"{{"_type":"https://in-toto.io/Statement/v1","subject":[{{"digest":{{"sha512":"{hash}"}}}}],"predicateType":"p","predicate":{{}}}}"#).into_bytes()), DsseSignature { sig: SignatureBytes::from_bytes(b"unused"), keyid: Default::default() }));
+        let requirements = ArtifactRequirements::new(&content, SigningScheme::Ed25519).unwrap();
+        assert_eq!(requirements.algorithms, vec![HashAlgorithm::Sha2512]);
+        let artifact = PreparedArtifact::from_reader(&b"hello"[..], &requirements).unwrap();
+        requirements.verify_binding(&artifact).unwrap();
+        let wrong = PreparedArtifact::from_reader(&b"other"[..], &requirements).unwrap();
+        assert!(requirements.verify_binding(&wrong).is_err());
     }
 }

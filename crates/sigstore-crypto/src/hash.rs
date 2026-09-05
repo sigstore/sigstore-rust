@@ -149,7 +149,7 @@ pub fn sha256_reader(reader: impl Read) -> io::Result<Sha256Hash> {
 pub fn hash_reader<H: HashUpdate>(mut reader: impl Read, hashers: &mut [H]) -> io::Result<()> {
     let mut buffer = [0_u8; HASH_CHUNK_SIZE];
     loop {
-        let read = reader.read(&mut buffer)?;
+        let read = read_retry(&mut reader, &mut buffer)?;
         if read == 0 {
             return Ok(());
         }
@@ -202,6 +202,15 @@ pub async fn hash_async_reader<H: HashUpdate>(
     }
 }
 
+fn read_retry(reader: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
+    loop {
+        match reader.read(buf) {
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            result => return result,
+        }
+    }
+}
+
 /// Adapter presenting a blocking [`Read`] as an always-ready [`AsyncRead`].
 struct BlockingReader<R>(R);
 
@@ -215,7 +224,7 @@ impl<R: Read> AsyncRead for BlockingReader<R> {
         _cx: &mut TaskContext<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(self.0.read(buf))
+        Poll::Ready(read_retry(&mut self.0, buf))
     }
 }
 
@@ -224,25 +233,16 @@ impl<R: Read> AsyncRead for BlockingReader<R> {
 /// Runtime-agnostic equivalent of `tokio::task::yield_now()`: the future
 /// wakes its own waker and returns `Pending` on the first poll, then `Ready`.
 fn yield_now() -> impl Future<Output = ()> {
-    struct YieldNow {
-        yielded: bool,
-    }
-
-    impl Future for YieldNow {
-        type Output = ();
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<()> {
-            if self.yielded {
-                Poll::Ready(())
-            } else {
-                self.yielded = true;
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
+    let mut yielded = false;
+    std::future::poll_fn(move |cx| {
+        if yielded {
+            Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
         }
-    }
-
-    YieldNow { yielded: false }
+    })
 }
 
 #[cfg(test)]
@@ -326,14 +326,11 @@ mod tests {
     }
 
     fn futures_task_noop_waker() -> std::task::Waker {
-        use std::task::{RawWaker, RawWakerVTable, Waker};
-        fn noop(_: *const ()) {}
-        fn clone(p: *const ()) -> RawWaker {
-            RawWaker::new(p, &VTABLE)
+        struct Noop;
+        impl std::task::Wake for Noop {
+            fn wake(self: std::sync::Arc<Self>) {}
         }
-        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
-        // SAFETY: the vtable functions ignore the data pointer entirely.
-        unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+        std::sync::Arc::new(Noop).into()
     }
 
     #[test]
@@ -387,6 +384,56 @@ mod tests {
         let waker = futures_task_noop_waker();
         let mut cx = TaskContext::from_waker(&waker);
         assert!(future.as_mut().poll(&mut cx).is_pending());
+    }
+
+    #[test]
+    fn short_interrupted_and_pending_reads() {
+        struct Reader {
+            remaining: &'static [u8],
+            interrupted: bool,
+            pending: bool,
+        }
+        impl Read for Reader {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if !self.interrupted {
+                    self.interrupted = true;
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                let len = buf.len().min(2);
+                self.remaining.read(&mut buf[..len])
+            }
+        }
+        impl AsyncRead for Reader {
+            fn poll_read(
+                mut self: Pin<&mut Self>,
+                cx: &mut TaskContext<'_>,
+                buf: &mut [u8],
+            ) -> Poll<io::Result<usize>> {
+                if !self.pending {
+                    self.pending = true;
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
+                }
+                self.pending = false;
+                Poll::Ready(read_retry(&mut *self, buf))
+            }
+        }
+        let reader = || Reader {
+            remaining: b"hello",
+            interrupted: false,
+            pending: false,
+        };
+        assert_eq!(sha256_reader(reader()).unwrap(), sha256(b"hello"));
+        for asynchronous in [false, true] {
+            let mut hasher = Sha256Hasher::new();
+            let hashers = std::slice::from_mut(&mut hasher);
+            if asynchronous {
+                block_on(hash_async_reader(reader(), hashers)).unwrap();
+            } else {
+                block_on(hash_reader_yielding(reader(), hashers)).unwrap();
+            }
+            assert_eq!(hasher.finalize(), sha256(b"hello"));
+        }
     }
 
     #[test]

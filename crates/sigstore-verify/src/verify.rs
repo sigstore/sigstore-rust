@@ -2,7 +2,7 @@
 //!
 //! This module provides the main entry point for verifying Sigstore signatures.
 
-use crate::artifact::PreparedArtifact;
+use crate::artifact::{ArtifactRequirements, PreparedArtifact};
 use crate::error::{Error, Result};
 use sigstore_bundle::validate_bundle_with_options;
 use sigstore_bundle::ValidationOptions;
@@ -10,7 +10,7 @@ use sigstore_crypto::{parse_certificate_info, KeyAlgorithm, SigningScheme, Verif
 use sigstore_trust_root::TrustedRoot;
 
 use sigstore_types::bundle::VerificationMaterialContent;
-use sigstore_types::{Artifact, Bundle, KindVersion, SignatureContent, Statement};
+use sigstore_types::{Artifact, Bundle, KindVersion, SignatureContent};
 
 /// How the signing certificate is verified.
 ///
@@ -273,10 +273,17 @@ impl Verifier {
         bundle: &Bundle,
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
+        let cert_info = prepare_certificate(bundle, policy)?;
+        let requirements = ArtifactRequirements::new(
+            &bundle.content,
+            signing_scheme_for_content(cert_info.key_algorithm, &bundle.content)?,
+        )?;
         self.verify_prepared(
-            PreparedArtifact::from_artifact(artifact.into(), &bundle.content),
+            PreparedArtifact::from_artifact(artifact.into(), &requirements),
             bundle,
             policy,
+            &cert_info,
+            &requirements,
         )
     }
 
@@ -290,14 +297,17 @@ impl Verifier {
         bundle: &Bundle,
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
+        let cert_info = prepare_certificate(bundle, policy)?;
+        let requirements = ArtifactRequirements::new(
+            &bundle.content,
+            signing_scheme_for_content(cert_info.key_algorithm, &bundle.content)?,
+        )?;
         self.verify_prepared(
-            PreparedArtifact::from_reader(
-                reader,
-                &bundle.content,
-                certificate_signing_scheme(bundle),
-            )?,
+            PreparedArtifact::from_reader(reader, &requirements)?,
             bundle,
             policy,
+            &cert_info,
+            &requirements,
         )
     }
 
@@ -308,15 +318,17 @@ impl Verifier {
         bundle: &Bundle,
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
+        let cert_info = prepare_certificate(bundle, policy)?;
+        let requirements = ArtifactRequirements::new(
+            &bundle.content,
+            signing_scheme_for_content(cert_info.key_algorithm, &bundle.content)?,
+        )?;
         self.verify_prepared(
-            PreparedArtifact::from_async_reader(
-                reader,
-                &bundle.content,
-                certificate_signing_scheme(bundle),
-            )
-            .await?,
+            PreparedArtifact::from_async_reader(reader, &requirements).await?,
             bundle,
             policy,
+            &cert_info,
+            &requirements,
         )
     }
 
@@ -325,25 +337,13 @@ impl Verifier {
         artifact: PreparedArtifact<'_>,
         bundle: &Bundle,
         policy: &VerificationPolicy,
+        cert_info: &sigstore_crypto::CertificateInfo,
+        requirements: &ArtifactRequirements,
     ) -> Result<VerificationResult> {
         let mut result = VerificationResult::new();
-
-        // Validate bundle structure first. This is a purely structural
-        // (shape/required-fields) check; all cryptographic verification of
-        // the bundle's contents happens in the steps below.
-        let options = ValidationOptions {
-            require_inclusion_proof: policy.verify_tlog,
-            require_timestamp: false, // Don't require timestamps, but verify if present
-        };
-        validate_bundle_with_options(bundle, &options)
-            .map_err(|e| Error::Verification(format!("bundle validation failed: {}", e)))?;
-
-        // Extract certificate for verification
-        let cert = crate::verify_impl::helpers::extract_certificate(
-            &bundle.verification_material.content,
-        )?;
-        let cert_info = parse_certificate_info(cert.as_bytes())
-            .map_err(|e| Error::Verification(format!("failed to parse certificate: {}", e)))?;
+        let cert = bundle
+            .signing_certificate()
+            .ok_or_else(|| Error::Verification("bundle has no signing certificate".into()))?;
 
         // Store identity and issuer in result
         result.identity = cert_info.identity.clone();
@@ -383,10 +383,7 @@ impl Verifier {
                 )?);
 
                 // Also verify the certificate is within its validity period
-                crate::verify_impl::helpers::validate_certificate_time(
-                    validation_time,
-                    &cert_info,
-                )?;
+                crate::verify_impl::helpers::validate_certificate_time(validation_time, cert_info)?;
             }
             // determine_validation_times never yields an empty list, but fail
             // closed rather than panic if that ever stops holding: reaching
@@ -473,7 +470,7 @@ impl Verifier {
             )?;
 
             // Verify the payload binds the artifact
-            verify_dsse_artifact_binding(envelope, &artifact)?;
+            requirements.verify_binding(&artifact)?;
         }
 
         // For MessageSignature bundles, verify the messageDigest matches the artifact
@@ -484,7 +481,7 @@ impl Verifier {
             // regardless of `policy.verify_tlog` so the signature is always checked;
             // the transparency-log path (step 8) performs an equivalent check when
             // enabled, but must not be the only place verification happens.
-            verify_message_signature_crypto(&cert_info, msg_sig, &artifact)?;
+            verify_message_signature_crypto(cert_info, msg_sig, &artifact)?;
         }
 
         // (8): Verify the transparency log entry's consistency against the other
@@ -542,11 +539,15 @@ impl Verifier {
         public_key: &sigstore_types::DerPublicKey,
         policy: &PublicKeyVerificationPolicy,
     ) -> Result<VerificationResult> {
+        let scheme = prepare_public_key(bundle, public_key, policy)?;
+        let requirements = ArtifactRequirements::new(&bundle.content, scheme)?;
         self.verify_with_key_prepared(
-            PreparedArtifact::from_artifact(artifact.into(), &bundle.content),
+            PreparedArtifact::from_artifact(artifact.into(), &requirements),
             bundle,
             public_key,
             policy,
+            scheme,
+            &requirements,
         )
     }
 
@@ -563,15 +564,15 @@ impl Verifier {
         public_key: &sigstore_types::DerPublicKey,
         policy: &PublicKeyVerificationPolicy,
     ) -> Result<VerificationResult> {
+        let scheme = prepare_public_key(bundle, public_key, policy)?;
+        let requirements = ArtifactRequirements::new(&bundle.content, scheme)?;
         self.verify_with_key_prepared(
-            PreparedArtifact::from_reader(
-                reader,
-                &bundle.content,
-                public_key_signing_scheme(bundle, public_key),
-            )?,
+            PreparedArtifact::from_reader(reader, &requirements)?,
             bundle,
             public_key,
             policy,
+            scheme,
+            &requirements,
         )
     }
 
@@ -584,16 +585,15 @@ impl Verifier {
         public_key: &sigstore_types::DerPublicKey,
         policy: &PublicKeyVerificationPolicy,
     ) -> Result<VerificationResult> {
+        let scheme = prepare_public_key(bundle, public_key, policy)?;
+        let requirements = ArtifactRequirements::new(&bundle.content, scheme)?;
         self.verify_with_key_prepared(
-            PreparedArtifact::from_async_reader(
-                reader,
-                &bundle.content,
-                public_key_signing_scheme(bundle, public_key),
-            )
-            .await?,
+            PreparedArtifact::from_async_reader(reader, &requirements).await?,
             bundle,
             public_key,
             policy,
+            scheme,
+            &requirements,
         )
     }
 
@@ -603,30 +603,10 @@ impl Verifier {
         bundle: &Bundle,
         public_key: &sigstore_types::DerPublicKey,
         policy: &PublicKeyVerificationPolicy,
+        signing_scheme: SigningScheme,
+        requirements: &ArtifactRequirements,
     ) -> Result<VerificationResult> {
-        if !matches!(
-            &bundle.verification_material.content,
-            VerificationMaterialContent::PublicKey { .. }
-        ) {
-            return Err(Error::Verification(
-                "bundle contains a certificate but public-key verification was requested"
-                    .to_string(),
-            ));
-        }
-
         let mut result = VerificationResult::new();
-
-        // Validate bundle structure (structural only; the cryptographic checks
-        // follow below)
-        let options = ValidationOptions {
-            require_inclusion_proof: policy.verify_tlog,
-            require_timestamp: false,
-        };
-        validate_bundle_with_options(bundle, &options)
-            .map_err(|e| Error::Verification(format!("bundle validation failed: {}", e)))?;
-
-        let key_algorithm = public_key_algorithm(public_key)?;
-        let signing_scheme = signing_scheme_for_content(key_algorithm, &bundle.content)?;
 
         // Verify transparency log entries (Merkle inclusion proofs, checkpoints,
         // SETs) without certificate time validation.
@@ -667,7 +647,7 @@ impl Verifier {
                 verify_dsse_envelope_signature(envelope, public_key, signing_scheme)?;
 
                 // Verify the payload binds the artifact
-                verify_dsse_artifact_binding(envelope, &artifact)?;
+                requirements.verify_binding(&artifact)?;
             }
         }
 
@@ -709,55 +689,10 @@ fn verify_dsse_envelope_signature(
     scheme: SigningScheme,
 ) -> Result<()> {
     // Compute the PAE that was signed
-    let payload_bytes = envelope.decode_payload();
-    let pae = sigstore_types::pae(&envelope.payload_type, &payload_bytes);
+    let pae = envelope.pae();
 
     sigstore_crypto::verify_signature(public_key, &pae, &envelope.signature.sig, scheme)
         .map_err(|e| Error::Verification(format!("DSSE signature verification failed: {}", e)))
-}
-
-/// Verify that a DSSE envelope's payload binds the artifact being verified.
-///
-/// Only in-toto statements are supported: any other payload type has no
-/// defined relationship to the artifact, so verification fails closed rather
-/// than accepting an arbitrary artifact alongside a validly-signed envelope.
-/// A supported artifact digest (SHA-256 or SHA-512) must match at least one
-/// subject of the statement, and the statement must have at least one subject.
-fn verify_dsse_artifact_binding(
-    envelope: &sigstore_types::DsseEnvelope,
-    artifact: &PreparedArtifact<'_>,
-) -> Result<()> {
-    if envelope.payload_type != "application/vnd.in-toto+json" {
-        return Err(Error::Verification(format!(
-            "unsupported DSSE payload type {:?}: cannot bind artifact to attestation",
-            envelope.payload_type
-        )));
-    }
-
-    let payload_str = std::str::from_utf8(envelope.payload.as_bytes())
-        .map_err(|e| Error::Verification(format!("payload is not valid UTF-8: {}", e)))?;
-    let statement: Statement = serde_json::from_str(payload_str)
-        .map_err(|e| Error::Verification(format!("failed to parse in-toto statement: {}", e)))?;
-
-    if statement.subject.is_empty() {
-        return Err(Error::Verification(
-            "in-toto statement has no subjects: cannot bind artifact to attestation".to_string(),
-        ));
-    }
-    let matches = artifact
-        .sha256()
-        .is_ok_and(|digest| statement.matches_sha256(&digest))
-        || artifact
-            .sha512()
-            .is_ok_and(|digest| statement.matches_sha512(&digest));
-
-    if !matches {
-        return Err(Error::Verification(
-            "artifact hash does not match any subject in attestation".to_string(),
-        ));
-    }
-
-    Ok(())
 }
 
 /// Verify `signature` over `artifact` with an already-resolved signing scheme.
@@ -771,28 +706,18 @@ fn verify_signature_over_artifact(
     signature: &sigstore_types::SignatureBytes,
     artifact: &PreparedArtifact<'_>,
 ) -> Result<()> {
-    let result = if let Some(blob) = artifact.blob() {
-        sigstore_crypto::verify_signature(public_key, blob, signature, scheme)
-    } else {
-        if !scheme.supports_prehashed() {
-            return Err(Error::Verification(format!(
-                "cannot verify signature from a digest or reader - scheme {} does not support prehashed mode",
-                scheme.name()
-            )));
-        }
-        let expected = scheme.hash_algorithm().ok_or_else(|| {
-            Error::Verification(format!(
-                "scheme {} has no external digest algorithm",
-                scheme.name()
-            ))
-        })?;
-        let digest = artifact.digest(expected)?;
+    let result = if let Some(algorithm) = scheme.hash_algorithm() {
+        let digest = artifact.digest(algorithm)?;
         sigstore_crypto::verify_signature_prehashed(
             public_key,
             digest.as_bytes(),
             signature,
             scheme,
         )
+    } else if let Some(blob) = artifact.blob() {
+        sigstore_crypto::verify_signature(public_key, blob, signature, scheme)
+    } else {
+        return Err(Error::Verification(format!("cannot verify signature from a digest or reader - scheme {} does not support prehashed mode", scheme.name())));
     };
     result.map_err(|e| Error::Verification(format!("signature verification failed: {}", e)))
 }
@@ -828,28 +753,44 @@ fn signing_scheme_for_content(
     }
 }
 
-/// The scheme a certificate bundle's signature will be verified with, derived
-/// before the artifact is read so one streaming pass can produce the digest
-/// that scheme consumes.
-///
-/// `None` when the certificate cannot be read: streamed input then hashes with
-/// every algorithm and verification reports the certificate problem itself.
-fn certificate_signing_scheme(bundle: &Bundle) -> Option<SigningScheme> {
-    let cert =
-        crate::verify_impl::helpers::extract_certificate(&bundle.verification_material.content)
-            .ok()?;
-    let cert_info = parse_certificate_info(cert.as_bytes()).ok()?;
-    signing_scheme_for_content(cert_info.key_algorithm, &bundle.content).ok()
+fn validate_structure(bundle: &Bundle, verify_tlog: bool) -> Result<()> {
+    validate_bundle_with_options(
+        bundle,
+        &ValidationOptions {
+            require_inclusion_proof: verify_tlog,
+            require_timestamp: false,
+        },
+    )
+    .map_err(|e| Error::Verification(format!("bundle validation failed: {e}")))
 }
 
-/// [`certificate_signing_scheme`] for managed-key bundles, whose key is
-/// supplied by the caller.
-fn public_key_signing_scheme(
+fn prepare_certificate(
+    bundle: &Bundle,
+    policy: &VerificationPolicy,
+) -> Result<sigstore_crypto::CertificateInfo> {
+    validate_structure(bundle, policy.verify_tlog)?;
+    let cert = bundle
+        .signing_certificate()
+        .ok_or_else(|| Error::Verification("bundle has no signing certificate".into()))?;
+    parse_certificate_info(cert.as_bytes())
+        .map_err(|e| Error::Verification(format!("failed to parse certificate: {e}")))
+}
+
+fn prepare_public_key(
     bundle: &Bundle,
     public_key: &sigstore_types::DerPublicKey,
-) -> Option<SigningScheme> {
-    let key_algorithm = public_key_algorithm(public_key).ok()?;
-    signing_scheme_for_content(key_algorithm, &bundle.content).ok()
+    policy: &PublicKeyVerificationPolicy,
+) -> Result<SigningScheme> {
+    if !matches!(
+        bundle.verification_material.content,
+        VerificationMaterialContent::PublicKey { .. }
+    ) {
+        return Err(Error::Verification(
+            "bundle contains a certificate but public-key verification was requested".into(),
+        ));
+    }
+    validate_structure(bundle, policy.verify_tlog)?;
+    signing_scheme_for_content(public_key_algorithm(public_key)?, &bundle.content)
 }
 
 fn verify_message_signature_crypto(
@@ -1058,151 +999,31 @@ mod tests {
         )
     }
 
-    fn prepared_blob<'a>(
-        blob: &'a [u8],
-        envelope: &sigstore_types::DsseEnvelope,
-    ) -> PreparedArtifact<'a> {
-        PreparedArtifact::from_artifact(
-            Artifact::from(blob),
-            &SignatureContent::DsseEnvelope(envelope.clone()),
+    #[test]
+    fn statement_requirements_fail_closed_and_bind_blob() {
+        let content = SignatureContent::DsseEnvelope(in_toto_envelope(
+            &statement_with_subject_sha256(&sigstore_crypto::sha256(b"hello").to_hex()),
+        ));
+        let requirements =
+            ArtifactRequirements::new(&content, SigningScheme::EcdsaP256Sha256).unwrap();
+        for (bytes, matches) in [(b"hello".as_slice(), true), (b"wrong".as_slice(), false)] {
+            let artifact = PreparedArtifact::from_artifact(bytes.into(), &requirements);
+            assert_eq!(requirements.verify_binding(&artifact).is_ok(), matches);
+        }
+        for payload in [
+            "not json",
+            r#"{"_type":"https://in-toto.io/Statement/v1","subject":[],"predicateType":"p","predicate":{}}"#,
+        ] {
+            let content = SignatureContent::DsseEnvelope(in_toto_envelope(payload));
+            assert!(ArtifactRequirements::new(&content, SigningScheme::EcdsaP256Sha256).is_err());
+        }
+        let mut envelope = in_toto_envelope("{}");
+        envelope.payload_type = "unknown".into();
+        assert!(ArtifactRequirements::new(
+            &SignatureContent::DsseEnvelope(envelope),
+            SigningScheme::EcdsaP256Sha256
         )
-    }
-
-    fn message_signature_content(message_digest: Option<HashAlgorithm>) -> SignatureContent {
-        SignatureContent::MessageSignature(sigstore_types::bundle::MessageSignature {
-            message_digest: message_digest.map(|algorithm| sigstore_types::bundle::MessageDigest {
-                algorithm,
-                digest: sigstore_types::DigestBytes::from_bytes(vec![0; 32]),
-            }),
-            signature: sigstore_types::SignatureBytes::from_bytes(b"sig"),
-        })
-    }
-
-    fn has_digest(artifact: &PreparedArtifact<'_>, algorithm: HashAlgorithm) -> bool {
-        artifact.digest(algorithm).is_ok()
-    }
-
-    /// A P-384 key signs over SHA-384 while hashedrekord binds SHA-256. When
-    /// the bundle omits `messageDigest`, streamed input must still produce
-    /// the scheme's digest or prehashed verification cannot run.
-    #[test]
-    fn test_streamed_message_signature_hashes_the_schemes_digest() {
-        let content = message_signature_content(None);
-        let bytes: &[u8] = b"hello world";
-
-        let artifact =
-            PreparedArtifact::from_reader(bytes, &content, Some(SigningScheme::EcdsaP384Sha384))
-                .unwrap();
-        assert!(has_digest(&artifact, HashAlgorithm::Sha2256));
-        assert!(has_digest(&artifact, HashAlgorithm::Sha2384));
-        assert!(!has_digest(&artifact, HashAlgorithm::Sha2512));
-
-        // Unknown key material: hash everything so verification can proceed
-        // far enough to report the real problem.
-        let artifact = PreparedArtifact::from_reader(bytes, &content, None).unwrap();
-        assert!(has_digest(&artifact, HashAlgorithm::Sha2256));
-        assert!(has_digest(&artifact, HashAlgorithm::Sha2384));
-        assert!(has_digest(&artifact, HashAlgorithm::Sha2512));
-
-        // Ed25519 has no external digest; only the binding digest is hashed
-        // and prehashed verification fails closed later.
-        let artifact =
-            PreparedArtifact::from_reader(bytes, &content, Some(SigningScheme::Ed25519)).unwrap();
-        assert!(has_digest(&artifact, HashAlgorithm::Sha2256));
-        assert!(!has_digest(&artifact, HashAlgorithm::Sha2384));
-
-        // Blob input is verified over the bytes themselves, so the scheme's
-        // digest is not computed; the declared messageDigest still is.
-        let artifact = PreparedArtifact::from_artifact(
-            Artifact::from(bytes),
-            &message_signature_content(Some(HashAlgorithm::Sha2384)),
-        );
-        assert!(artifact.blob().is_some());
-        assert!(has_digest(&artifact, HashAlgorithm::Sha2256));
-        assert!(has_digest(&artifact, HashAlgorithm::Sha2384));
-        assert!(!has_digest(&artifact, HashAlgorithm::Sha2512));
-    }
-
-    #[test]
-    fn test_dsse_prepared_blob_hashes_only_subject_algorithms() {
-        let sha256_only = in_toto_envelope(&statement_with_subject_sha256(
-            &sigstore_crypto::sha256(b"hello world").to_hex(),
-        ));
-        let artifact = prepared_blob(b"hello world", &sha256_only);
-        assert!(artifact.digest(HashAlgorithm::Sha2256).is_ok());
-        assert!(artifact.digest(HashAlgorithm::Sha2512).is_err());
-
-        // An unreadable statement falls back to hashing both, so the binding
-        // check can report the real problem.
-        let unreadable = in_toto_envelope("not json");
-        let artifact = prepared_blob(b"hello world", &unreadable);
-        assert!(artifact.digest(HashAlgorithm::Sha2256).is_ok());
-        assert!(artifact.digest(HashAlgorithm::Sha2512).is_ok());
-    }
-
-    /// SHA-512 subjects (sigstore-python and npm provenance bundles) must bind
-    /// a streamed artifact too: the reader pass hashes with SHA-512 only.
-    #[test]
-    fn test_dsse_binding_sha512_subject_from_reader() {
-        let artifact_bytes: &[u8] = b"hello world";
-        let hash_hex = sigstore_crypto::sha512(artifact_bytes).to_hex();
-        let envelope = in_toto_envelope(&format!(
-            r#"{{"_type":"https://in-toto.io/Statement/v1","subject":[{{"name":"artifact","digest":{{"sha512":"{hash_hex}"}}}}],"predicateType":"https://example.com/predicate/v1","predicate":{{}}}}"#
-        ));
-        let content = SignatureContent::DsseEnvelope(envelope.clone());
-
-        let artifact = PreparedArtifact::from_reader(artifact_bytes, &content, None).unwrap();
-        assert!(artifact.digest(HashAlgorithm::Sha2256).is_err());
-        assert!(artifact.digest(HashAlgorithm::Sha2512).is_ok());
-        assert!(verify_dsse_artifact_binding(&envelope, &artifact).is_ok());
-
-        let other = PreparedArtifact::from_reader(&b"other"[..], &content, None).unwrap();
-        assert!(verify_dsse_artifact_binding(&envelope, &other).is_err());
-    }
-
-    #[test]
-    fn test_dsse_binding_matching_subject_ok() {
-        let artifact_bytes = b"hello world";
-        let hash_hex = sigstore_crypto::sha256(artifact_bytes).to_hex();
-        let envelope = in_toto_envelope(&statement_with_subject_sha256(&hash_hex));
-
-        let artifact = prepared_blob(artifact_bytes, &envelope);
-        assert!(verify_dsse_artifact_binding(&envelope, &artifact).is_ok());
-    }
-
-    #[test]
-    fn test_dsse_binding_mismatched_subject_fails() {
-        let hash_hex = sigstore_crypto::sha256(b"some other artifact").to_hex();
-        let envelope = in_toto_envelope(&statement_with_subject_sha256(&hash_hex));
-
-        let artifact = prepared_blob(b"hello world", &envelope);
-        let err = verify_dsse_artifact_binding(&envelope, &artifact).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("does not match any subject in attestation"));
-    }
-
-    #[test]
-    fn test_dsse_binding_empty_subjects_fails_closed() {
-        let payload = r#"{"_type":"https://in-toto.io/Statement/v1","subject":[],"predicateType":"https://example.com/predicate/v1","predicate":{}}"#;
-        let envelope = in_toto_envelope(payload);
-
-        let artifact = prepared_blob(b"hello world", &envelope);
-        let err = verify_dsse_artifact_binding(&envelope, &artifact).unwrap_err();
-        assert!(err.to_string().contains("no subjects"));
-    }
-
-    #[test]
-    fn test_dsse_binding_unknown_payload_type_fails_closed() {
-        let envelope = sigstore_types::DsseEnvelope::new(
-            "application/vnd.example+json".to_string(),
-            sigstore_types::PayloadBytes::from_bytes(b"{}"),
-            unused_signature(),
-        );
-
-        let artifact = prepared_blob(b"hello world", &envelope);
-        let err = verify_dsse_artifact_binding(&envelope, &artifact).unwrap_err();
-        assert!(err.to_string().contains("unsupported DSSE payload type"));
+        .is_err());
     }
 
     const DSSE_TEST_PAYLOAD: &[u8] = br#"{"hello":"world"}"#;

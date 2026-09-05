@@ -1108,6 +1108,30 @@ fn test_verify_cosign_v3_blob_bundle() {
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
 }
 
+#[tokio::test]
+async fn invalid_certificate_does_not_consume_readers() {
+    let mut bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
+    bundle.verification_material.content =
+        sigstore_types::bundle::VerificationMaterialContent::Certificate(
+            sigstore_types::bundle::CertificateContent {
+                raw_bytes: sigstore_types::DerCertificate::new(vec![0]),
+            },
+        );
+    let verifier = Verifier::new(&production_root());
+    let mut reader = std::io::Cursor::new(b"do not consume");
+    let error = verifier
+        .verify_reader(&mut reader, &bundle, &VerificationPolicy::default())
+        .unwrap_err();
+    assert!(error.to_string().contains("failed to parse certificate"));
+    assert_eq!(reader.position(), 0);
+    let mut reader = futures::io::Cursor::new(b"do not consume");
+    assert!(verifier
+        .verify_async_reader(&mut reader, &bundle, &VerificationPolicy::default())
+        .await
+        .is_err());
+    assert_eq!(reader.position(), 0);
+}
+
 #[test]
 fn test_verify_cosign_bundle_from_sync_reader() {
     let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();

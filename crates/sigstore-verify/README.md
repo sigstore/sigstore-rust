@@ -60,6 +60,11 @@ let result = verifier.verify_async_reader(async_reader, &bundle, &policy).await?
 // `verify_with_key_async_reader`.
 ```
 
+For Tokio readers, enable `tokio-util`'s `compat` feature and use
+`tokio_util::compat::TokioAsyncReadCompatExt::compat()` on the file or stream.
+Reader verification rejects message-signature schemes that require the original
+bytes (such as Ed25519) before consuming input; use the byte API for those schemes.
+
 For GitHub artifact attestations, choose GitHub's Sigstore instance explicitly
 and use the GitHub verification profile:
 

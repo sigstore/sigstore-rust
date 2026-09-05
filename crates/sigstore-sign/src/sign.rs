@@ -80,8 +80,24 @@ async fn prepare_dsse_payload_yielding(
     payload_type: &str,
     data: &[u8],
 ) -> (PayloadBytes, Sha256Hasher) {
-    let hasher = sha256_pae_yielding(payload_type, data).await;
-    (PayloadBytes::new(data.to_vec()), hasher)
+    struct CopyAndHash {
+        payload: Vec<u8>,
+        hasher: Sha256Hasher,
+    }
+    impl sigstore_crypto::HashUpdate for CopyAndHash {
+        fn update(&mut self, data: &[u8]) {
+            self.payload.extend_from_slice(data);
+            self.hasher.update(data);
+        }
+    }
+    let mut prepared = CopyAndHash {
+        payload: Vec::with_capacity(data.len()),
+        hasher: dsse_pae_hasher(payload_type, data.len()),
+    };
+    hash_reader_yielding(data, std::slice::from_mut(&mut prepared))
+        .await
+        .expect("reading from an in-memory slice cannot fail");
+    (PayloadBytes::new(prepared.payload), prepared.hasher)
 }
 
 /// Configuration for signing operations
@@ -201,13 +217,31 @@ impl SigningConfig {
 
     /// Validate that the configured services can produce a verifiable bundle.
     pub fn validate(&self) -> Result<()> {
-        if self.rekor_api_version == RekorApiVersion::V2 && self.tsa_url.is_none() {
-            return Err(Error::Config(
-                "Rekor v2 requires an RFC 3161 timestamp authority".to_string(),
-            ));
-        }
-        Ok(())
+        validate_configuration(
+            self.signing_scheme,
+            self.rekor_api_version,
+            self.tsa_url.as_deref(),
+        )
     }
+}
+
+fn validate_configuration(
+    scheme: SigningScheme,
+    rekor: RekorApiVersion,
+    tsa: Option<&str>,
+) -> Result<()> {
+    if scheme != SigningScheme::EcdsaP256Sha256 {
+        return Err(Error::Config(format!(
+            "signing scheme {} is not supported",
+            scheme.name()
+        )));
+    }
+    if rekor == RekorApiVersion::V2 && tsa.is_none() {
+        return Err(Error::Config(
+            "Rekor v2 requires an RFC 3161 timestamp authority".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Context for signing operations
@@ -597,12 +631,11 @@ impl Signer {
     }
 
     fn validate_configuration(&self) -> Result<()> {
-        if self.rekor_api_version == RekorApiVersion::V2 && self.tsa_url.is_none() {
-            return Err(Error::Config(
-                "Rekor v2 requires an RFC 3161 timestamp authority".to_string(),
-            ));
-        }
-        Ok(())
+        validate_configuration(
+            self.signing_scheme,
+            self.rekor_api_version,
+            self.tsa_url.as_deref(),
+        )
     }
 
     fn rekor_v2_key_details(&self) -> Result<RekorV2KeyDetails> {
@@ -739,6 +772,30 @@ mod tests {
 
         config.tsa_url = Some("https://timestamp.example".to_string());
         config.validate().unwrap();
+    }
+
+    #[tokio::test]
+    async fn unsupported_scheme_does_not_consume_reader() {
+        use base64::Engine;
+        let jwt = format!(
+            "header.{}.signature",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(br#"{"iss":"test","sub":"test","exp":9999999999}"#)
+        );
+        let config = SigningConfig {
+            signing_scheme: SigningScheme::Ed25519,
+            ..Default::default()
+        };
+        let signer =
+            SigningContext::with_config(config).signer(IdentityToken::from_jwt(&jwt).unwrap());
+        let mut reader = std::io::Cursor::new(b"do not read");
+        assert!(signer
+            .sign_reader(&mut reader)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("not supported"));
+        assert_eq!(reader.position(), 0);
     }
 
     #[test]

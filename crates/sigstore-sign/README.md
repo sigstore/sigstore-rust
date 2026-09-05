@@ -78,6 +78,9 @@ let context = SigningContext::production();
 let context = SigningContext::staging();
 ```
 
+For Tokio files/streams, enable `tokio-util`'s `compat` feature and call
+`TokioAsyncReadCompatExt::compat()` before passing the reader to the async API.
+
 ## Related Crates
 
 - [`sigstore-verify`](../sigstore-verify) - Verify signatures created by this crate
