@@ -4,7 +4,7 @@
 
 use crate::error::{Error, Result};
 use futures_io::AsyncRead;
-use sigstore_bundle::{BundleV03, TlogEntryBuilder};
+use sigstore_bundle::BundleV03;
 use sigstore_crypto::{
     hash_async_reader, hash_reader_yielding, KeyPair, Sha256Hasher, SigningScheme,
 };
@@ -456,11 +456,9 @@ impl Signer {
                     .create_entry(request)
                     .await
                     .map_err(|e| Error::Signing(format!("Failed to create Rekor entry: {e}")))?;
-                Ok(
-                    TlogEntryBuilder::from_log_entry(&entry, KindVersion::HashedRekordV001)
-                        .map_err(|e| Error::Signing(format!("invalid Rekor response: {e}")))?
-                        .build(),
-                )
+                entry
+                    .to_bundle_entry(KindVersion::HashedRekordV001)
+                    .map_err(|e| Error::Signing(format!("invalid Rekor response: {e}")))
             }
             RekorApiVersion::V2 => {
                 let rekor = RekorV2Client::new(&self.rekor_url);
@@ -606,11 +604,9 @@ impl Signer {
                 let entry = rekor.create_dsse_entry(request).await.map_err(|e| {
                     Error::Signing(format!("Failed to create DSSE Rekor entry: {e}"))
                 })?;
-                Ok(
-                    TlogEntryBuilder::from_log_entry(&entry, KindVersion::DsseV001)
-                        .map_err(|e| Error::Signing(format!("invalid Rekor response: {e}")))?
-                        .build(),
-                )
+                entry
+                    .to_bundle_entry(KindVersion::DsseV001)
+                    .map_err(|e| Error::Signing(format!("invalid Rekor response: {e}")))
             }
             RekorApiVersion::V2 => {
                 let rekor = RekorV2Client::new(&self.rekor_url);
