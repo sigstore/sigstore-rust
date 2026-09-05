@@ -1134,6 +1134,26 @@ async fn invalid_certificate_does_not_consume_readers() {
 }
 
 #[test]
+fn inclusion_proof_alone_does_not_authenticate_integrated_time() {
+    let mut bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
+    let entry = &mut bundle.verification_material.tlog_entries[0];
+    entry.inclusion_promise = None;
+    entry.integrated_time =
+        Some(entry.integrated_time.unwrap() + jiff::SignedDuration::from_secs(1));
+    // The independent TSA timestamp still authenticates the signing time.
+    let result = verify(
+        include_bytes!("../test_data/bundles/cosign-v3-blob.txt"),
+        &bundle,
+        &VerificationPolicy::any_identity(),
+        &production_root(),
+    )
+    .unwrap();
+    assert_eq!(result.integrated_time(), None);
+    assert_eq!(result.verified_timestamps().len(), 1);
+    assert!(result.tlog_verified());
+}
+
+#[test]
 fn verification_results_report_only_checked_evidence() {
     let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
     let bytes = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");

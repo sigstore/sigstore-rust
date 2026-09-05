@@ -41,10 +41,10 @@ pub fn verify_tlog_entries(
         // Verify Merkle inclusion proof, checkpoint signature and SET
         verify_entry_inclusion(entry, trusted_root)?;
 
-        // Only Rekor v1 authenticates integratedTime via the SET. Rekor v2
-        // uses RFC 3161 timestamps; ignore an unauthenticated top-level value.
+        // Only a Rekor v1 SET authenticates integratedTime. An inclusion proof
+        // authenticates the body, not this separate timestamp field.
         let is_rekor_v2 = entry.kind_version == KindVersion::HashedRekordV002;
-        if !is_rekor_v2 {
+        if !is_rekor_v2 && entry.inclusion_promise.is_some() {
             if let Some(time) = entry.integrated_time {
                 validate_integrated_time(time, jiff::Timestamp::now(), not_before, not_after)?;
                 integrated_time_result = Some(time);
