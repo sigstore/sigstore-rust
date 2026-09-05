@@ -31,11 +31,13 @@ Add the crates you need to your `Cargo.toml`:
 ```toml
 [dependencies]
 # For verification only
-sigstore-verify = "0.1"
-sigstore-trust-root = "0.1"
+sigstore-verify = "0.11"
+sigstore-trust-root = "0.11"
+sigstore-types = "0.11"
 
 # For signing
-sigstore-sign = "0.1"
+sigstore-sign = "0.11"
+sigstore-oidc = "0.11"
 ```
 
 ## Usage
@@ -53,25 +55,22 @@ let verifier = Verifier::new(&root);
 // Parse the bundle (contains signature, certificate, transparency log entry)
 let bundle: sigstore_types::Bundle = serde_json::from_str(&bundle_json)?;
 
-// Verify the signature
-verifier.verify(&bundle, artifact_bytes)?;
-
-// Or verify with identity policy
-let policy = VerificationPolicy::new()
-    .issuer("https://token.actions.githubusercontent.com")
-    .subject_regex(r"^https://github\.com/myorg/.*$")?;
-
-verifier.verify_with_policy(&bundle, artifact_bytes, &policy)?;
+// Authorize the expected signer, not just any valid Sigstore identity.
+let policy = VerificationPolicy::default()
+    .require_issuer("https://token.actions.githubusercontent.com")
+    .require_identity("https://github.com/myorg/myrepo/.github/workflows/release.yml@refs/tags/v1.0.0");
+verifier.verify(artifact_bytes, &bundle, &policy)?;
 ```
 
 ### Signing an Artifact
 
 ```rust
-use sigstore_sign::{Signer, SigningConfig};
+use sigstore_sign::{SigningContext, SigningConfig};
 
-// Create a signer (will authenticate via OIDC)
-let config = SigningConfig::production();
-let signer = Signer::new(config).await?;
+let endpoints = sigstore_trust_root::SigningConfig::production().await?;
+let config = SigningConfig::from_tuf_config(&endpoints)?;
+let token = sigstore_oidc::get_identity_token(config.oidc_url.as_deref()).await?;
+let signer = SigningContext::with_config(config).signer(token);
 
 // Sign the artifact - returns a Sigstore bundle
 let bundle = signer.sign(artifact_bytes).await?;
@@ -162,12 +161,15 @@ This library uses [aws-lc-rs](https://github.com/aws/aws-lc-rs) as its cryptogra
 - SHA-256/SHA-384/SHA-512 hashing
 - X.509 certificate parsing and validation
 
-AWS-LC is [FIPS 140-3 validated](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/4816), making this library suitable for environments with compliance requirements.
+AWS-LC has a [FIPS 140-3 validated module](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/4816).
+This workspace does not enable a FIPS build by default and does not claim FIPS
+validation for sigstore-rust. Compliance depends on the exact module build,
+configuration, platform, and approved operations.
 
 ## Minimum Supported Rust Version
 
-Rust 1.70 or later.
+Rust 1.86 or later (checked in CI for the locked dependency set on Linux).
 
 ## License
 
-BSD-3-Clause
+Apache-2.0; see [LICENSE](LICENSE).
