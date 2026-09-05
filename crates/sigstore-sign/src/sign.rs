@@ -3,8 +3,11 @@
 //! This module provides the main entry point for signing artifacts with Sigstore.
 
 use crate::error::{Error, Result};
+use futures_io::AsyncRead;
 use sigstore_bundle::{BundleV03, TlogEntryBuilder};
-use sigstore_crypto::{KeyPair, Sha256Hasher, SigningScheme};
+use sigstore_crypto::{
+    hash_async_reader, hash_reader_yielding, KeyPair, Sha256Hasher, SigningScheme,
+};
 use sigstore_fulcio::FulcioClient;
 use sigstore_oidc::IdentityToken;
 use sigstore_rekor::{
@@ -22,59 +25,33 @@ use sigstore_types::{
     TransparencyLogEntry,
 };
 
-/// Number of bytes hashed between yields to the async executor.
-const HASH_YIELD_CHUNK_SIZE: usize = 64 * 1024;
-
-/// Yield control back to the async executor once.
-///
-/// Runtime-agnostic equivalent of `tokio::task::yield_now()`: the future
-/// wakes its own waker and returns `Pending` on the first poll, then `Ready`.
-fn yield_now() -> impl std::future::Future<Output = ()> {
-    struct YieldNow {
-        yielded: bool,
-    }
-
-    impl std::future::Future for YieldNow {
-        type Output = ();
-
-        fn poll(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<()> {
-            if self.yielded {
-                std::task::Poll::Ready(())
-            } else {
-                self.yielded = true;
-                cx.waker().wake_by_ref();
-                std::task::Poll::Pending
-            }
-        }
-    }
-
-    YieldNow { yielded: false }
+/// Hash in-memory `data` into `hasher`, yielding to the executor between
+/// chunks so unbounded caller input cannot starve other tasks (TOB-SIGSTORE-8).
+async fn update_yielding(hasher: &mut Sha256Hasher, data: &[u8]) {
+    hash_reader_yielding(data, std::slice::from_mut(hasher))
+        .await
+        .expect("reading from an in-memory slice cannot fail");
 }
 
-async fn update_sha256_yielding(hasher: &mut Sha256Hasher, data: &[u8]) {
-    for chunk in data.chunks(HASH_YIELD_CHUNK_SIZE) {
-        hasher.update(chunk);
-        yield_now().await;
-    }
-}
-
-/// Compute a SHA-256 digest over `data` in chunks, yielding to the async
-/// executor between chunks.
+/// SHA-256 a blocking reader to EOF, yielding to the executor between chunks.
 ///
-/// Hashing is CPU-bound: doing it in one shot over unbounded caller input
-/// would occupy the executor thread for the whole duration and starve other
-/// tasks (TOB-SIGSTORE-8). Hashing in [`HASH_YIELD_CHUNK_SIZE`] chunks keeps
-/// each non-yielding stretch short so other tasks can make progress.
-///
-/// Returns the hasher so callers can either [`Sha256Hasher::finalize`] it or
-/// sign the digest directly via [`KeyPair::sign_prehashed`].
-async fn sha256_yielding(data: &[u8]) -> Sha256Hasher {
+/// The reads themselves run on the executor thread; see
+/// [`sigstore_crypto::hash_reader_yielding`].
+async fn sha256_yielding(reader: impl std::io::Read) -> Result<Sha256Hash> {
     let mut hasher = Sha256Hasher::new();
-    update_sha256_yielding(&mut hasher, data).await;
-    hasher
+    hash_reader_yielding(reader, std::slice::from_mut(&mut hasher))
+        .await
+        .map_err(Error::ArtifactRead)?;
+    Ok(hasher.finalize())
+}
+
+/// SHA-256 an async reader to EOF, yielding to the executor between chunks.
+async fn sha256_async(reader: impl AsyncRead + Unpin) -> Result<Sha256Hash> {
+    let mut hasher = Sha256Hasher::new();
+    hash_async_reader(reader, std::slice::from_mut(&mut hasher))
+        .await
+        .map_err(Error::ArtifactRead)?;
+    Ok(hasher.finalize())
 }
 
 /// Start hashing a DSSE PAE without materializing the PAE in memory.
@@ -93,24 +70,34 @@ fn dsse_pae_hasher(payload_type: &str, payload_len: usize) -> Sha256Hasher {
 /// Hash a DSSE PAE in chunks without first allocating a full PAE copy.
 async fn sha256_pae_yielding(payload_type: &str, payload: &[u8]) -> Sha256Hasher {
     let mut hasher = dsse_pae_hasher(payload_type, payload.len());
-    update_sha256_yielding(&mut hasher, payload).await;
+    update_yielding(&mut hasher, payload).await;
     hasher
 }
 
-/// Copy a DSSE payload into its owned envelope representation while hashing
-/// its PAE in the same yielding pass.
+/// Copy a DSSE payload into its owned envelope representation and hash its
+/// PAE cooperatively, without allocating a full PAE copy.
 async fn prepare_dsse_payload_yielding(
     payload_type: &str,
     data: &[u8],
 ) -> (PayloadBytes, Sha256Hasher) {
-    let mut payload = Vec::with_capacity(data.len());
-    let mut hasher = dsse_pae_hasher(payload_type, data.len());
-    for chunk in data.chunks(HASH_YIELD_CHUNK_SIZE) {
-        payload.extend_from_slice(chunk);
-        hasher.update(chunk);
-        yield_now().await;
+    struct CopyAndHash {
+        payload: Vec<u8>,
+        hasher: Sha256Hasher,
     }
-    (PayloadBytes::new(payload), hasher)
+    impl sigstore_crypto::HashUpdate for CopyAndHash {
+        fn update(&mut self, data: &[u8]) {
+            self.payload.extend_from_slice(data);
+            self.hasher.update(data);
+        }
+    }
+    let mut prepared = CopyAndHash {
+        payload: Vec::with_capacity(data.len()),
+        hasher: dsse_pae_hasher(payload_type, data.len()),
+    };
+    hash_reader_yielding(data, std::slice::from_mut(&mut prepared))
+        .await
+        .expect("reading from an in-memory slice cannot fail");
+    (PayloadBytes::new(prepared.payload), prepared.hasher)
 }
 
 /// Configuration for signing operations
@@ -230,13 +217,31 @@ impl SigningConfig {
 
     /// Validate that the configured services can produce a verifiable bundle.
     pub fn validate(&self) -> Result<()> {
-        if self.rekor_api_version == RekorApiVersion::V2 && self.tsa_url.is_none() {
-            return Err(Error::Config(
-                "Rekor v2 requires an RFC 3161 timestamp authority".to_string(),
-            ));
-        }
-        Ok(())
+        validate_configuration(
+            self.signing_scheme,
+            self.rekor_api_version,
+            self.tsa_url.as_deref(),
+        )
     }
+}
+
+fn validate_configuration(
+    scheme: SigningScheme,
+    rekor: RekorApiVersion,
+    tsa: Option<&str>,
+) -> Result<()> {
+    if scheme != SigningScheme::EcdsaP256Sha256 {
+        return Err(Error::Config(format!(
+            "signing scheme {} is not supported",
+            scheme.name()
+        )));
+    }
+    if rekor == RekorApiVersion::V2 && tsa.is_none() {
+        return Err(Error::Config(
+            "Rekor v2 requires an RFC 3161 timestamp authority".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Context for signing operations
@@ -337,21 +342,8 @@ impl Signer {
     /// ```
     pub async fn sign<'a>(&self, artifact: impl Into<Artifact<'a>>) -> Result<Bundle> {
         self.validate_configuration()?;
-        let artifact = artifact.into();
-
-        // 1. Generate ephemeral key pair
-        let key_pair = self.generate_ephemeral_keypair()?;
-
-        // 2. Get signing certificate from Fulcio
-        let leaf_cert_der = self.request_certificate(&key_pair).await?;
-
-        // 3. + 4. Hash blobs cooperatively, or explicitly attest to the typed
-        // digest supplied by the caller, then sign in prehashed mode.
-        let (artifact_hash, signature) = match artifact {
-            Artifact::Blob(blob) => {
-                let hasher = sha256_yielding(blob).await;
-                key_pair.sign_prehashed(hasher)?
-            }
+        let artifact_hash = match artifact.into() {
+            Artifact::Blob(blob) => sha256_yielding(blob).await?,
             Artifact::Digest(digest) => {
                 if digest.algorithm() != HashAlgorithm::Sha2256 {
                     return Err(Error::Signing(format!(
@@ -359,14 +351,43 @@ impl Signer {
                         digest.algorithm()
                     )));
                 }
-                let hash = Sha256Hash::try_from_slice(digest.as_bytes())
-                    .map_err(|e| Error::Signing(e.to_string()))?;
-                let signature = key_pair.sign_digest(&hash)?;
-                (hash, signature)
+                Sha256Hash::try_from_slice(digest.as_bytes())
+                    .map_err(|e| Error::Signing(e.to_string()))?
             }
         };
+        self.sign_sha256(artifact_hash).await
+    }
 
-        // 5. Create Rekor entry (with certificate, not just public key)
+    /// Sign an artifact read synchronously to EOF in constant memory.
+    ///
+    /// Reads happen while this future is polled and may block its executor
+    /// thread. Async applications should prefer [`Signer::sign_async_reader`].
+    pub async fn sign_reader(&self, reader: impl std::io::Read) -> Result<Bundle> {
+        self.validate_configuration()?;
+        self.sign_sha256(sha256_yielding(reader).await?).await
+    }
+
+    /// Sign an artifact read asynchronously to EOF in constant memory.
+    pub async fn sign_async_reader(&self, reader: impl AsyncRead + Unpin) -> Result<Bundle> {
+        self.validate_configuration()?;
+        self.sign_sha256(sha256_async(reader).await?).await
+    }
+
+    /// Sign an already hashed artifact.
+    ///
+    /// Callers validate the configuration before hashing so a misconfigured
+    /// signer fails immediately rather than after streaming a large artifact.
+    async fn sign_sha256(&self, artifact_hash: Sha256Hash) -> Result<Bundle> {
+        // 1. Generate ephemeral key pair
+        let key_pair = self.generate_ephemeral_keypair()?;
+
+        // 2. Get signing certificate from Fulcio
+        let leaf_cert_der = self.request_certificate(&key_pair).await?;
+
+        // 3. Sign the already prepared digest.
+        let signature = key_pair.sign_digest(&artifact_hash)?;
+
+        // 4. Create Rekor entry (with certificate, not just public key)
         let tlog_entry = self
             .create_rekor_entry(&artifact_hash, &signature, &leaf_cert_der)
             .await?;
@@ -610,12 +631,11 @@ impl Signer {
     }
 
     fn validate_configuration(&self) -> Result<()> {
-        if self.rekor_api_version == RekorApiVersion::V2 && self.tsa_url.is_none() {
-            return Err(Error::Config(
-                "Rekor v2 requires an RFC 3161 timestamp authority".to_string(),
-            ));
-        }
-        Ok(())
+        validate_configuration(
+            self.signing_scheme,
+            self.rekor_api_version,
+            self.tsa_url.as_deref(),
+        )
     }
 
     fn rekor_v2_key_details(&self) -> Result<RekorV2KeyDetails> {
@@ -754,6 +774,30 @@ mod tests {
         config.validate().unwrap();
     }
 
+    #[tokio::test]
+    async fn unsupported_scheme_does_not_consume_reader() {
+        use base64::Engine;
+        let jwt = format!(
+            "header.{}.signature",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(br#"{"iss":"test","sub":"test","exp":9999999999}"#)
+        );
+        let config = SigningConfig {
+            signing_scheme: SigningScheme::Ed25519,
+            ..Default::default()
+        };
+        let signer =
+            SigningContext::with_config(config).signer(IdentityToken::from_jwt(&jwt).unwrap());
+        let mut reader = std::io::Cursor::new(b"do not read");
+        assert!(signer
+            .sign_reader(&mut reader)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("not supported"));
+        assert_eq!(reader.position(), 0);
+    }
+
     #[test]
     fn test_signing_context_creation() {
         let _context = SigningContext::new();
@@ -762,25 +806,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sha256_yielding_matches_one_shot() {
-        for size in [
-            0,
-            1,
-            HASH_YIELD_CHUNK_SIZE - 1,
-            HASH_YIELD_CHUNK_SIZE,
-            HASH_YIELD_CHUNK_SIZE + 1,
-            3 * HASH_YIELD_CHUNK_SIZE + 17,
-        ] {
-            let data: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
-            let chunked = sha256_yielding(&data).await.finalize();
-            assert_eq!(chunked, sigstore_crypto::sha256(&data), "size {size}");
-        }
-    }
-
-    #[tokio::test]
     async fn test_dsse_pae_yielding_matches_materialized_pae() {
         let payload_type = "application/vnd.in-toto+json";
-        for size in [0, 1, HASH_YIELD_CHUNK_SIZE, HASH_YIELD_CHUNK_SIZE + 1] {
+        // Straddle the 64 KiB chunk boundary used by the yielding hasher.
+        for size in [0, 1, 64 * 1024, 64 * 1024 + 1] {
             let data: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
             let (payload, hasher) = prepare_dsse_payload_yielding(payload_type, &data).await;
             assert_eq!(payload.as_bytes(), data);
