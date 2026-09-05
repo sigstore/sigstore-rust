@@ -22,7 +22,7 @@ members = [
 version = "0.11.0"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/prefix-dev/sigstore-rust"
+repository = "https://github.com/sigstore/sigstore-rust"
 rust-version = "1.86"
 
 [workspace.dependencies]

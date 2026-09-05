@@ -47,4 +47,4 @@ This crate is typically used indirectly through the higher-level APIs:
 
 ## License
 
-BSD-3-Clause
+Apache-2.0

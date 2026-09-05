@@ -110,4 +110,4 @@ let policy = VerificationPolicy::default()
 
 ## License
 
-BSD-3-Clause
+Apache-2.0
