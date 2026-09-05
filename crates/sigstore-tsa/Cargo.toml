@@ -26,8 +26,6 @@ rand = { workspace = true }
 # RFC 3161 timestamp verification
 cms = { workspace = true, default-features = false }
 x509-cert = { workspace = true }
-x509-tsp = { workspace = true, default-features = false }
-cmpv2 = { workspace = true, default-features = false }
 rustls-webpki = { workspace = true, default-features = false, features = [
   "alloc",
   "std",
@@ -40,5 +38,4 @@ hex = { workspace = true }
 [dev-dependencies]
 der = { workspace = true }
 hex = { workspace = true }
-tokio = { workspace = true }
 serde_json = { workspace = true }
