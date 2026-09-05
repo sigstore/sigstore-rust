@@ -15,8 +15,9 @@ use crate::token::IdentityToken;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use url::Url;
 
@@ -63,7 +64,7 @@ impl OAuthConfig {
 }
 
 /// Token response from the OAuth server
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TokenResponse {
     /// Access token
     pub access_token: String,
@@ -75,6 +76,15 @@ pub struct TokenResponse {
     /// ID token (this is what we want for Sigstore)
     #[serde(default)]
     pub id_token: Option<String>,
+}
+
+impl std::fmt::Debug for TokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenResponse")
+            .field("token_type", &self.token_type)
+            .field("expires_in", &self.expires_in)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The authentication mode being used
@@ -150,7 +160,7 @@ impl AuthCallback for DefaultAuthCallback {
         print!("Enter verification code: ");
         io::stdout().flush()?;
         let mut code = String::new();
-        io::stdin().lock().read_line(&mut code)?;
+        io::stdin().read_line(&mut code)?;
         Ok(code.trim().to_string())
     }
 
@@ -360,26 +370,41 @@ impl OAuthClient {
             .await
             .map_err(|e| Error::OAuth(format!("failed to accept connection: {}", e)))?;
 
-        // Convert to std TcpStream for synchronous reading
-        let std_stream = stream
-            .into_std()
-            .map_err(|e| Error::OAuth(format!("failed to convert stream: {}", e)))?;
-
-        std_stream
-            .set_nonblocking(false)
-            .map_err(|e| Error::OAuth(format!("failed to set blocking mode: {}", e)))?;
-
-        let mut reader = BufReader::new(&std_stream);
-        let mut request_line = String::new();
-        reader
-            .read_line(&mut request_line)
-            .map_err(|e| Error::OAuth(format!("failed to read request: {}", e)))?;
-
-        // Parse the request path
-        let path = request_line
-            .split_whitespace()
-            .nth(1)
-            .ok_or_else(|| Error::OAuth("invalid HTTP request".to_string()))?;
+        // Bound the whole header block, including an unterminated request line.
+        // All socket I/O remains async so the enclosing callback timeout works.
+        const MAX_HEADERS: usize = 8192;
+        let mut reader = BufReader::new(stream.take((MAX_HEADERS + 1) as u64));
+        let mut headers = Vec::new();
+        loop {
+            let n = reader
+                .read_until(b'\n', &mut headers)
+                .await
+                .map_err(|e| Error::OAuth(format!("failed to read request: {e}")))?;
+            if n == 0 || headers.len() > MAX_HEADERS {
+                return Err(Error::OAuth("incomplete or oversized HTTP headers".into()));
+            }
+            if headers.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+        let headers = std::str::from_utf8(&headers)
+            .map_err(|_| Error::OAuth("invalid HTTP headers".into()))?;
+        let mut request = headers
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .split_whitespace();
+        let method = request.next();
+        let path = request
+            .next()
+            .ok_or_else(|| Error::OAuth("invalid HTTP request".into()))?;
+        if method != Some("GET")
+            || !path.starts_with("/callback?")
+            || request.next() != Some("HTTP/1.1")
+            || request.next().is_some()
+        {
+            return Err(Error::OAuth("invalid callback request".into()));
+        }
 
         let url = Url::parse(&format!("http://localhost{}", path))
             .map_err(|e| Error::OAuth(format!("failed to parse callback URL: {}", e)))?;
@@ -400,15 +425,6 @@ impl OAuthClient {
             }
         }
 
-        // Drain request headers to avoid TCP RST
-        let mut header = String::new();
-        while let Ok(bytes_read) = reader.read_line(&mut header) {
-            if bytes_read == 0 || header == "\r\n" || header == "\n" {
-                break;
-            }
-            header.clear();
-        }
-
         // Send response to browser using templates
         let (status, html) = if let Some(ref err) = error {
             let error_msg = error_description.as_deref().unwrap_or(err);
@@ -424,14 +440,12 @@ impl OAuthClient {
             html
         );
 
-        // Use the raw stream for writing
-        let mut write_stream = std_stream;
-        write_stream
+        reader
+            .get_mut()
+            .get_mut()
             .write_all(response.as_bytes())
-            .map_err(|e| Error::OAuth(format!("failed to send response: {}", e)))?;
-        write_stream
-            .flush()
-            .map_err(|e| Error::OAuth(format!("failed to flush response: {}", e)))?;
+            .await
+            .map_err(|e| Error::OAuth(format!("failed to send response: {e}")))?;
 
         // Check for errors
         if let Some(err) = error {
@@ -469,6 +483,7 @@ impl OAuthClient {
         let response = self
             .client
             .post(&self.config.token_url)
+            .timeout(Duration::from_secs(30))
             .form(&params)
             .send()
             .await
@@ -476,17 +491,23 @@ impl OAuthClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::OAuth(format!(
-                "token exchange failed: {} - {}",
-                status, body
-            )));
+            return Err(Error::OAuth(format!("token exchange failed: {status}")));
         }
 
-        let token_response: TokenResponse = response
-            .json()
+        let mut response = response;
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
             .await
-            .map_err(|e| Error::OAuth(format!("failed to parse token response: {}", e)))?;
+            .map_err(|e| Error::Http(e.to_string()))?
+        {
+            if body.len() + chunk.len() > 1024 * 1024 {
+                return Err(Error::OAuth("token response exceeds 1 MiB".into()));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let token_response: TokenResponse = serde_json::from_slice(&body)
+            .map_err(|e| Error::OAuth(format!("failed to parse token response: {e}")))?;
 
         let id_token = token_response
             .id_token
@@ -546,6 +567,60 @@ pub async fn get_identity_token_with_options(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn callback_is_bounded_cancellable_and_checks_state() {
+        let client = OAuthClient::sigstore();
+        let callback = DefaultAuthCallback;
+        for (request, valid) in [
+            (
+                "GET /callback?code=ok&state=expected HTTP/1.1\r\nHost: localhost\r\n\r\n"
+                    .to_owned(),
+                true,
+            ),
+            (
+                "GET /callback?code=ok&state=wrong HTTP/1.1\r\n\r\n".to_owned(),
+                false,
+            ),
+            ("x".repeat(8193), false),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut socket = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+                .await
+                .unwrap();
+            socket.write_all(request.as_bytes()).await.unwrap();
+            let result = tokio::time::timeout(
+                Duration::from_secs(1),
+                client.wait_for_callback(&listener, "expected", &callback),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.is_ok(), valid);
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut socket = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        socket.write_all(b"GET /callback").await.unwrap();
+        assert!(tokio::time::timeout(
+            Duration::from_millis(20),
+            client.wait_for_callback(&listener, "expected", &callback)
+        )
+        .await
+        .is_err());
+    }
+
+    #[test]
+    fn token_response_debug_is_redacted() {
+        let token = TokenResponse {
+            access_token: "access-secret".into(),
+            token_type: "Bearer".into(),
+            expires_in: None,
+            id_token: Some("id-secret".into()),
+        };
+        let debug = format!("{token:?}");
+        assert!(!debug.contains("access-secret") && !debug.contains("id-secret"));
+    }
 
     #[test]
     fn test_oauth_config_sigstore() {
