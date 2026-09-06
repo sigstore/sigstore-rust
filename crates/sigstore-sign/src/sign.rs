@@ -15,7 +15,7 @@ use sigstore_rekor::{
     RekorV2KeyDetails,
 };
 use sigstore_trust_root::{
-    SigningConfig as TufSigningConfig, SIGSTORE_PRODUCTION_SIGNING_CONFIG,
+    ServiceSelector, SigningConfig as TufSigningConfig, SIGSTORE_PRODUCTION_SIGNING_CONFIG,
     SIGSTORE_STAGING_SIGNING_CONFIG,
 };
 use sigstore_tsa::TimestampClient;
@@ -159,7 +159,9 @@ impl SigningConfig {
     /// Create configuration from a TUF signing config
     ///
     /// This extracts the best available endpoints from the signing config,
-    /// preferring higher API versions when available.
+    /// preferring higher API versions when available. Requires an eligible Rekor
+    /// and TSA endpoint, and supports only ANY or EXACT with count 1; other counts
+    /// are rejected rather than silently reduced to a single service.
     ///
     /// # Arguments
     ///
@@ -178,6 +180,20 @@ impl SigningConfig {
         tuf_config: &TufSigningConfig,
         force_rekor_version: Option<u32>,
     ) -> Result<Self> {
+        // This signer submits to one Rekor and one TSA. Reject requirements it
+        // cannot satisfy before discarding the TUF service-selection metadata.
+        for (service, config) in [
+            ("Rekor", &tuf_config.rekor_tlog_config),
+            ("TSA", &tuf_config.tsa_config),
+        ] {
+            if matches!(config.selector, ServiceSelector::Exact) && config.count != Some(1) {
+                return Err(Error::Config(format!(
+                    "{service} EXACT selector requires count 1 for this signer; got {:?}",
+                    config.count
+                )));
+            }
+        }
+
         let fulcio_url = tuf_config
             .get_fulcio_url()
             .map(|e| e.url.clone())
@@ -195,7 +211,12 @@ impl SigningConfig {
                 return Err(Error::Config("Missing Rekor URL in TUF config".to_string()));
             };
 
-        let tsa_url = tuf_config.get_tsa_url().map(|e| e.url.clone());
+        let tsa_url = Some(
+            tuf_config
+                .get_tsa_url()
+                .map(|e| e.url.clone())
+                .ok_or_else(|| Error::Config("Missing eligible TSA URL in TUF config".into()))?,
+        );
         let oidc_url = tuf_config.get_oidc_url().map(|e| e.url.clone());
 
         Ok(Self {
@@ -755,6 +776,91 @@ mod tests {
         let config = SigningConfig::default();
         assert!(config.fulcio_url.contains("sigstore.dev"));
         assert!(config.rekor_url.contains("sigstore.dev"));
+    }
+
+    #[test]
+    fn tuf_service_requirements_are_not_silently_reduced() {
+        let baseline = TufSigningConfig::from_json(SIGSTORE_PRODUCTION_SIGNING_CONFIG).unwrap();
+        for tsa in [false, true] {
+            for count in [None, Some(0), Some(1), Some(2), Some(u32::MAX)] {
+                let mut tuf = baseline.clone();
+                // Even enough distinct operators cannot be represented by this signer.
+                let endpoints = if tsa {
+                    &mut tuf.tsa_urls
+                } else {
+                    &mut tuf.rekor_tlog_urls
+                };
+                let mut second = endpoints[0].clone();
+                second.url.push_str("/second");
+                second.operator = Some("second.example".into());
+                endpoints.push(second);
+                let requirement = if tsa {
+                    &mut tuf.tsa_config
+                } else {
+                    &mut tuf.rekor_tlog_config
+                };
+                requirement.selector = ServiceSelector::Exact;
+                requirement.count = count;
+                // Neither conversion entry point may discard the requirement.
+                for version in [None, Some(1)] {
+                    let result = SigningConfig::from_tuf_config_with_rekor_version(&tuf, version);
+                    assert_eq!(
+                        result.is_ok(),
+                        count == Some(1),
+                        "tsa={tsa}, count={count:?}"
+                    );
+                    if let Err(Error::Config(message)) = result {
+                        assert!(message.contains(if tsa { "TSA" } else { "Rekor" }));
+                    }
+                }
+                assert_eq!(
+                    SigningConfig::from_tuf_config(&tuf).is_ok(),
+                    count == Some(1)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tuf_requires_an_eligible_service_for_any_and_exact_one() {
+        let baseline = TufSigningConfig::from_json(SIGSTORE_PRODUCTION_SIGNING_CONFIG).unwrap();
+        for selector in [ServiceSelector::Any, ServiceSelector::Exact] {
+            for tsa in [false, true] {
+                for unavailable in ["missing", "expired", "future", "unsupported"] {
+                    let mut tuf = baseline.clone();
+                    let (requirement, endpoints) = if tsa {
+                        (&mut tuf.tsa_config, &mut tuf.tsa_urls)
+                    } else {
+                        (&mut tuf.rekor_tlog_config, &mut tuf.rekor_tlog_urls)
+                    };
+                    requirement.selector = selector.clone();
+                    requirement.count = Some(1);
+                    match unavailable {
+                        "missing" => endpoints.clear(),
+                        "expired" => {
+                            for endpoint in endpoints {
+                                endpoint.valid_for.start = "2020-01-01T00:00:00Z".parse().unwrap();
+                                endpoint.valid_for.end =
+                                    Some("2021-01-01T00:00:00Z".parse().unwrap());
+                            }
+                        }
+                        "future" => {
+                            for endpoint in endpoints {
+                                endpoint.valid_for.start = "2099-01-01T00:00:00Z".parse().unwrap();
+                            }
+                        }
+                        _ => {
+                            for endpoint in endpoints {
+                                endpoint.major_api_version = 99;
+                            }
+                        }
+                    }
+                    let error = SigningConfig::from_tuf_config(&tuf).unwrap_err();
+                    assert!(matches!(error, Error::Config(message)
+                        if message.contains(if tsa { "TSA" } else { "Rekor" })));
+                }
+            }
+        }
     }
 
     #[test]
