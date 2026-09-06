@@ -12,9 +12,11 @@ use x509_cert::Certificate;
 // OID constants for algorithm identification
 use const_oid::ObjectIdentifier;
 
-/// Fulcio issuer OID: 1.3.6.1.4.1.57264.1.1
-/// This extension contains the OIDC issuer URL
+/// Legacy Fulcio issuer extension (raw UTF-8).
 const FULCIO_ISSUER_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.57264.1.1");
+/// Current Fulcio issuer extension (DER UTF8String).
+const FULCIO_ISSUER_V2_OID: ObjectIdentifier =
+    ObjectIdentifier::new_unwrap("1.3.6.1.4.1.57264.1.8");
 
 /// Information extracted from a certificate
 #[derive(Debug, Clone)]
@@ -111,12 +113,25 @@ pub fn extract_san_identity(cert: &Certificate) -> Result<Option<String>> {
 
 /// Extract the OIDC issuer from Fulcio certificate extension
 ///
-/// Fulcio certificates contain the OIDC issuer URL in extension OID 1.3.6.1.4.1.57264.1.1
+/// Prefer the DER UTF8String in OID 1.3.6.1.4.1.57264.1.8. Fall back to the
+/// legacy OID 1.3.6.1.4.1.57264.1.1 only when the current extension is absent;
+/// a malformed current extension is an error, regardless of the legacy value.
 pub fn extract_fulcio_issuer(cert: &Certificate) -> Result<Option<String>> {
     let extensions = match &cert.tbs_certificate.extensions {
         Some(exts) => exts,
         None => return Ok(None),
     };
+
+    if let Some(ext) = extensions
+        .iter()
+        .find(|ext| ext.extn_id == FULCIO_ISSUER_V2_OID)
+    {
+        return der::asn1::Utf8StringRef::from_der(ext.extn_value.as_bytes())
+            .map(|issuer| Some(issuer.to_string()))
+            .map_err(|e| {
+                Error::InvalidCertificate(format!("malformed Fulcio issuer v2 extension: {e}"))
+            });
+    }
 
     for ext in extensions.iter() {
         if ext.extn_id == FULCIO_ISSUER_OID {

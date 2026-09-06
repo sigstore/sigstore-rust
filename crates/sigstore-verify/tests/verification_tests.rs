@@ -1058,6 +1058,63 @@ fn test_verify_conda_package_tampered() {
 const COSIGN_V3_BLOB_BUNDLE: &str =
     include_str!("../test_data/bundles/cosign-v3-blob.sigstore.json");
 
+/// Issuer extraction accepts the current DER-encoded extension, prefers it
+/// regardless of extension order, and never falls back from a malformed v2.
+/// These mutations exercise parsing only, not certificate authentication.
+#[test]
+fn test_fulcio_issuer_extension_versions() {
+    use sigstore_crypto::parse_certificate_info;
+    use x509_cert::der::{asn1::OctetString, Decode, Encode};
+    use x509_cert::Certificate;
+
+    let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
+    let mut cert = Certificate::from_der(bundle.signing_certificate().unwrap().as_bytes()).unwrap();
+    let extensions = cert.tbs_certificate.extensions.as_ref().unwrap();
+    let mut legacy = extensions
+        .iter()
+        .find(|ext| ext.extn_id.to_string() == "1.3.6.1.4.1.57264.1.1")
+        .unwrap()
+        .clone();
+    let current = extensions
+        .iter()
+        .find(|ext| ext.extn_id.to_string() == "1.3.6.1.4.1.57264.1.8")
+        .unwrap()
+        .clone();
+    legacy.extn_value = OctetString::new(b"https://legacy.example").unwrap();
+
+    for (extensions, expected) in [
+        (vec![legacy.clone()], Some("https://legacy.example")),
+        (
+            vec![current.clone()],
+            Some("https://github.com/login/oauth"),
+        ),
+        (
+            vec![legacy.clone(), current.clone()],
+            Some("https://github.com/login/oauth"),
+        ),
+        (
+            vec![current.clone(), legacy.clone()],
+            Some("https://github.com/login/oauth"),
+        ),
+        (vec![], None),
+    ] {
+        cert.tbs_certificate.extensions = Some(extensions);
+        let info = parse_certificate_info(&cert.to_der().unwrap()).unwrap();
+        assert_eq!(info.issuer.as_deref(), expected);
+    }
+
+    let mut malformed = current;
+    // Raw UTF-8 is accepted only for the legacy OID, not for v2.
+    malformed.extn_value = legacy.extn_value.clone();
+    cert.tbs_certificate.extensions = Some(vec![legacy, malformed]);
+    assert!(parse_certificate_info(&cert.to_der().unwrap()).is_err());
+    cert.tbs_certificate.extensions = None;
+    assert!(parse_certificate_info(&cert.to_der().unwrap())
+        .unwrap()
+        .issuer
+        .is_none());
+}
+
 /// Test that we can parse a bundle produced by cosign v3.x
 #[test]
 fn test_parse_cosign_v3_blob_bundle() {
