@@ -37,6 +37,7 @@ tracing = { workspace = true }
 hex = { workspace = true }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
 der = { workspace = true }
 hex = { workspace = true }
 serde_json = { workspace = true }
