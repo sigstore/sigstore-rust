@@ -246,8 +246,9 @@ pub fn validate_certificate_time(
 /// Verify the certificate chain to the Fulcio root of trust
 ///
 /// This function verifies that the signing certificate chains to a trusted
-/// Fulcio root certificate at the given verification time. It also verifies
-/// that the certificate has the CODE_SIGNING extended key usage.
+/// Fulcio root certificate whose authority's validity window covers the given
+/// authenticated signing time. It also verifies that the certificate has the
+/// CODE_SIGNING extended key usage.
 ///
 /// On success, returns the SubjectPublicKeyInfo of the leaf's direct issuer
 /// taken from the *verified* path. This is the canonical source for the issuer
@@ -282,19 +283,18 @@ pub fn verify_certificate_chain(
         }
     };
 
-    // Keep window selection dynamic: a long-lived verifier may cross the
-    // activation time of a future authority after construction.
-    let now = jiff::Timestamp::now();
+    // Only anchors authorized at this authenticated signing time may terminate
+    // the verified path. An unrelated authority cannot lend its validity window.
     let trust_anchors: Vec<_> = fulcio_anchors
         .iter()
-        .filter(|(_, window)| window.is_none_or(|range| range.has_started_by(now)))
+        .filter(|(_, window)| window.is_none_or(|range| range.contains(validation_time)))
         .map(|(anchor, _)| anchor.clone())
         .collect();
 
     if trust_anchors.is_empty() {
-        return Err(Error::Verification(
-            "failed to create trust anchors from Fulcio certificates".to_string(),
-        ));
+        return Err(Error::Verification(format!(
+            "no Fulcio trust anchor is valid at authenticated signing time {validation_time}"
+        )));
     }
 
     // Convert intermediate certificates to CertificateDer
