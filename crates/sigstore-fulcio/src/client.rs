@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use sigstore_crypto::KeyPair;
 use sigstore_oidc::IdentityToken;
 use sigstore_types::{DerCertificate, SignatureBytes};
+use std::time::Duration;
+
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(feature = "cache")]
 use sigstore_cache::{CacheAdapter, CacheKey};
@@ -23,14 +26,9 @@ pub struct FulcioClient {
 }
 
 impl FulcioClient {
-    /// Create a new Fulcio client
+    /// Create a new Fulcio client with a 30-second request timeout.
     pub fn new(url: impl Into<String>) -> Self {
-        Self {
-            url: url.into(),
-            client: reqwest::Client::new(),
-            #[cfg(feature = "cache")]
-            cache: None,
-        }
+        Self::builder(url).build()
     }
 
     /// Create a client for the public Sigstore Fulcio instance
@@ -248,6 +246,7 @@ impl FulcioClient {
 /// ```
 pub struct FulcioClientBuilder {
     url: String,
+    timeout: Duration,
     #[cfg(feature = "cache")]
     cache: Option<Arc<dyn CacheAdapter>>,
 }
@@ -257,9 +256,17 @@ impl FulcioClientBuilder {
     pub fn new(url: impl Into<String>) -> Self {
         Self {
             url: url.into(),
+            timeout: DEFAULT_TIMEOUT,
             #[cfg(feature = "cache")]
             cache: None,
         }
+    }
+
+    /// Set the total HTTP request timeout, including reading the response body.
+    /// Defaults to 30 seconds.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     /// Set the cache adapter
@@ -280,7 +287,10 @@ impl FulcioClientBuilder {
     pub fn build(self) -> FulcioClient {
         FulcioClient {
             url: self.url,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(self.timeout)
+                .build()
+                .expect("HTTP client configuration is valid"),
             #[cfg(feature = "cache")]
             cache: self.cache,
         }

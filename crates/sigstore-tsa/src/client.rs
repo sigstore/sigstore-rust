@@ -4,6 +4,9 @@ use crate::asn1::{AlgorithmIdentifier, Asn1MessageImprint, TimeStampReq};
 use crate::error::{Error, Result};
 use sigstore_types::SignatureBytes;
 use sigstore_types::TimestampToken;
+use std::time::Duration;
+
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A client for interacting with a Time-Stamp Authority
 pub struct TimestampClient {
@@ -14,11 +17,20 @@ pub struct TimestampClient {
 }
 
 impl TimestampClient {
-    /// Create a new TSA client
+    /// Create a new TSA client with a 30-second request timeout.
     pub fn new(url: impl Into<String>) -> Self {
+        Self::new_with_timeout(url, DEFAULT_TIMEOUT)
+    }
+
+    /// Create a TSA client with a custom total HTTP request timeout,
+    /// including reading the response body.
+    pub fn new_with_timeout(url: impl Into<String>, timeout: Duration) -> Self {
         Self {
             url: url.into(),
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(timeout)
+                .build()
+                .expect("HTTP client configuration is valid"),
         }
     }
 
