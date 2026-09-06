@@ -1169,6 +1169,67 @@ fn test_verify_cosign_v3_blob_bundle() {
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
 }
 
+#[test]
+fn fulcio_windows_cover_every_authenticated_time_without_borrowing_authorities() {
+    use sigstore_types::TimeRange;
+
+    let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
+    let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
+    let policy = VerificationPolicy::any_identity();
+    let baseline = verify(artifact, &bundle, &policy, &production_root()).unwrap();
+    let times = baseline.verified_timestamps();
+    assert_eq!(
+        times.len(),
+        2,
+        "fixture must authenticate both TSA and SET times"
+    );
+    let first = *times.iter().min().unwrap();
+    let last = *times.iter().max().unwrap();
+    assert!(
+        first < last,
+        "fixture must have distinct authenticated times"
+    );
+
+    for (window, accepted) in [
+        (None, true),
+        (Some(TimeRange::new(first, None)), true),
+        // Closed endpoints; a retired CA still verifies historical signatures.
+        (Some(TimeRange::new(first, Some(last))), true),
+        // Neither timestamp can mask a failure at the other timestamp.
+        (Some(TimeRange::new(first, Some(first))), false),
+        (Some(TimeRange::new(last, None)), false),
+        (
+            Some(TimeRange::new(
+                "2000-01-01T00:00:00Z".parse().unwrap(),
+                Some("2001-01-01T00:00:00Z".parse().unwrap()),
+            )),
+            false,
+        ),
+    ] {
+        for add_unrelated in [false, true] {
+            let mut root = production_root();
+            for ca in &mut root.certificate_authorities {
+                ca.valid_for = window;
+            }
+            if add_unrelated {
+                // These authorities cannot authenticate this production leaf.
+                // Their unrestricted windows must not rescue its issuing CA.
+                let mut unrelated = staging_root().certificate_authorities;
+                for ca in &mut unrelated {
+                    ca.valid_for = None;
+                }
+                root.certificate_authorities.extend(unrelated);
+            }
+            let result = verify(artifact, &bundle, &policy, &root);
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "window={window:?}, add_unrelated={add_unrelated}: {result:?}"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn invalid_certificate_does_not_consume_readers() {
     let mut bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
