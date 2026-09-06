@@ -723,6 +723,52 @@ mod tests {
     }
 
     #[test]
+    fn test_timestamp_response_status_string() {
+        use crate::asn1::PkiStatusInfo;
+        use der::{Decode, Encode};
+
+        let token = extract_timestamp_token(VALID_BUNDLE);
+        let signature = extract_signature(VALID_BUNDLE);
+        let authority = fixture_authority(None);
+        let expected_time = verify_timestamp_for_authority(&token, &signature, &authority).unwrap();
+        let mut response = TimeStampResp::from_der(&token).unwrap();
+
+        for (status_der, granted) in [
+            // Granted, no optional fields.
+            ("3003020100", true),
+            // Granted, statusString = ["OK"].
+            ("300902010030040c024f4b", true),
+            // GrantedWithMods, statusString = ["OK", "é"].
+            ("300d02010130080c024f4b0c02c3a9", true),
+            // Rejection, failure info without statusString.
+            ("300702010203020780", false),
+            // Rejection, statusString = ["NO"], followed by failure info.
+            ("300d02010230040c024e4f03020780", false),
+        ] {
+            let bytes = hex::decode(status_der).unwrap();
+            response.status = PkiStatusInfo::from_der(&bytes).unwrap();
+            assert_eq!(response.status.to_der().unwrap(), bytes);
+            let result =
+                verify_timestamp_for_authority(&response.to_der().unwrap(), &signature, &authority);
+            if granted {
+                assert_eq!(result.unwrap(), expected_time);
+            } else {
+                // Status text must not make a rejected response acceptable,
+                // even when it carries an otherwise valid signed token.
+                assert!(matches!(result, Err(Error::ParseError(message))
+                    if message.contains("not granted")));
+            }
+        }
+
+        for invalid in [
+            "300802010030030c01ff",   // Invalid UTF-8 in statusString.
+            "3009020100300416024f4b", // IA5String instead of UTF8String.
+        ] {
+            assert!(PkiStatusInfo::from_der(&hex::decode(invalid).unwrap()).is_err());
+        }
+    }
+
+    #[test]
     fn test_verify_timestamp_without_roots_fails() {
         // When no roots are provided, verification should fail
         let timestamp_token = extract_timestamp_token(VALID_BUNDLE);
