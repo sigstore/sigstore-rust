@@ -7,9 +7,7 @@
 
 use sigstore_oidc::IdentityToken;
 use sigstore_sign::{SigningConfig as SignerSigningConfig, SigningContext};
-use sigstore_trust_root::{
-    SigningConfig as TufSigningConfig, TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT,
-};
+use sigstore_trust_root::{SigningConfig as TufSigningConfig, SigstoreInstance, TrustedRoot};
 use sigstore_types::{Bundle, Sha256Hash};
 use sigstore_verify::{verify, PublicKeyVerificationPolicy, VerificationPolicy};
 
@@ -154,7 +152,7 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut certificate_oidc_issuer: Option<String> = None;
     let mut key_path: Option<String> = None;
     let mut artifact_or_digest: Option<String> = None;
-    let mut _staging = false;
+    let mut staging = false;
     let mut trusted_root_path: Option<String> = None;
 
     let mut i = 0;
@@ -189,7 +187,7 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 key_path = Some(args[i].clone());
             }
             "--staging" => {
-                _staging = true;
+                staging = true;
             }
             "--trusted-root" => {
                 i += 1;
@@ -222,13 +220,15 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Load trusted root - use provided path or default to production
+    // An explicit root takes precedence over the selected instance.
     let trusted_root = if let Some(root_path) = trusted_root_path {
         TrustedRoot::from_file(&root_path)?
     } else {
-        // Default to embedded production trusted root when not specified
-        // For better freshness, use TrustedRoot::production().await in async contexts
-        TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)?
+        TrustedRoot::from_embedded(if staging {
+            SigstoreInstance::Staging
+        } else {
+            SigstoreInstance::PublicGood
+        })?
     };
 
     // Load bundle
