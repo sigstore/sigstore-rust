@@ -96,14 +96,13 @@ impl InMemoryCache {
 impl CacheAdapter for InMemoryCache {
     fn get(&self, key: CacheKey) -> crate::CacheGetFuture<'_> {
         Box::pin(async move {
-            let entries = self.entries.read().await;
+            // Check expiration and remove the entry under the same lock.
+            let mut entries = self.entries.write().await;
 
             match entries.get(&key) {
                 Some(entry) if !entry.is_expired() => Ok(Some(entry.data.clone())),
                 Some(_) => {
                     // Entry exists but is expired - clean it up
-                    drop(entries);
-                    let mut entries = self.entries.write().await;
                     entries.remove(&key);
                     Ok(None)
                 }
@@ -117,7 +116,9 @@ impl CacheAdapter for InMemoryCache {
         Box::pin(async move {
             let entry = CacheEntry {
                 data: value,
-                expires_at: Instant::now() + ttl,
+                expires_at: Instant::now()
+                    .checked_add(ttl)
+                    .ok_or_else(|| crate::Error::Io("cache TTL exceeds supported range".into()))?,
             };
 
             let mut entries = self.entries.write().await;

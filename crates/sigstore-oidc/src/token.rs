@@ -6,12 +6,18 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 
 /// An OIDC identity token
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct IdentityToken {
     /// The raw JWT token
     raw: String,
     /// Parsed claims
     claims: TokenClaims,
+}
+
+impl std::fmt::Debug for IdentityToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IdentityToken").finish_non_exhaustive()
+    }
 }
 
 /// Standard OIDC claims we care about
@@ -73,7 +79,10 @@ pub struct FederatedClaims {
 }
 
 impl IdentityToken {
-    /// Parse a JWT token string
+    /// Parse claims from a JWT without authenticating its signature.
+    ///
+    /// These claims are untrusted; Fulcio authenticates the supplied token.
+    /// This method must not be used as an OIDC token verifier.
     pub fn from_jwt(token: &str) -> Result<Self> {
         // JWT format: header.payload.signature
         let parts: Vec<&str> = token.split('.').collect();
@@ -213,5 +222,6 @@ mod tests {
         assert_eq!(token.subject(), "user123");
         assert_eq!(token.email(), Some("test@example.com"));
         assert!(!token.is_expired());
+        assert!(!format!("{token:?}").contains(&jwt));
     }
 }
