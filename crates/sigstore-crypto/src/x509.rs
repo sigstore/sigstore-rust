@@ -10,8 +10,6 @@ use x509_cert::der::{Decode, Encode};
 use x509_cert::Certificate;
 
 // OID constants for algorithm identification
-use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, RSA_ENCRYPTION, SECP_256_R_1, SECP_384_R_1};
-use const_oid::db::rfc8410::ID_ED_25519;
 use const_oid::ObjectIdentifier;
 
 /// Fulcio issuer OID: 1.3.6.1.4.1.57264.1.1
@@ -58,7 +56,7 @@ pub fn parse_certificate_info(cert_der: &[u8]) -> Result<CertificateInfo> {
     let public_key = DerPublicKey::new(public_key_der);
 
     // Determine key algorithm from algorithm OID and parameters
-    let key_algorithm = determine_key_algorithm(public_key_info)?;
+    let key_algorithm = KeyAlgorithm::from_spki(&public_key)?;
 
     // Extract identity from SAN extension
     let identity = extract_san_identity(&cert)?;
@@ -74,48 +72,6 @@ pub fn parse_certificate_info(cert_der: &[u8]) -> Result<CertificateInfo> {
         public_key,
         key_algorithm,
     })
-}
-
-/// Determine the key algorithm from SubjectPublicKeyInfo
-fn determine_key_algorithm(
-    spki: &x509_cert::spki::SubjectPublicKeyInfoOwned,
-) -> Result<KeyAlgorithm> {
-    let alg_oid = spki.algorithm.oid;
-
-    if alg_oid == ID_EC_PUBLIC_KEY {
-        // EC key - need to check curve parameter
-        if let Some(params) = &spki.algorithm.parameters {
-            // params.value() returns the raw OID bytes (without tag/length)
-            // Use from_bytes which expects raw OID content bytes
-            let curve_oid = ObjectIdentifier::from_bytes(params.value()).map_err(|e| {
-                Error::InvalidCertificate(format!("failed to parse EC curve OID: {}", e))
-            })?;
-
-            if curve_oid == SECP_256_R_1 {
-                return Ok(KeyAlgorithm::EcdsaP256);
-            } else if curve_oid == SECP_384_R_1 {
-                return Ok(KeyAlgorithm::EcdsaP384);
-            } else {
-                return Err(Error::InvalidCertificate(format!(
-                    "unsupported EC curve OID: {}",
-                    curve_oid
-                )));
-            }
-        } else {
-            return Err(Error::InvalidCertificate(
-                "EC key missing curve parameters".to_string(),
-            ));
-        }
-    } else if alg_oid == RSA_ENCRYPTION {
-        return Ok(KeyAlgorithm::Rsa);
-    } else if alg_oid == ID_ED_25519 {
-        return Ok(KeyAlgorithm::Ed25519);
-    }
-
-    Err(Error::InvalidCertificate(format!(
-        "unsupported public key algorithm OID: {}",
-        alg_oid
-    )))
 }
 
 /// Extract identity from Subject Alternative Name (SAN) extension
