@@ -24,6 +24,7 @@
 //! # }
 //! ```
 
+mod artifact;
 pub mod error;
 mod verify;
 

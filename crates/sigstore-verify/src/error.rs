@@ -20,6 +20,10 @@ pub enum Error {
     /// Bundle error
     #[error("Bundle error: {0}")]
     Bundle(#[from] sigstore_bundle::Error),
+
+    /// Failed to read artifact input.
+    #[error("failed to read artifact: {0}")]
+    ArtifactRead(#[source] std::io::Error),
 }
 
 /// Result type for verification operations

@@ -44,10 +44,26 @@ let result = verify(artifact_bytes.as_slice(), &bundle, &policy, &root)?;
 let digest = Sha256Hash::from_hex("b94d27b9...")?;
 let result = verify(digest, &bundle, &policy, &root)?;
 
-// Using the Verifier struct directly
+// Or use a Verifier directly; it also offers the same inputs
 let verifier = Verifier::new(&root);
 let result = verifier.verify(artifact_bytes.as_slice(), &bundle, &policy)?;
+
+// Stream a large artifact in constant memory
+let file = std::fs::File::open("large-artifact.tar.gz")?;
+let result = verifier.verify_reader(file, &bundle, &policy)?;
+
+// Runtime-independent futures_io::AsyncRead is also supported
+let result = verifier.verify_async_reader(async_reader, &bundle, &policy).await?;
+
+// Managed-key bundles use the `verify_with_key*` family with the same
+// three input shapes: `verify_with_key`, `verify_with_key_reader`,
+// `verify_with_key_async_reader`.
 ```
+
+For Tokio readers, enable `tokio-util`'s `compat` feature and use
+`tokio_util::compat::TokioAsyncReadCompatExt::compat()` on the file or stream.
+Reader verification rejects message-signature schemes that require the original
+bytes (such as Ed25519) before consuming input; use the byte API for those schemes.
 
 For GitHub artifact attestations, choose GitHub's Sigstore instance explicitly
 and use the GitHub verification profile:
