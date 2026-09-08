@@ -10,7 +10,7 @@ rust-version.workspace = true
 [features]
 default = ["fetch", "rustls"]
 # Network transport (async HTTP) for fetching remote TUF metadata and targets.
-fetch = ["tokio", "reqwest", "url"]
+fetch = ["reqwest", "url"]
 # TLS backend selection (matches the rest of the workspace's crates).
 rustls = ["fetch", "reqwest/rustls"]
 native-tls = ["fetch", "reqwest/native-tls"]
@@ -47,7 +47,6 @@ tracing = { workspace = true }
 
 # Network transport (optional). The TLS backend is selected via this crate's
 # `rustls` / `native-tls` features, matching the rest of the workspace.
-tokio = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 

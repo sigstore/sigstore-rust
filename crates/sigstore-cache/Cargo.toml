@@ -16,7 +16,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 # Async
-tokio = { workspace = true, features = ["fs", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "sync", "time", "rt"] }
 
 # Directory utilities
 directories.workspace = true

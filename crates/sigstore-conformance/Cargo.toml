@@ -17,35 +17,19 @@ default = ["rustls"]
 rustls = [
   "sigstore-sign/rustls",
   "sigstore-verify/rustls",
-  "sigstore-fulcio/rustls",
   "sigstore-oidc/rustls",
-  "sigstore-rekor/rustls",
-  "sigstore-tsa/rustls",
-  "sigstore-bundle/rustls",
 ]
 native-tls = [
   "sigstore-sign/native-tls",
   "sigstore-verify/native-tls",
-  "sigstore-fulcio/native-tls",
   "sigstore-oidc/native-tls",
-  "sigstore-rekor/native-tls",
-  "sigstore-tsa/native-tls",
-  "sigstore-bundle/native-tls",
 ]
 
 [dependencies]
 sigstore-sign = { workspace = true }
 sigstore-verify = { workspace = true }
 sigstore-types = { workspace = true }
-sigstore-crypto = { workspace = true }
-sigstore-fulcio = { workspace = true }
 sigstore-oidc = { workspace = true }
-sigstore-rekor = { workspace = true }
-sigstore-tsa = { workspace = true }
 sigstore-trust-root = { workspace = true }
-sigstore-bundle = { workspace = true }
-tokio = { workspace = true }
-serde_json = { workspace = true }
-base64 = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 hex = { workspace = true }
-x509-cert = { workspace = true }
