@@ -118,10 +118,9 @@ impl Updater {
     /// a fresh `Updater` started against a populated cache treats the cached
     /// versions as the floor that the network must meet or exceed.
     ///
-    /// Best-effort — a cached file that is missing, stale, expired, or no longer
-    /// consistent with the trusted root is simply skipped; the subsequent
-    /// network refresh will replace it. (This mirrors how `python-tuf`'s
-    /// `ngclient` loads its local trusted metadata at startup.)
+    /// Invalid cache files are skipped, but authenticated expired timestamps
+    /// and snapshots still establish version floors. Freshness is required
+    /// separately before metadata can authorize a target.
     fn seed_lower_from_store(&mut self, now: jiff::Timestamp) {
         let Some((ts, snap, tgt)) = self.store.as_ref().map(|s| {
             (
@@ -133,10 +132,10 @@ impl Updater {
             return;
         };
         if let Some(bytes) = ts {
-            let _ = self.trusted.update_timestamp(&bytes, now);
+            let _ = self.trusted.load_cached_timestamp(&bytes);
         }
         if let Some(bytes) = snap {
-            let _ = self.trusted.update_snapshot(&bytes, now);
+            let _ = self.trusted.load_cached_snapshot(&bytes);
         }
         if let Some(bytes) = tgt {
             let _ = self.trusted.update_targets(&bytes, now);
@@ -307,6 +306,8 @@ impl Updater {
                 "refresh() must be called before resolving targets".to_string(),
             ));
         }
+
+        self.trusted.check_target_authorization(now)?;
 
         // Queue of (role_name, delegator_name) to visit, front = next.
         let mut to_visit: Vec<(String, String)> = vec![("targets".to_string(), "root".to_string())];
@@ -581,6 +582,7 @@ mod http {
             let client = reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(30))
                 .read_timeout(std::time::Duration::from_secs(60))
+                .timeout(std::time::Duration::from_secs(120))
                 .build()
                 .map_err(|e| Error::Transport(format!("failed to build HTTP client: {e}")))?;
             Ok(Self {

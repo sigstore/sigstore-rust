@@ -526,6 +526,83 @@ fn future_spec_version_is_rejected() {
 }
 
 #[tokio::test]
+async fn target_resolution_requires_fresh_metadata_even_after_failed_refresh() {
+    let (repo, root) = build_repo_with_timestamp_expiry("2026-06-02T00:00:00Z");
+    let mut updater = Updater::new(repo, &root).unwrap();
+    updater.refresh(now()).await.unwrap();
+    updater
+        .get_target("delegated/file.txt", now())
+        .await
+        .unwrap();
+    let later = "2026-06-03T00:00:00Z".parse().unwrap();
+    assert!(updater
+        .get_target("delegated/file.txt", later)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("expired"));
+    assert!(updater.refresh(later).await.is_err());
+    assert!(updater
+        .get_target("delegated/file.txt", later)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn expired_cached_timestamp_preserves_rollback_floor() {
+    let kp = KeyPair::generate_ecdsa_p256().unwrap();
+    let (kid, key) = key_entry(&kp);
+    let sign = |value: Value| envelope(value.clone(), vec![signature(&value, &kid, &kp)]);
+    let role = json!({"keyids":[kid.clone()],"threshold":1});
+    let root = sign(
+        json!({"_type":"root","spec_version":"1.0.0","version":1,"expires":FAR_FUTURE,
+        "keys":{kid.clone():key},"roles":{"root":role,"timestamp":role,"snapshot":role,"targets":role}}),
+    );
+    let targets = sign(
+        json!({"_type":"targets","spec_version":"1.0.0","version":1,"expires":FAR_FUTURE,"targets":{}}),
+    );
+    let snapshot = sign(
+        json!({"_type":"snapshot","spec_version":"1.0.0","version":1,"expires":FAR_FUTURE,"meta":{"targets.json":metafile(&targets,1)}}),
+    );
+    let timestamp = |version, expires| {
+        sign(
+            json!({"_type":"timestamp","spec_version":"1.0.0","version":version,"expires":expires,"meta":{"snapshot.json":metafile(&snapshot,1)}}),
+        )
+    };
+    let mut repo = MemRepo::default();
+    repo.metadata.insert(
+        "timestamp.json".into(),
+        timestamp(2, "2026-06-02T00:00:00Z"),
+    );
+    repo.metadata
+        .insert("snapshot.json".into(), snapshot.clone());
+    repo.metadata.insert("targets.json".into(), targets.clone());
+    let store = Arc::new(MemoryStore::new());
+    let mut updater = Updater::new(repo, &root).unwrap().with_store(store.clone());
+    updater.refresh(now()).await.unwrap();
+    let mut replay = MemRepo::default();
+    replay.metadata.insert(
+        "timestamp.json".into(),
+        timestamp(1, "2027-01-01T00:00:00Z"),
+    );
+    replay.metadata.insert("snapshot.json".into(), snapshot);
+    replay.metadata.insert("targets.json".into(), targets);
+    let mut restarted = Updater::new(replay, &root).unwrap().with_store(store);
+    let error = restarted
+        .refresh("2026-06-03T00:00:00Z".parse().unwrap())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        sigstore_tuf::Error::Rollback {
+            trusted: 2,
+            new: 1,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
 async fn expired_metadata_is_rejected() {
     let (repo, root_bytes) = build_repo();
     let mut updater = Updater::new(repo, &root_bytes).unwrap();
