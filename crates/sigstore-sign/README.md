@@ -87,4 +87,4 @@ For Tokio files/streams, enable `tokio-util`'s `compat` feature and call
 
 ## License
 
-BSD-3-Clause
+Apache-2.0

@@ -52,6 +52,7 @@ async fn main() {
     let mut token: Option<String> = None;
     let mut output: Option<String> = None;
     let mut instance: Option<String> = None;
+    let mut tuf_root_path: Option<String> = None;
     let mut staging = false;
     let mut use_v2 = false;
     let mut positional: Vec<String> = Vec::new();
@@ -83,6 +84,13 @@ async fn main() {
                 }
                 instance = Some(args[i].clone());
             }
+            "--tuf-root" => {
+                i += 1;
+                tuf_root_path = Some(args.get(i).cloned().unwrap_or_else(|| {
+                    eprintln!("Error: --tuf-root requires a file path");
+                    process::exit(2);
+                }));
+            }
             "--staging" => {
                 staging = true;
             }
@@ -111,6 +119,11 @@ async fn main() {
         process::exit(1);
     }
 
+    if (instance.is_some() && staging) || instance.is_some() != tuf_root_path.is_some() {
+        eprintln!("Error: select --staging or --instance with --tuf-root");
+        process::exit(2);
+    }
+
     let artifact_path = &positional[0];
     let output_path = output.unwrap_or_else(|| format!("{}.sigstore.json", artifact_path));
 
@@ -131,9 +144,13 @@ async fn main() {
     // Create signing context with appropriate API version
     let tuf_config = if let Some(ref url) = instance {
         println!("  Using: custom instance ({})", url);
+        let bootstrap = fs::read(tuf_root_path.as_ref().unwrap()).unwrap_or_else(|e| {
+            eprintln!("Error reading trusted TUF bootstrap: {e}");
+            process::exit(2);
+        });
         let config = sigstore_trust_root::tuf::TufConfig::custom(
             url,
-            sigstore_trust_root::tuf::TufBootstrap::UnsafeCachedRoot,
+            sigstore_trust_root::tuf::TufBootstrap::trusted(bootstrap),
         );
         sigstore_trust_root::SigningConfig::from_tuf(config)
             .await
@@ -251,7 +268,11 @@ async fn main() {
     }
 
     let extra_flags = if let Some(ref url) = instance {
-        format!("--instance {} ", url)
+        format!(
+            "--instance {} --tuf-root {} ",
+            url,
+            tuf_root_path.as_ref().unwrap()
+        )
     } else if staging {
         "--staging ".to_string()
     } else {
@@ -304,7 +325,9 @@ fn print_usage(program: &str) {
     eprintln!("Options:");
     eprintln!("  -o, --output <FILE>  Output bundle path (default: <artifact>.sigstore.json)");
     eprintln!("  -t, --token <TOKEN>  OIDC identity token (skips interactive auth)");
-    eprintln!("      --instance <URL> Use a custom Sigstore instance");
+    eprintln!(
+        "      --instance <URL> --tuf-root <FILE>  Custom instance with trusted TUF bootstrap"
+    );
     eprintln!("      --staging        Use Sigstore staging infrastructure");
     eprintln!("      --v2             Use Rekor V2 API (uses log2025-1.rekor.sigstore.dev)");
     eprintln!("  -h, --help           Print this help message");
