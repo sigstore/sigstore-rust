@@ -29,7 +29,6 @@ sigstore-trust-root = { workspace = true, features = ["tuf"] }
 [features]
 default = ["rustls", "browser"]
 rustls = [
-  "sigstore-bundle/rustls",
   "sigstore-rekor/rustls",
   "sigstore-fulcio/rustls",
   "sigstore-oidc/rustls",
@@ -37,7 +36,6 @@ rustls = [
   "sigstore-trust-root/rustls",
 ]
 native-tls = [
-  "sigstore-bundle/native-tls",
   "sigstore-rekor/native-tls",
   "sigstore-fulcio/native-tls",
   "sigstore-oidc/native-tls",

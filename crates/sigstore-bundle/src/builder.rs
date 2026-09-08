@@ -1,6 +1,5 @@
 //! Bundle builder for creating Sigstore bundles
 
-use sigstore_rekor::entry::LogEntry;
 use sigstore_types::{
     bundle::{
         CertificateContent, CheckpointData, InclusionPromise, InclusionProof, KindVersion, LogId,
@@ -161,50 +160,6 @@ impl TlogEntryBuilder {
         }
     }
 
-    /// Create a tlog entry builder from a Rekor LogEntry response.
-    ///
-    /// This method extracts all relevant fields from a Rekor API response
-    /// and populates the builder automatically.
-    ///
-    /// # Arguments
-    /// * `entry` - The LogEntry returned from the Rekor API
-    /// * `kind_version` - The typed Rekor entry format
-    pub fn from_log_entry(entry: &LogEntry, kind_version: KindVersion) -> TypesResult<Self> {
-        // Convert hex log_id to base64 using the type-safe method
-        let log_id_base64 = entry.log_id.to_base64()?;
-
-        let mut builder = Self {
-            log_index: LogIndex::new(entry.log_index)?,
-            log_id: log_id_base64,
-            kind_version,
-            integrated_time: entry.integrated_time,
-            canonicalized_body: entry.body.as_bytes().to_vec(),
-            inclusion_promise: None,
-            inclusion_proof: None,
-        };
-
-        // Add verification data if present
-        if let Some(verification) = &entry.verification {
-            if let Some(set) = &verification.signed_entry_timestamp {
-                builder.inclusion_promise = Some(InclusionPromise {
-                    signed_entry_timestamp: set.clone(),
-                });
-            }
-
-            if let Some(proof) = &verification.inclusion_proof {
-                builder.inclusion_proof = Some(InclusionProof {
-                    log_index: LogIndex::new(proof.log_index)?,
-                    root_hash: proof.root_hash,
-                    tree_size: proof.tree_size,
-                    hashes: proof.hashes.clone(),
-                    checkpoint: CheckpointData::new(proof.checkpoint.clone())?,
-                });
-            }
-        }
-
-        Ok(builder)
-    }
-
     /// Set the log index.
     pub fn log_index(mut self, index: LogIndex) -> Self {
         self.log_index = index;
@@ -264,16 +219,5 @@ impl TlogEntryBuilder {
             inclusion_proof: self.inclusion_proof,
             canonicalized_body: CanonicalizedBody::new(self.canonicalized_body),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rekor_index_overflow_returns_an_error() {
-        let entry: LogEntry = serde_json::from_str(r#"{"body":"e30=","integratedTime":0,"logID":"0000000000000000000000000000000000000000000000000000000000000000","logIndex":18446744073709551615}"#).unwrap();
-        assert!(TlogEntryBuilder::from_log_entry(&entry, KindVersion::HashedRekordV001).is_err());
     }
 }

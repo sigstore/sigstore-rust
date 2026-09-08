@@ -66,6 +66,52 @@ pub struct LogEntry {
     pub verification: Option<Verification>,
 }
 
+impl LogEntry {
+    /// Convert a Rekor response into bundle verification material.
+    ///
+    /// Checks protobuf index bounds and checkpoint encoding. This is format
+    /// conversion, not cryptographic verification of the log entry.
+    pub fn to_bundle_entry(
+        &self,
+        kind_version: sigstore_types::KindVersion,
+    ) -> sigstore_types::Result<sigstore_types::TransparencyLogEntry> {
+        use sigstore_types::{
+            bundle::CheckpointData, InclusionPromise, InclusionProof, LogId, LogIndex, LogKeyId,
+            TransparencyLogEntry,
+        };
+        let mut entry = TransparencyLogEntry {
+            log_index: LogIndex::new(self.log_index)?,
+            log_id: LogId {
+                key_id: LogKeyId::new(self.log_id.to_base64()?),
+            },
+            kind_version,
+            integrated_time: self.integrated_time,
+            canonicalized_body: self.body.clone(),
+            inclusion_promise: None,
+            inclusion_proof: None,
+        };
+        if let Some(verification) = &self.verification {
+            entry.inclusion_promise =
+                verification
+                    .signed_entry_timestamp
+                    .as_ref()
+                    .map(|set| InclusionPromise {
+                        signed_entry_timestamp: set.clone(),
+                    });
+            if let Some(proof) = &verification.inclusion_proof {
+                entry.inclusion_proof = Some(InclusionProof {
+                    log_index: LogIndex::new(proof.log_index)?,
+                    root_hash: proof.root_hash,
+                    tree_size: proof.tree_size,
+                    hashes: proof.hashes.clone(),
+                    checkpoint: CheckpointData::new(proof.checkpoint.clone())?,
+                });
+            }
+        }
+        Ok(entry)
+    }
+}
+
 /// Verification data for a log entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -484,6 +530,34 @@ impl HashedRekordV2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checked_bundle_conversion_preserves_fields() {
+        let mut entry: LogEntry = serde_json::from_str(r#"{"body":"e30=","integratedTime":0,"logID":"0000000000000000000000000000000000000000000000000000000000000000","logIndex":18446744073709551615}"#).unwrap();
+        assert!(entry
+            .to_bundle_entry(sigstore_types::KindVersion::HashedRekordV001)
+            .is_err());
+        entry.log_index = 123;
+        let converted = entry
+            .to_bundle_entry(sigstore_types::KindVersion::HashedRekordV001)
+            .unwrap();
+        assert_eq!(converted.log_index.value(), 123);
+        assert_eq!(converted.canonicalized_body, entry.body);
+        assert_eq!(converted.integrated_time, entry.integrated_time);
+        entry.verification = Some(Verification {
+            signed_entry_timestamp: None,
+            inclusion_proof: Some(RekorInclusionProof {
+                log_index: u64::MAX,
+                checkpoint: String::new(),
+                hashes: vec![],
+                root_hash: Sha256Hash::from_bytes([0; 32]),
+                tree_size: 1,
+            }),
+        });
+        assert!(entry
+            .to_bundle_entry(sigstore_types::KindVersion::HashedRekordV001)
+            .is_err());
+    }
 
     #[test]
     fn test_hashed_rekord_creation() {
