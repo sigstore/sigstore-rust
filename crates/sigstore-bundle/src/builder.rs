@@ -133,7 +133,7 @@ impl BundleV03 {
 
 /// Helper to create a transparency log entry.
 pub struct TlogEntryBuilder {
-    log_index: u64,
+    log_index: LogIndex,
     log_id: String,
     kind_version: KindVersion,
     integrated_time: Option<jiff::Timestamp>,
@@ -143,14 +143,19 @@ pub struct TlogEntryBuilder {
 }
 
 impl TlogEntryBuilder {
-    /// Create a new tlog entry builder.
-    pub fn new() -> Self {
+    /// Create a builder with the required entry fields.
+    pub fn new(
+        log_index: LogIndex,
+        log_id: LogKeyId,
+        kind_version: KindVersion,
+        body: CanonicalizedBody,
+    ) -> Self {
         Self {
-            log_index: 0,
-            log_id: String::new(),
-            kind_version: KindVersion::HashedRekordV001,
+            log_index,
+            log_id: log_id.as_str().to_owned(),
+            kind_version,
             integrated_time: None,
-            canonicalized_body: Vec::new(),
+            canonicalized_body: body.as_bytes().to_vec(),
             inclusion_promise: None,
             inclusion_proof: None,
         }
@@ -166,13 +171,10 @@ impl TlogEntryBuilder {
     /// * `kind_version` - The typed Rekor entry format
     pub fn from_log_entry(entry: &LogEntry, kind_version: KindVersion) -> TypesResult<Self> {
         // Convert hex log_id to base64 using the type-safe method
-        let log_id_base64 = entry
-            .log_id
-            .to_base64()
-            .unwrap_or_else(|_| entry.log_id.to_string());
+        let log_id_base64 = entry.log_id.to_base64()?;
 
         let mut builder = Self {
-            log_index: entry.log_index,
+            log_index: LogIndex::new(entry.log_index)?,
             log_id: log_id_base64,
             kind_version,
             integrated_time: entry.integrated_time,
@@ -191,7 +193,7 @@ impl TlogEntryBuilder {
 
             if let Some(proof) = &verification.inclusion_proof {
                 builder.inclusion_proof = Some(InclusionProof {
-                    log_index: LogIndex::new(proof.log_index),
+                    log_index: LogIndex::new(proof.log_index)?,
                     root_hash: proof.root_hash,
                     tree_size: proof.tree_size,
                     hashes: proof.hashes.clone(),
@@ -204,7 +206,7 @@ impl TlogEntryBuilder {
     }
 
     /// Set the log index.
-    pub fn log_index(mut self, index: u64) -> Self {
+    pub fn log_index(mut self, index: LogIndex) -> Self {
         self.log_index = index;
         self
     }
@@ -240,7 +242,7 @@ impl TlogEntryBuilder {
         checkpoint: String,
     ) -> TypesResult<Self> {
         self.inclusion_proof = Some(InclusionProof {
-            log_index: LogIndex::new(log_index),
+            log_index: LogIndex::new(log_index)?,
             root_hash,
             tree_size,
             hashes,
@@ -252,7 +254,7 @@ impl TlogEntryBuilder {
     /// Build the transparency log entry.
     pub fn build(self) -> TransparencyLogEntry {
         TransparencyLogEntry {
-            log_index: LogIndex::new(self.log_index),
+            log_index: self.log_index,
             log_id: LogId {
                 key_id: LogKeyId::new(self.log_id),
             },
@@ -265,8 +267,13 @@ impl TlogEntryBuilder {
     }
 }
 
-impl Default for TlogEntryBuilder {
-    fn default() -> Self {
-        Self::new()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rekor_index_overflow_returns_an_error() {
+        let entry: LogEntry = serde_json::from_str(r#"{"body":"e30=","integratedTime":0,"logID":"0000000000000000000000000000000000000000000000000000000000000000","logIndex":18446744073709551615}"#).unwrap();
+        assert!(TlogEntryBuilder::from_log_entry(&entry, KindVersion::HashedRekordV001).is_err());
     }
 }

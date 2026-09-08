@@ -13,6 +13,27 @@ use crate::error::{Error, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
+// ProtoJSON bytes permit standard/URL-safe alphabets, with or without padding.
+fn decode_protojson_base64(value: &str) -> std::result::Result<Vec<u8>, base64::DecodeError> {
+    use base64::{
+        alphabet,
+        engine::{
+            general_purpose::{GeneralPurpose, GeneralPurposeConfig},
+            DecodePaddingMode,
+        },
+    };
+    let alphabet = if value.contains(['-', '_']) {
+        &alphabet::URL_SAFE
+    } else {
+        &alphabet::STANDARD
+    };
+    GeneralPurpose::new(
+        alphabet,
+        GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
+    )
+    .decode(value)
+}
+
 // ============================================================================
 // Serde helper modules (for use with raw Vec<u8> when needed)
 // ============================================================================
@@ -36,7 +57,7 @@ pub mod base64_bytes {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        STANDARD.decode(s).map_err(serde::de::Error::custom)
+        super::decode_protojson_base64(&s).map_err(serde::de::Error::custom)
     }
 }
 
@@ -61,8 +82,7 @@ pub mod base64_bytes_option {
     {
         let opt: Option<String> = Option::deserialize(deserializer)?;
         match opt {
-            Some(s) => STANDARD
-                .decode(s)
+            Some(s) => super::decode_protojson_base64(&s)
                 .map(Some)
                 .map_err(serde::de::Error::custom),
             None => Ok(None),
@@ -176,8 +196,7 @@ macro_rules! base64_newtype {
 
             /// Create from base64-encoded string
             pub fn from_base64(s: &str) -> Result<Self> {
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(s)
+                let bytes = decode_protojson_base64(s)
                     .map_err(|e| Error::InvalidEncoding(format!("invalid base64: {}", e)))?;
                 Ok(Self(bytes))
             }
@@ -452,9 +471,11 @@ impl std::fmt::Display for EntryUuid {
 pub struct LogIndex(u64);
 
 impl LogIndex {
-    pub fn new(index: u64) -> Self {
-        assert!(index <= i64::MAX as u64, "log index exceeds protobuf int64");
-        Self(index)
+    pub fn new(index: u64) -> Result<Self> {
+        if index > i64::MAX as u64 {
+            return Err(Error::Validation("log index exceeds protobuf int64".into()));
+        }
+        Ok(Self(index))
     }
 
     pub fn value(self) -> u64 {
@@ -466,8 +487,9 @@ impl LogIndex {
     }
 }
 
-impl From<u64> for LogIndex {
-    fn from(index: u64) -> Self {
+impl TryFrom<u64> for LogIndex {
+    type Error = Error;
+    fn try_from(index: u64) -> Result<Self> {
         Self::new(index)
     }
 }
@@ -510,19 +532,14 @@ impl<'de> Deserialize<'de> for LogIndex {
             {
                 let value = u64::try_from(value)
                     .map_err(|_| de::Error::custom(format!("negative log index: {value}")))?;
-                Ok(LogIndex::new(value))
+                LogIndex::new(value).map_err(de::Error::custom)
             }
 
             fn visit_u64<E>(self, value: u64) -> std::result::Result<LogIndex, E>
             where
                 E: de::Error,
             {
-                if value > i64::MAX as u64 {
-                    return Err(de::Error::custom(format!(
-                        "log index exceeds protobuf int64: {value}"
-                    )));
-                }
-                Ok(LogIndex::new(value))
+                LogIndex::new(value).map_err(de::Error::custom)
             }
 
             fn visit_str<E>(self, value: &str) -> std::result::Result<LogIndex, E>
@@ -755,8 +772,7 @@ impl Sha256Hash {
     }
 
     pub fn from_base64(s: &str) -> Result<Self> {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(s)
+        let bytes = decode_protojson_base64(s)
             .map_err(|e| Error::InvalidEncoding(format!("invalid base64: {}", e)))?;
         Self::try_from_slice(&bytes)
     }
@@ -879,6 +895,13 @@ impl DigestBytes {
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
+
+    /// Decode an explicitly hex-encoded digest (wire JSON uses base64 instead).
+    pub fn from_hex(value: &str) -> Result<Self> {
+        hex::decode(value)
+            .map(Self)
+            .map_err(|e| Error::InvalidEncoding(e.to_string()))
+    }
 }
 
 impl AsRef<[u8]> for DigestBytes {
@@ -920,13 +943,7 @@ impl<'de> serde::Deserialize<'de> for DigestBytes {
         D: serde::Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        if s.len() % 2 == 0 && s.chars().all(|c| c.is_ascii_hexdigit()) {
-            let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
-            return Ok(DigestBytes(bytes));
-        }
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(&s)
-            .map_err(serde::de::Error::custom)?;
+        let bytes = decode_protojson_base64(&s).map_err(serde::de::Error::custom)?;
         Ok(DigestBytes(bytes))
     }
 }
@@ -1144,6 +1161,29 @@ impl std::fmt::Display for HexHash {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checked_index_and_digest_wire_roundtrips() {
+        assert!(LogIndex::new(u64::MAX).is_err());
+        assert!(serde_json::from_str::<LogIndex>(&u64::MAX.to_string()).is_err());
+        for bytes in [vec![0; 48], vec![0xff; 32], vec![0xfb; 64]] {
+            let digest = DigestBytes::from_bytes(bytes.clone());
+            assert_eq!(
+                serde_json::from_str::<DigestBytes>(&serde_json::to_string(&digest).unwrap())
+                    .unwrap(),
+                digest
+            );
+            for engine in [
+                base64::engine::general_purpose::STANDARD,
+                base64::engine::general_purpose::STANDARD_NO_PAD,
+                base64::engine::general_purpose::URL_SAFE,
+                base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            ] {
+                let json = serde_json::to_string(&engine.encode(&bytes)).unwrap();
+                assert_eq!(serde_json::from_str::<DigestBytes>(&json).unwrap(), digest);
+            }
+        }
+    }
 
     #[test]
     fn test_der_certificate_roundtrip() {

@@ -420,7 +420,7 @@ fn test_structural_validation_rejects_out_of_range_log_index() {
         .inclusion_proof
         .as_mut()
         .expect("bundle has inclusion proof");
-    proof.log_index = sigstore_types::LogIndex::new(proof.tree_size);
+    proof.log_index = sigstore_types::LogIndex::new(proof.tree_size).unwrap();
 
     let result = validate_bundle(&bundle);
     assert!(
