@@ -56,9 +56,10 @@ let verifier = Verifier::new(&root);
 let bundle: sigstore_types::Bundle = serde_json::from_str(&bundle_json)?;
 
 // Authorize the expected signer, not just any valid Sigstore identity.
-let policy = VerificationPolicy::default()
-    .require_issuer("https://token.actions.githubusercontent.com")
-    .require_identity("https://github.com/myorg/myrepo/.github/workflows/release.yml@refs/tags/v1.0.0");
+let policy = VerificationPolicy::new(
+    "https://github.com/myorg/myrepo/.github/workflows/release.yml@refs/tags/v1.0.0",
+    "https://token.actions.githubusercontent.com",
+);
 verifier.verify(artifact_bytes, &bundle, &policy)?;
 ```
 
@@ -88,7 +89,7 @@ let bundle_json = serde_json::to_string_pretty(&bundle)?;
 cargo run -p sigstore-sign --features browser --example sign_blob -- README.md -o README.md.sigstore.json
 
 # Verify with our tool
-cargo run -p sigstore-verify --example verify_bundle -- README.md README.md.sigstore.json
+cargo run -p sigstore-verify --example verify_bundle -- --identity "$INSERT_YOUR_EMAIL" --issuer https://github.com/login/oauth README.md README.md.sigstore.json
 
 # You can also verify with cosign
 cosign verify-blob --bundle README.md.sigstore.json \
@@ -108,7 +109,7 @@ curl -LO https://github.com/sigstore/cosign/releases/download/v3.0.2/cosign_chec
 
 # 2. Verify the bundle (cryptographic verification without identity policy)
 cargo run -p sigstore-verify --example verify_bundle -- \
-    cosign_checksums.txt cosign_checksums.txt.sigstore.json
+    --allow-any-identity cosign_checksums.txt cosign_checksums.txt.sigstore.json
 
 # 3. Or verify with identity policy (this release was signed with Google's keyless signer)
 cargo run -p sigstore-verify --example verify_bundle -- \

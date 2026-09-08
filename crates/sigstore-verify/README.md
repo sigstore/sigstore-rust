@@ -23,6 +23,13 @@ This crate provides high-level APIs for verifying Sigstore signatures. It handle
 5. Verify timestamps if present
 6. Check identity against policy (optional)
 
+## Authorization
+
+`VerificationPolicy` has no default. Prefer `VerificationPolicy::new(identity, issuer)`
+to authorize the expected signer. `any_identity()` is an explicit opt-in to
+cryptographic verification without signer authorization. The example CLI likewise
+requires an identity/issuer restriction or `--allow-any-identity`.
+
 ## Usage
 
 ```rust
@@ -31,7 +38,7 @@ use sigstore_trust_root::{TrustedRoot, TufConfig};
 use sigstore_types::{Artifact, Bundle, Sha256Hash};
 
 let bundle: Bundle = serde_json::from_str(bundle_json)?;
-let policy = VerificationPolicy::default();
+let policy = VerificationPolicy::any_identity();
 
 // Actively choose the Sigstore instance and fetch its root through TUF.
 let root = TrustedRoot::from_tuf(TufConfig::production()).await?;
@@ -80,7 +87,7 @@ let artifact_digest = Sha256Hash::from_hex("...")?;
 // client), or use the embedded copy below for an offline path.
 // let root = TrustedRoot::from_tuf(sigstore_trust_root::TufConfig::github()).await?;
 let root = TrustedRoot::from_embedded(SigstoreInstance::GitHub)?;
-let policy = VerificationPolicy::default().skip_tlog_unsafe().skip_sct();
+let policy = VerificationPolicy::any_identity().skip_tlog_unsafe().skip_sct();
 
 let result = verify(artifact_digest, &bundle, &policy, &root)?;
 ```
@@ -91,15 +98,15 @@ let result = verify(artifact_digest, &bundle, &policy, &root)?;
 use sigstore_verify::VerificationPolicy;
 
 // Default policy (verify tlog, timestamps, and certificate chain)
-let policy = VerificationPolicy::default();
+let policy = VerificationPolicy::any_identity();
 
 // Require specific identity and issuer
-let policy = VerificationPolicy::default()
+let policy = VerificationPolicy::any_identity()
     .require_identity("user@example.com")
     .require_issuer("https://accounts.google.com");
 
 // Skip certain verifications (for testing only)
-let policy = VerificationPolicy::default()
+let policy = VerificationPolicy::any_identity()
     .skip_tlog_unsafe()
     .skip_certificate_chain();
 ```

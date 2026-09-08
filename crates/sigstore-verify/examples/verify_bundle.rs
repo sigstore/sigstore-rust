@@ -8,7 +8,7 @@
 //!
 //! Verify a local bundle:
 //! ```sh
-//! cargo run -p sigstore-verify --example verify_bundle -- artifact.txt artifact.sigstore.json
+//! cargo run -p sigstore-verify --example verify_bundle -- --allow-any-identity artifact.txt artifact.sigstore.json
 //! ```
 //!
 //! Verify with identity requirements:
@@ -67,6 +67,7 @@ async fn main() {
     let mut trusted_root_path: Option<String> = None;
     let mut tuf_root_path: Option<String> = None;
     let mut staging = false;
+    let mut allow_any_identity = false;
     let mut positional: Vec<String> = Vec::new();
 
     let mut i = 1;
@@ -117,6 +118,7 @@ async fn main() {
                     tuf_root_path = Some(value);
                 }
             }
+            "--allow-any-identity" => allow_any_identity = true,
             "--staging" => {
                 staging = true;
             }
@@ -150,6 +152,13 @@ async fn main() {
     {
         eprintln!(
             "Error: select only one of --trusted-root, --staging, or --instance with --tuf-root"
+        );
+        process::exit(2);
+    }
+
+    if identity.is_none() && identity_regexp.is_none() && issuer.is_none() && !allow_any_identity {
+        eprintln!(
+            "Error: specify an identity/issuer requirement or explicitly pass --allow-any-identity"
         );
         process::exit(2);
     }
@@ -225,7 +234,7 @@ async fn main() {
     };
 
     // Build verification policy
-    let mut policy = VerificationPolicy::default();
+    let mut policy = VerificationPolicy::any_identity();
     if let Some(id) = &identity {
         policy = policy.require_identity(id);
     }
@@ -391,6 +400,9 @@ fn print_usage(program: &str) {
     eprintln!("  <BUNDLE>           Path to the Sigstore bundle (.sigstore.json)");
     eprintln!();
     eprintln!("Options:");
+    eprintln!(
+        "  --allow-any-identity               Verify cryptography without authorizing a signer"
+    );
     eprintln!("  --certificate-identity <ID>        Required certificate identity (exact match)");
     eprintln!("  --certificate-identity-regexp <RE> Required certificate identity (regex)");
     eprintln!("  --certificate-oidc-issuer <ISSUER> Required OIDC issuer");
@@ -405,7 +417,10 @@ fn print_usage(program: &str) {
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  # Verify a bundle");
-    eprintln!("  {} artifact.txt artifact.sigstore.json", program);
+    eprintln!(
+        "  {} --allow-any-identity artifact.txt artifact.sigstore.json",
+        program
+    );
     eprintln!();
     eprintln!("  # Verify with identity regex (cosign-compatible)");
     eprintln!("  {} --certificate-identity-regexp \".*\" \\", program);

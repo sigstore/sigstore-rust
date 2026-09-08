@@ -58,6 +58,15 @@ impl PublicKeyVerificationPolicy {
 }
 
 /// Policy for verifying certificate-based signatures.
+///
+/// Choose [`Self::new`] to authorize an identity and issuer, or explicitly opt
+/// into [`Self::any_identity`] for cryptographic verification without signer
+/// authorization. There is deliberately no `Default` policy.
+///
+/// ```compile_fail
+/// use sigstore_verify::VerificationPolicy;
+/// let _: VerificationPolicy = Default::default();
+/// ```
 #[derive(Debug, Clone)]
 pub struct VerificationPolicy {
     /// Expected identity (email or URI)
@@ -78,8 +87,19 @@ pub struct VerificationPolicy {
     pub certificate: CertificatePolicy,
 }
 
-impl Default for VerificationPolicy {
-    fn default() -> Self {
+impl VerificationPolicy {
+    /// Require both an exact certificate identity and its OIDC issuer.
+    pub fn new(identity: impl Into<String>, issuer: impl Into<String>) -> Self {
+        Self::any_identity()
+            .require_identity(identity)
+            .require_issuer(issuer)
+    }
+
+    /// Verify cryptography without authorizing a particular signer.
+    ///
+    /// Any identity accepted by the configured certificate authorities may
+    /// verify. Applications must authorize the result separately before use.
+    pub fn any_identity() -> Self {
         Self {
             identity: None,
             issuer: None,
@@ -87,14 +107,12 @@ impl Default for VerificationPolicy {
             certificate: CertificatePolicy::Verify { verify_sct: true },
         }
     }
-}
 
-impl VerificationPolicy {
     /// Create a policy that requires a specific identity
     pub fn with_identity(identity: impl Into<String>) -> Self {
         Self {
             identity: Some(identity.into()),
-            ..Default::default()
+            ..Self::any_identity()
         }
     }
 
@@ -102,7 +120,7 @@ impl VerificationPolicy {
     pub fn with_issuer(issuer: impl Into<String>) -> Self {
         Self {
             issuer: Some(issuer.into()),
-            ..Default::default()
+            ..Self::any_identity()
         }
     }
 
@@ -237,7 +255,7 @@ impl Verifier {
     /// let trusted_root = TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)?;
     /// let verifier = Verifier::new(&trusted_root);
     /// let bundle: Bundle = todo!();
-    /// let policy = VerificationPolicy::default();
+    /// let policy = VerificationPolicy::any_identity();
     ///
     /// // Option 1: Verify with raw bytes
     /// let artifact_bytes = b"hello world";
@@ -826,7 +844,7 @@ fn verify_message_signature_crypto(
 /// let bundle = Bundle::from_json(&bundle_json)?;
 /// let artifact = std::fs::read("artifact.txt")?;
 ///
-/// verify(&artifact, &bundle, &sigstore_verify::VerificationPolicy::default(), &trusted_root)?;
+/// verify(&artifact, &bundle, &sigstore_verify::VerificationPolicy::any_identity(), &trusted_root)?;
 /// # Ok(())
 /// # }
 /// ```
@@ -899,7 +917,7 @@ mod tests {
 
     #[test]
     fn test_verification_policy_default() {
-        let policy = VerificationPolicy::default();
+        let policy = VerificationPolicy::any_identity();
         assert!(policy.verify_tlog);
         assert_eq!(
             policy.certificate,
@@ -909,7 +927,7 @@ mod tests {
 
     #[test]
     fn test_verification_policy_builder() {
-        let policy = VerificationPolicy::default()
+        let policy = VerificationPolicy::any_identity()
             .require_identity("test@example.com")
             .require_issuer("https://accounts.google.com")
             .skip_tlog_unsafe();
@@ -924,7 +942,7 @@ mod tests {
 
     #[test]
     fn test_skip_sct_keeps_certificate_chain_verification() {
-        let policy = VerificationPolicy::default().skip_sct();
+        let policy = VerificationPolicy::any_identity().skip_sct();
 
         assert_eq!(
             policy.certificate,
@@ -934,7 +952,7 @@ mod tests {
 
     #[test]
     fn test_skip_certificate_chain_preserves_legacy_sct_skip() {
-        let policy = VerificationPolicy::default().skip_certificate_chain();
+        let policy = VerificationPolicy::any_identity().skip_certificate_chain();
 
         assert_eq!(policy.certificate, CertificatePolicy::Skip);
     }
