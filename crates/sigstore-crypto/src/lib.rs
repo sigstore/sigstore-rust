@@ -14,8 +14,8 @@ pub mod x509;
 pub use checkpoint::{compute_key_hint, Checkpoint, CheckpointSignature, CheckpointVerifyExt};
 pub use error::{Error, Result};
 pub use hash::{
-    hash_async_reader, hash_reader, hash_reader_yielding, sha256, sha256_reader, sha384, sha512,
-    ArtifactHasher, HashUpdate, Sha256Hasher,
+    hash_async_reader, hash_reader, hash_reader_yielding, hash_yielding, sha256, sha256_reader,
+    sha384, sha512, ArtifactHasher, HashUpdate, Sha256Hasher,
 };
 pub use keyring::Keyring;
 pub use signing::{KeyAlgorithm, KeyPair, SigningScheme};

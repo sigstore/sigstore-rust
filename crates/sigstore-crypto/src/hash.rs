@@ -142,6 +142,18 @@ pub fn sha256_reader(reader: impl Read) -> io::Result<Sha256Hash> {
     Ok(hasher.finalize())
 }
 
+/// Hash in-memory data directly, yielding to the executor after each 64 KiB
+/// chunk so unbounded input cannot starve other tasks (TOB-SIGSTORE-8).
+/// Unlike [`hash_reader_yielding`], this does not copy through a reader buffer.
+pub async fn hash_yielding<H: HashUpdate>(data: &[u8], hashers: &mut [H]) {
+    for chunk in data.chunks(HASH_CHUNK_SIZE) {
+        for hasher in hashers.iter_mut() {
+            hasher.update(chunk);
+        }
+        yield_now().await;
+    }
+}
+
 /// Feed `reader` to EOF into every hasher in constant memory.
 ///
 /// Reads block the calling thread. Inside an async task use
@@ -165,8 +177,8 @@ pub fn hash_reader<H: HashUpdate>(mut reader: impl Read, hashers: &mut [H]) -> i
 /// Hashing is CPU-bound: doing it in one shot over unbounded caller input
 /// would occupy the executor thread for the whole duration and starve other
 /// tasks (TOB-SIGSTORE-8). Reading and hashing in 64 KiB chunks
-/// keeps each non-yielding stretch short. In-memory input works too, since
-/// `&[u8]` implements [`Read`].
+/// keeps each non-yielding stretch short. For in-memory slices, prefer
+/// [`hash_yielding`] to avoid copying through a reader buffer.
 ///
 /// The reads themselves still block the executor thread; prefer
 /// [`hash_async_reader`] when the input has an async source.
@@ -248,6 +260,7 @@ fn yield_now() -> impl Future<Output = ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::{executor::block_on, task::noop_waker_ref};
 
     #[test]
     fn test_sha256() {
@@ -312,27 +325,6 @@ mod tests {
         (0..size).map(|i| (i % 251) as u8).collect()
     }
 
-    fn block_on<F: Future>(future: F) -> F::Output {
-        // Every future here only ever yields once per chunk and re-wakes
-        // itself, so a spin loop with a no-op waker is a sufficient executor.
-        let waker = futures_task_noop_waker();
-        let mut cx = TaskContext::from_waker(&waker);
-        let mut future = Box::pin(future);
-        loop {
-            if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
-                return output;
-            }
-        }
-    }
-
-    fn futures_task_noop_waker() -> std::task::Waker {
-        struct Noop;
-        impl std::task::Wake for Noop {
-            fn wake(self: std::sync::Arc<Self>) {}
-        }
-        std::sync::Arc::new(Noop).into()
-    }
-
     #[test]
     fn reader_helpers_match_one_shot_hashing_across_chunk_boundaries() {
         for size in chunk_boundary_sizes() {
@@ -375,14 +367,46 @@ mod tests {
     }
 
     #[test]
+    fn slice_hashing_uses_source_chunks_and_yields() {
+        struct CheckSource<'a> {
+            remaining: &'a [u8],
+            hasher: Sha256Hasher,
+        }
+        impl HashUpdate for CheckSource<'_> {
+            fn update(&mut self, data: &[u8]) {
+                // Catch accidental copies through a reader buffer.
+                assert_eq!(data.as_ptr(), self.remaining.as_ptr());
+                assert!(data.len() <= HASH_CHUNK_SIZE);
+                self.remaining = &self.remaining[data.len()..];
+                self.hasher.update(data);
+            }
+        }
+        for size in chunk_boundary_sizes() {
+            let data = patterned(size);
+            let mut checked = CheckSource {
+                remaining: &data,
+                hasher: Sha256Hasher::new(),
+            };
+            let mut future = Box::pin(hash_yielding(&data, std::slice::from_mut(&mut checked)));
+            let mut cx = TaskContext::from_waker(noop_waker_ref());
+            for _ in data.chunks(HASH_CHUNK_SIZE) {
+                assert!(future.as_mut().poll(&mut cx).is_pending());
+            }
+            assert!(future.as_mut().poll(&mut cx).is_ready());
+            drop(future);
+            assert!(checked.remaining.is_empty());
+            assert_eq!(checked.hasher.finalize(), sha256(&data));
+        }
+    }
+
+    #[test]
     fn async_hashing_yields_even_when_reads_are_ready() {
         let mut hasher = Sha256Hasher::new();
         let mut future = Box::pin(hash_async_reader(
             BlockingReader(&[42_u8][..]),
             std::slice::from_mut(&mut hasher),
         ));
-        let waker = futures_task_noop_waker();
-        let mut cx = TaskContext::from_waker(&waker);
+        let mut cx = TaskContext::from_waker(noop_waker_ref());
         assert!(future.as_mut().poll(&mut cx).is_pending());
     }
 

@@ -21,4 +21,5 @@ jiff = { workspace = true }
 futures-io = { workspace = true }
 
 [dev-dependencies]
+futures = { workspace = true }
 hex = { workspace = true }

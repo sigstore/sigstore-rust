@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 use futures_io::AsyncRead;
 use sigstore_bundle::{BundleV03, TlogEntryBuilder};
 use sigstore_crypto::{
-    hash_async_reader, hash_reader_yielding, KeyPair, Sha256Hasher, SigningScheme,
+    hash_async_reader, hash_reader_yielding, hash_yielding, KeyPair, Sha256Hasher, SigningScheme,
 };
 use sigstore_fulcio::FulcioClient;
 use sigstore_oidc::IdentityToken;
@@ -25,35 +25,6 @@ use sigstore_types::{
     TransparencyLogEntry,
 };
 
-/// Hash in-memory `data` into `hasher`, yielding to the executor between
-/// chunks so unbounded caller input cannot starve other tasks (TOB-SIGSTORE-8).
-async fn update_yielding(hasher: &mut Sha256Hasher, data: &[u8]) {
-    hash_reader_yielding(data, std::slice::from_mut(hasher))
-        .await
-        .expect("reading from an in-memory slice cannot fail");
-}
-
-/// SHA-256 a blocking reader to EOF, yielding to the executor between chunks.
-///
-/// The reads themselves run on the executor thread; see
-/// [`sigstore_crypto::hash_reader_yielding`].
-async fn sha256_yielding(reader: impl std::io::Read) -> Result<Sha256Hash> {
-    let mut hasher = Sha256Hasher::new();
-    hash_reader_yielding(reader, std::slice::from_mut(&mut hasher))
-        .await
-        .map_err(Error::ArtifactRead)?;
-    Ok(hasher.finalize())
-}
-
-/// SHA-256 an async reader to EOF, yielding to the executor between chunks.
-async fn sha256_async(reader: impl AsyncRead + Unpin) -> Result<Sha256Hash> {
-    let mut hasher = Sha256Hasher::new();
-    hash_async_reader(reader, std::slice::from_mut(&mut hasher))
-        .await
-        .map_err(Error::ArtifactRead)?;
-    Ok(hasher.finalize())
-}
-
 /// Start hashing a DSSE PAE without materializing the PAE in memory.
 fn dsse_pae_hasher(payload_type: &str, payload_len: usize) -> Sha256Hasher {
     let mut hasher = Sha256Hasher::new();
@@ -70,7 +41,7 @@ fn dsse_pae_hasher(payload_type: &str, payload_len: usize) -> Sha256Hasher {
 /// Hash a DSSE PAE in chunks without first allocating a full PAE copy.
 async fn sha256_pae_yielding(payload_type: &str, payload: &[u8]) -> Sha256Hasher {
     let mut hasher = dsse_pae_hasher(payload_type, payload.len());
-    update_yielding(&mut hasher, payload).await;
+    hash_yielding(payload, std::slice::from_mut(&mut hasher)).await;
     hasher
 }
 
@@ -94,9 +65,7 @@ async fn prepare_dsse_payload_yielding(
         payload: Vec::with_capacity(data.len()),
         hasher: dsse_pae_hasher(payload_type, data.len()),
     };
-    hash_reader_yielding(data, std::slice::from_mut(&mut prepared))
-        .await
-        .expect("reading from an in-memory slice cannot fail");
+    hash_yielding(data, std::slice::from_mut(&mut prepared)).await;
     (PayloadBytes::new(prepared.payload), prepared.hasher)
 }
 
@@ -343,7 +312,11 @@ impl Signer {
     pub async fn sign<'a>(&self, artifact: impl Into<Artifact<'a>>) -> Result<Bundle> {
         self.validate_configuration()?;
         let artifact_hash = match artifact.into() {
-            Artifact::Blob(blob) => sha256_yielding(blob).await?,
+            Artifact::Blob(blob) => {
+                let mut hasher = Sha256Hasher::new();
+                hash_yielding(blob, std::slice::from_mut(&mut hasher)).await;
+                hasher.finalize()
+            }
             Artifact::Digest(digest) => {
                 if digest.algorithm() != HashAlgorithm::Sha2256 {
                     return Err(Error::Signing(format!(
@@ -364,13 +337,21 @@ impl Signer {
     /// thread. Async applications should prefer [`Signer::sign_async_reader`].
     pub async fn sign_reader(&self, reader: impl std::io::Read) -> Result<Bundle> {
         self.validate_configuration()?;
-        self.sign_sha256(sha256_yielding(reader).await?).await
+        let mut hasher = Sha256Hasher::new();
+        hash_reader_yielding(reader, std::slice::from_mut(&mut hasher))
+            .await
+            .map_err(Error::ArtifactRead)?;
+        self.sign_sha256(hasher.finalize()).await
     }
 
     /// Sign an artifact read asynchronously to EOF in constant memory.
     pub async fn sign_async_reader(&self, reader: impl AsyncRead + Unpin) -> Result<Bundle> {
         self.validate_configuration()?;
-        self.sign_sha256(sha256_async(reader).await?).await
+        let mut hasher = Sha256Hasher::new();
+        hash_async_reader(reader, std::slice::from_mut(&mut hasher))
+            .await
+            .map_err(Error::ArtifactRead)?;
+        self.sign_sha256(hasher.finalize()).await
     }
 
     /// Sign an already hashed artifact.

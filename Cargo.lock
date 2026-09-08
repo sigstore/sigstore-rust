@@ -2121,6 +2121,7 @@ dependencies = [
  "base64",
  "const-oid",
  "der",
+ "futures",
  "futures-io",
  "hex",
  "jiff",
