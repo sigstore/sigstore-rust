@@ -57,7 +57,7 @@ impl Keyring {
             .filter(|entry| {
                 entry
                     .validity
-                    .map_or(true, |validity| validity.contains(time))
+                    .is_none_or(|validity| validity.contains(time))
             })
             .map(|entry| &entry.key)
     }
@@ -76,7 +76,7 @@ impl Keyring {
             .filter(|entry| {
                 entry
                     .validity
-                    .map_or(true, |validity| validity.has_started_by(time))
+                    .is_none_or(|validity| validity.has_started_by(time))
             })
             .map(|entry| &entry.key)
     }
@@ -96,7 +96,7 @@ impl Keyring {
             (id.as_bytes()[..4] == hint
                 && entry
                     .validity
-                    .map_or(true, |validity| validity.has_started_by(time)))
+                    .is_none_or(|validity| validity.has_started_by(time)))
             .then_some(&entry.key)
         })
     }
