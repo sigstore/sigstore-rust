@@ -45,14 +45,6 @@ sigstore-trust-root = { workspace = true, features = ["tuf"] }
 
 [features]
 default = ["rustls"]
-rustls = [
-  "sigstore-rekor/rustls",
-  "sigstore-tsa/rustls",
-  "sigstore-trust-root/rustls",
-]
-native-tls = [
-  "sigstore-rekor/native-tls",
-  "sigstore-tsa/native-tls",
-  "sigstore-trust-root/native-tls",
-]
+rustls = ["sigstore-trust-root/rustls"]
+native-tls = ["sigstore-trust-root/native-tls"]
 tuf = ["sigstore-trust-root/tuf"]

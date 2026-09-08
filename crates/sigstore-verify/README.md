@@ -23,6 +23,13 @@ This crate provides high-level APIs for verifying Sigstore signatures. It handle
 5. Verify timestamps if present
 6. Check identity against policy (optional)
 
+## Offline verification
+
+The default `sigstore-verify` dependency tree has no HTTP client or Tokio runtime.
+Verification always uses the supplied trusted root and never fetches artifacts
+or keys. Enable `tuf` plus `rustls` (default) or `native-tls` when the application
+also needs network trust-root refreshes.
+
 ## Verifier construction
 
 `Verifier::new(&root)?` prepares Rekor/CT keyrings and Fulcio trust anchors before
