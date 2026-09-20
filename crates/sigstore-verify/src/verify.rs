@@ -951,6 +951,20 @@ mod tests {
     }
 
     #[test]
+    fn test_dsse_binding_without_predicate_ok() {
+        let artifact_bytes = b"hello world";
+        let hash_hex = sigstore_crypto::sha256(artifact_bytes).to_hex();
+        let statement = format!(
+            r#"{{"_type":"https://in-toto.io/Statement/v1","subject":[{{"name":"artifact","digest":{{"sha256":"{}"}}}}],"predicateType":"https://example.com/predicate/v1"}}"#,
+            hash_hex
+        );
+        let envelope = in_toto_envelope(&statement);
+
+        let artifact = Artifact::from(artifact_bytes.as_slice());
+        assert!(verify_dsse_artifact_binding(&envelope, &artifact).is_ok());
+    }
+
+    #[test]
     fn test_dsse_binding_mismatched_subject_fails() {
         let hash_hex = sigstore_crypto::sha256(b"some other artifact").to_hex();
         let envelope = in_toto_envelope(&statement_with_subject_sha256(&hash_hex));

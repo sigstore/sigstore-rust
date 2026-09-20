@@ -9,6 +9,10 @@
 use crate::{Sha256Hash, Sha512Hash};
 use serde::{Deserialize, Serialize};
 
+fn empty_predicate() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
+}
+
 /// In-toto Statement v1
 ///
 /// An in-toto statement is a generic attestation format that binds a predicate
@@ -24,7 +28,11 @@ pub struct Statement {
     pub subject: Vec<Subject>,
     /// Type of the predicate (e.g., "<https://slsa.dev/provenance/v1>")
     pub predicate_type: String,
-    /// The actual attestation content (format depends on predicate_type)
+    /// The actual attestation content (format depends on predicate_type).
+    ///
+    /// The in-toto Statement v1 specification permits this field to be
+    /// omitted and treats an omitted predicate as an empty object.
+    #[serde(default = "empty_predicate")]
     pub predicate: serde_json::Value,
 }
 
@@ -167,6 +175,21 @@ mod tests {
             statement.subject[0].digest.sha256,
             Some(Sha256Hash::from_bytes([0; 32]))
         );
+    }
+
+    #[test]
+    fn test_statement_deserialization_without_predicate() {
+        let json = r#"{
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [{
+                "name": "example.txt",
+                "digest": {"sha256": "0000000000000000000000000000000000000000000000000000000000000000"}
+            }],
+            "predicateType": "https://example.com/predicate/v1"
+        }"#;
+
+        let statement: Statement = serde_json::from_str(json).unwrap();
+        assert_eq!(statement.predicate, serde_json::json!({}));
     }
 
     #[test]
