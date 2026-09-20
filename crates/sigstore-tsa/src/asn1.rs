@@ -223,6 +223,9 @@ impl TryFrom<u8> for PkiStatus {
 pub struct PkiStatusInfo {
     /// Status value
     pub status: u8,
+    /// Optional human-readable status text (PKIFreeText: SEQUENCE OF UTF8String).
+    #[asn1(optional = "true")]
+    pub status_string: Option<Vec<String>>,
     /// Optional failure info
     #[asn1(optional = "true")]
     pub fail_info: Option<BitString>,
