@@ -2048,6 +2048,7 @@ dependencies = [
  "sigstore-oidc",
  "sigstore-types",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -2177,6 +2178,7 @@ dependencies = [
  "sigstore-crypto",
  "sigstore-types",
  "thiserror",
+ "tokio",
  "tracing",
  "x509-cert",
 ]
