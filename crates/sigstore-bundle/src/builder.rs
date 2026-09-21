@@ -134,7 +134,7 @@ impl BundleV03 {
 /// Helper to create a transparency log entry.
 pub struct TlogEntryBuilder {
     log_index: LogIndex,
-    log_id: String,
+    log_id: LogKeyId,
     kind_version: KindVersion,
     integrated_time: Option<jiff::Timestamp>,
     canonicalized_body: Vec<u8>,
@@ -152,7 +152,7 @@ impl TlogEntryBuilder {
     ) -> Self {
         Self {
             log_index,
-            log_id: log_id.as_str().to_owned(),
+            log_id,
             kind_version,
             integrated_time: None,
             canonicalized_body: body.as_bytes().to_vec(),
@@ -170,12 +170,9 @@ impl TlogEntryBuilder {
     /// * `entry` - The LogEntry returned from the Rekor API
     /// * `kind_version` - The typed Rekor entry format
     pub fn from_log_entry(entry: &LogEntry, kind_version: KindVersion) -> TypesResult<Self> {
-        // Convert hex log_id to base64 using the type-safe method
-        let log_id_base64 = entry.log_id.to_base64()?;
-
         let mut builder = Self {
             log_index: LogIndex::new(entry.log_index)?,
-            log_id: log_id_base64,
+            log_id: LogKeyId::from_bytes(&entry.log_id.decode()?),
             kind_version,
             integrated_time: entry.integrated_time,
             canonicalized_body: entry.body.as_bytes().to_vec(),
@@ -256,7 +253,7 @@ impl TlogEntryBuilder {
         TransparencyLogEntry {
             log_index: self.log_index,
             log_id: LogId {
-                key_id: LogKeyId::new(self.log_id),
+                key_id: self.log_id,
             },
             kind_version: self.kind_version,
             integrated_time: self.integrated_time,

@@ -552,11 +552,12 @@ mod tests {
         let json = r#"{
             "logId": {"keyId": "dGVzdA=="},
             "kindVersion": {"kind": "dsse", "version": "0.0.1"},
-            "integratedTime": "1700000000",
+            "integratedTime": 1700000000,
             "canonicalizedBody": "e30="
         }"#;
         let entry: TransparencyLogEntry = serde_json::from_str(json).unwrap();
         assert_eq!(entry.log_index.value(), 0);
+        assert_eq!(entry.integrated_time.unwrap().as_second(), 1700000000);
     }
 
     #[test]
@@ -564,11 +565,12 @@ mod tests {
         // cosign v3 omits logIndex and hashes from inclusion proofs
         let json = r#"{
             "rootHash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-            "treeSize": "1",
+            "treeSize": 1,
             "checkpoint": {"envelope": "test\n1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n\n— test AAAAAAAA\n"}
         }"#;
         let proof: InclusionProof = serde_json::from_str(json).unwrap();
         assert_eq!(proof.log_index.value(), 0);
+        assert_eq!(proof.tree_size, 1);
         assert!(proof.hashes.is_empty());
     }
 
