@@ -34,6 +34,37 @@ fn decode_protojson_base64(value: &str) -> std::result::Result<Vec<u8>, base64::
     .decode(value)
 }
 
+fn deserialize_proto_int64<'de, D>(deserializer: D) -> std::result::Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{Error, Visitor};
+
+    struct ProtoInt64Visitor;
+
+    impl Visitor<'_> for ProtoInt64Visitor {
+        type Value = i64;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a protobuf int64 as an integer or string")
+        }
+
+        fn visit_i64<E: Error>(self, value: i64) -> std::result::Result<i64, E> {
+            Ok(value)
+        }
+
+        fn visit_u64<E: Error>(self, value: u64) -> std::result::Result<i64, E> {
+            i64::try_from(value).map_err(Error::custom)
+        }
+
+        fn visit_str<E: Error>(self, value: &str) -> std::result::Result<i64, E> {
+            value.parse().map_err(Error::custom)
+        }
+    }
+
+    deserializer.deserialize_any(ProtoInt64Visitor)
+}
+
 // ============================================================================
 // Serde helper modules (for use with raw Vec<u8> when needed)
 // ============================================================================
@@ -112,7 +143,7 @@ pub mod hex_bytes {
 
 /// Serde helper for u64 fields serialized as strings.
 pub mod string_u64 {
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::{Deserializer, Serializer};
 
     pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -125,16 +156,10 @@ pub mod string_u64 {
     where
         D: Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        let value = s
-            .parse::<u64>()
-            .map_err(|_| serde::de::Error::custom(format!("invalid unsigned integer: {s}")))?;
-        if value > i64::MAX as u64 {
-            return Err(serde::de::Error::custom(format!(
-                "unsigned integer exceeds protobuf int64: {value}"
-            )));
-        }
-        Ok(value)
+        super::deserialize_proto_int64(deserializer).and_then(|value| {
+            u64::try_from(value)
+                .map_err(|_| serde::de::Error::custom(format!("invalid unsigned integer: {value}")))
+        })
     }
 }
 
@@ -146,7 +171,7 @@ pub mod string_u64 {
 /// deserialization fails: an unrepresentable timestamp is rejected at parse
 /// time instead of being carried around as a raw integer.
 pub mod string_timestamp_opt {
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::{Deserializer, Serializer};
 
     pub fn serialize<S>(value: &Option<jiff::Timestamp>, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -160,10 +185,7 @@ pub mod string_timestamp_opt {
     where
         D: Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        let seconds = s
-            .parse::<i64>()
-            .map_err(|_| serde::de::Error::custom(format!("invalid integer: {}", s)))?;
+        let seconds = super::deserialize_proto_int64(deserializer)?;
         if seconds == 0 {
             return Ok(None);
         }
@@ -515,97 +537,17 @@ impl<'de> Deserialize<'de> for LogIndex {
     where
         D: serde::Deserializer<'de>,
     {
-        use serde::de::{self, Visitor};
-
-        struct LogIndexVisitor;
-
-        impl<'de> Visitor<'de> for LogIndexVisitor {
-            type Value = LogIndex;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("an integer or string representing a log index")
-            }
-
-            fn visit_i64<E>(self, value: i64) -> std::result::Result<LogIndex, E>
-            where
-                E: de::Error,
-            {
-                let value = u64::try_from(value)
-                    .map_err(|_| de::Error::custom(format!("negative log index: {value}")))?;
-                LogIndex::new(value).map_err(de::Error::custom)
-            }
-
-            fn visit_u64<E>(self, value: u64) -> std::result::Result<LogIndex, E>
-            where
-                E: de::Error,
-            {
-                LogIndex::new(value).map_err(de::Error::custom)
-            }
-
-            fn visit_str<E>(self, value: &str) -> std::result::Result<LogIndex, E>
-            where
-                E: de::Error,
-            {
-                let index = value
-                    .parse::<u64>()
-                    .map_err(|_| de::Error::custom(format!("invalid log index: {value}")))?;
-                self.visit_u64(index)
-            }
-        }
-
-        deserializer.deserialize_any(LogIndexVisitor)
+        let value = deserialize_proto_int64(deserializer)?;
+        let value = u64::try_from(value)
+            .map_err(|_| serde::de::Error::custom(format!("negative log index: {value}")))?;
+        Self::new(value).map_err(serde::de::Error::custom)
     }
 }
 
-/// Transparency log key ID
-///
-/// Base64-encoded identifier for a transparency log (typically SHA-256 of public key).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct LogKeyId(String);
-
-impl LogKeyId {
-    pub fn new(s: String) -> Self {
-        LogKeyId(s)
-    }
-
-    /// Create from raw bytes (will be base64-encoded)
-    pub fn from_bytes(bytes: &[u8]) -> Self {
-        LogKeyId(base64::engine::general_purpose::STANDARD.encode(bytes))
-    }
-
-    /// Decode to raw bytes
-    pub fn decode(&self) -> Result<Vec<u8>> {
-        decode_protojson_base64(&self.0)
-            .map_err(|e| Error::InvalidEncoding(format!("invalid base64 in log key id: {}", e)))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn into_string(self) -> String {
-        self.0
-    }
-}
-
-impl From<String> for LogKeyId {
-    fn from(s: String) -> Self {
-        LogKeyId::new(s)
-    }
-}
-
-impl AsRef<str> for LogKeyId {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for LogKeyId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
+base64_newtype!(
+    /// Transparency log key ID (typically SHA-256 of the public key).
+    LogKeyId
+);
 
 /// Key ID for signature key identification
 ///
@@ -1242,8 +1184,13 @@ mod tests {
             base64::engine::general_purpose::URL_SAFE,
             base64::engine::general_purpose::URL_SAFE_NO_PAD,
         ] {
-            assert_eq!(LogKeyId::new(engine.encode(bytes)).decode().unwrap(), bytes);
+            let json = serde_json::to_string(&engine.encode(bytes)).unwrap();
+            assert_eq!(
+                serde_json::from_str::<LogKeyId>(&json).unwrap().as_bytes(),
+                bytes
+            );
         }
+        assert!(serde_json::from_str::<LogKeyId>(r#""not base64!""#).is_err());
     }
 
     #[test]

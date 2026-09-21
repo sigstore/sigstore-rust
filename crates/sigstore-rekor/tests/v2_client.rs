@@ -95,7 +95,7 @@ async fn create_entry_returns_the_protobuf_entry_without_lossy_conversion() {
 
     assert_eq!(entry.log_index.value(), 7);
     assert_eq!(
-        entry.log_id.key_id.as_str(),
+        entry.log_id.key_id.to_base64(),
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     );
     assert_eq!(entry.kind_version, KindVersion::HashedRekordV002);

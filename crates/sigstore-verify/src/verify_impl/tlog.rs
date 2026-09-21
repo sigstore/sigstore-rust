@@ -238,12 +238,8 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
     // Find the key for the log ID. When the entry carries an integrated
     // time, require the log key's validity window to cover it: an entry must
     // have been integrated while the log key was valid.
-    let decoded_key_id = entry
-        .log_id
-        .key_id
-        .decode()
-        .map_err(|e| Error::Verification(format!("invalid Rekor log ID: {e}")))?;
-    let key_id = Sha256Hash::try_from_slice(&decoded_key_id)
+    let decoded_key_id = entry.log_id.key_id.as_bytes();
+    let key_id = Sha256Hash::try_from_slice(decoded_key_id)
         .map_err(|e| Error::Verification(format!("invalid Rekor log ID: {e}")))?;
     let keyring = trusted_root
         .rekor_keys()

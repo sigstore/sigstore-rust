@@ -172,7 +172,7 @@ fn usable_for_verification(valid_for: Option<&ValidityPeriod>, now: Timestamp) -
 }
 
 fn key_id(log_id: &LogKeyId) -> Result<Sha256Hash> {
-    Ok(Sha256Hash::try_from_slice(&log_id.decode()?)?)
+    Ok(Sha256Hash::try_from_slice(log_id.as_bytes())?)
 }
 
 impl TrustedRoot {
