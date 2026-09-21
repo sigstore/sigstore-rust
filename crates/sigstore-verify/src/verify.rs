@@ -1026,6 +1026,19 @@ mod tests {
         .is_err());
     }
 
+    #[test]
+    fn statement_without_predicate_binds_blob() {
+        let hash = sigstore_crypto::sha256(b"hello").to_hex();
+        let statement = format!(
+            r#"{{"_type":"https://in-toto.io/Statement/v1","subject":[{{"name":"artifact","digest":{{"sha256":"{hash}"}}}}],"predicateType":"https://example.com/predicate/v1"}}"#
+        );
+        let content = SignatureContent::DsseEnvelope(in_toto_envelope(&statement));
+        let requirements =
+            ArtifactRequirements::new(&content, SigningScheme::EcdsaP256Sha256).unwrap();
+        let artifact = PreparedArtifact::from_artifact(b"hello".as_slice().into(), &requirements);
+        assert!(requirements.verify_binding(&artifact).is_ok());
+    }
+
     const DSSE_TEST_PAYLOAD: &[u8] = br#"{"hello":"world"}"#;
 
     fn dsse_envelope_signed_over(
