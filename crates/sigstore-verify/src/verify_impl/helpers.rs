@@ -9,28 +9,8 @@ use rustls_pki_types::{CertificateDer, UnixTime};
 use sigstore_crypto::CertificateInfo;
 use sigstore_trust_root::{TrustedRoot, TsaAuthority};
 use sigstore_types::bundle::VerificationMaterialContent;
-use sigstore_types::{
-    Bundle, DerCertificate, DerPublicKey, KindVersion, SignatureBytes, SignatureContent,
-};
+use sigstore_types::{Bundle, DerPublicKey, KindVersion, SignatureBytes, SignatureContent};
 use webpki::{anchor_from_trusted_cert, EndEntityCert, KeyUsage, ALL_VERIFICATION_ALGS};
-
-/// Extract and decode the signing certificate from verification material
-pub fn extract_certificate(
-    verification_material: &VerificationMaterialContent,
-) -> Result<DerCertificate> {
-    match verification_material {
-        VerificationMaterialContent::Certificate(cert) => Ok(cert.raw_bytes.clone()),
-        VerificationMaterialContent::X509CertificateChain { certificates } => {
-            if certificates.is_empty() {
-                return Err(Error::Verification("no certificates in chain".to_string()));
-            }
-            Ok(certificates[0].raw_bytes.clone())
-        }
-        VerificationMaterialContent::PublicKey { .. } => Err(Error::Verification(
-            "public key verification not yet supported".to_string(),
-        )),
-    }
-}
 
 /// Extract signature from bundle content (needed for TSA verification).
 ///
@@ -472,7 +452,13 @@ mod tests {
         // Err("SCT signature verification failed: ... signature invalid").
         let issuer_spki = verify_certificate_chain(material, validation_time, &trusted_root)
             .expect("certificate chain should verify against the staging root");
-        let cert = extract_certificate(material).unwrap();
+        let cert = match material {
+            VerificationMaterialContent::Certificate(cert) => &cert.raw_bytes,
+            VerificationMaterialContent::X509CertificateChain { certificates } => {
+                &certificates[0].raw_bytes
+            }
+            _ => panic!("fixture must have a signing certificate"),
+        };
         super::super::sct::verify_sct(cert.as_bytes(), issuer_spki.as_bytes(), &trusted_root)
             .expect("SCT verification should succeed once the correct issuer is selected");
     }
