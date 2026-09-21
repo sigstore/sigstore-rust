@@ -4,7 +4,6 @@
 //! checkpoint verification and SET (Signed Entry Timestamp) verification.
 
 use crate::error::{Error, Result};
-use base64::Engine;
 use serde::Serialize;
 use sigstore_crypto::Checkpoint;
 use sigstore_trust_root::TrustedRoot;
@@ -269,10 +268,7 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
     let log_index = entry.log_index.as_i64();
 
     // Log ID for payload must be hex encoded
-    let log_id_bytes = base64::engine::general_purpose::STANDARD
-        .decode(entry.log_id.key_id.as_str())
-        .map_err(|_| Error::Verification("Invalid base64 log ID".into()))?;
-    let log_id_hex = hex::encode(log_id_bytes);
+    let log_id_hex = hex::encode(decoded_key_id);
 
     let payload = RekorPayload {
         body,

@@ -576,8 +576,7 @@ impl LogKeyId {
 
     /// Decode to raw bytes
     pub fn decode(&self) -> Result<Vec<u8>> {
-        base64::engine::general_purpose::STANDARD
-            .decode(&self.0)
+        decode_protojson_base64(&self.0)
             .map_err(|e| Error::InvalidEncoding(format!("invalid base64 in log key id: {}", e)))
     }
 
@@ -1235,10 +1234,16 @@ mod tests {
     }
 
     #[test]
-    fn test_log_key_id() {
-        let bytes = vec![1, 2, 3, 4];
-        let key_id = LogKeyId::from_bytes(&bytes);
-        assert_eq!(key_id.decode().unwrap(), bytes);
+    fn log_key_id_accepts_protojson_base64_variants() {
+        let bytes = [0xfb, 0xff, 0xef, 0xfa];
+        for engine in [
+            base64::engine::general_purpose::STANDARD,
+            base64::engine::general_purpose::STANDARD_NO_PAD,
+            base64::engine::general_purpose::URL_SAFE,
+            base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        ] {
+            assert_eq!(LogKeyId::new(engine.encode(bytes)).decode().unwrap(), bytes);
+        }
     }
 
     #[test]
