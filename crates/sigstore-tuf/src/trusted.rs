@@ -151,6 +151,16 @@ impl TrustedMetadataSet {
     /// timestamp it already has and the candidate is discarded. The trusted state
     /// is left unchanged in that case.
     pub fn update_timestamp(&mut self, bytes: &[u8], now: jiff::Timestamp) -> Result<()> {
+        self.update_timestamp_inner(bytes, Some(now))
+    }
+
+    // Expired authenticated cache entries still establish rollback floors.
+    // They never authorize target resolution without fresh metadata.
+    pub(crate) fn load_cached_timestamp(&mut self, bytes: &[u8]) -> Result<()> {
+        self.update_timestamp_inner(bytes, None)
+    }
+
+    fn update_timestamp_inner(&mut self, bytes: &[u8], now: Option<jiff::Timestamp>) -> Result<()> {
         let new = Metadata::<Timestamp>::from_slice(bytes)?;
         verify_with_root(&new, &self.root.signed, "timestamp")?;
 
@@ -182,7 +192,9 @@ impl TrustedMetadataSet {
             }
         }
 
-        ensure_not_expired(&new.signed, "timestamp", now)?;
+        if let Some(now) = now {
+            ensure_not_expired(&new.signed, "timestamp", now)?;
+        }
         self.timestamp = Some(new);
         Ok(())
     }
@@ -194,13 +206,23 @@ impl TrustedMetadataSet {
     /// threshold, enforces no per-target rollback versus the trusted snapshot,
     /// and checks expiry.
     pub fn update_snapshot(&mut self, bytes: &[u8], now: jiff::Timestamp) -> Result<()> {
+        self.update_snapshot_inner(bytes, Some(now))
+    }
+
+    pub(crate) fn load_cached_snapshot(&mut self, bytes: &[u8]) -> Result<()> {
+        self.update_snapshot_inner(bytes, None)
+    }
+
+    fn update_snapshot_inner(&mut self, bytes: &[u8], now: Option<jiff::Timestamp>) -> Result<()> {
         let timestamp = self
             .timestamp
             .as_ref()
             .ok_or_else(|| Error::Malformed("cannot load snapshot before timestamp".to_string()))?;
         // The timestamp authorizing this snapshot must itself still be fresh
         // (freeze protection; python-tuf's `_check_final_timestamp`).
-        ensure_not_expired(&timestamp.signed, "timestamp", now)?;
+        if let Some(now) = now {
+            ensure_not_expired(&timestamp.signed, "timestamp", now)?;
+        }
         let pin = timestamp
             .signed
             .snapshot_meta()
@@ -242,10 +264,38 @@ impl TrustedMetadataSet {
             }
         }
 
-        ensure_not_expired(&new.signed, "snapshot", now)?;
+        if let Some(now) = now {
+            ensure_not_expired(&new.signed, "snapshot", now)?;
+        }
         self.snapshot = Some(new);
         // A new snapshot invalidates previously trusted targets.
         self.targets.clear();
+        Ok(())
+    }
+
+    /// Check the entire authorization chain at target-resolution time, including
+    /// version pins that may have changed during an unsuccessful refresh.
+    pub(crate) fn check_target_authorization(&self, now: jiff::Timestamp) -> Result<()> {
+        self.check_root_expired(now)?;
+        self.check_timestamp_expired(now)?;
+        self.check_snapshot_expired(now)?;
+        let timestamp = self.timestamp().ok_or_else(|| {
+            Error::Malformed("refresh() must be called before resolving targets".into())
+        })?;
+        let snapshot = self
+            .snapshot()
+            .ok_or_else(|| Error::Malformed("no trusted snapshot".into()))?;
+        let targets = self
+            .targets_role("targets")
+            .ok_or_else(|| Error::Malformed("no trusted targets".into()))?;
+        ensure_not_expired(targets, "targets", now)?;
+        if timestamp.snapshot_meta().map(|pin| pin.version) != Some(snapshot.version)
+            || snapshot.meta.get("targets.json").map(|pin| pin.version) != Some(targets.version)
+        {
+            return Err(Error::IntegrityMismatch(
+                "incomplete refresh: target authorization pins have changed".into(),
+            ));
+        }
         Ok(())
     }
 
