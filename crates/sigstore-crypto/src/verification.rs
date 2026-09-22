@@ -33,31 +33,27 @@ fn key_algorithm(spki: &SubjectPublicKeyInfoRef<'_>) -> Result<KeyAlgorithm> {
         ));
     }
     let algorithm = &spki.algorithm;
-    if algorithm.oid == ID_EC_PUBLIC_KEY {
-        return match algorithm.parameters_oid() {
-            Ok(curve) if curve == SECP_256_R_1 => Ok(KeyAlgorithm::EcdsaP256),
-            Ok(curve) if curve == SECP_384_R_1 => Ok(KeyAlgorithm::EcdsaP384),
+    match algorithm.oid {
+        ID_EC_PUBLIC_KEY => match algorithm.parameters_oid() {
+            Ok(SECP_256_R_1) => Ok(KeyAlgorithm::EcdsaP256),
+            Ok(SECP_384_R_1) => Ok(KeyAlgorithm::EcdsaP384),
             _ => Err(Error::InvalidKey(
                 "unsupported or invalid EC curve parameters".into(),
             )),
-        };
-    }
-    if algorithm.oid == RSA_ENCRYPTION {
-        if algorithm.parameters.is_some_and(|params| !params.is_null()) {
-            return Err(Error::InvalidKey(
-                "RSA parameters must be NULL or absent".into(),
-            ));
+        },
+        RSA_ENCRYPTION => {
+            if algorithm.parameters.is_some_and(|params| !params.is_null()) {
+                return Err(Error::InvalidKey(
+                    "RSA parameters must be NULL or absent".into(),
+                ));
+            }
+            RsaPublicKey::from_der(spki.subject_public_key.raw_bytes())
+                .map_err(|e| Error::InvalidKey(format!("invalid RSA public key: {e}")))?;
+            Ok(KeyAlgorithm::Rsa)
         }
-        RsaPublicKey::from_der(spki.subject_public_key.raw_bytes())
-            .map_err(|e| Error::InvalidKey(format!("invalid RSA public key: {e}")))?;
-        return Ok(KeyAlgorithm::Rsa);
-    }
-    if algorithm.parameters.is_some() {
-        return Err(Error::InvalidKey(
+        _ if algorithm.parameters.is_some() => Err(Error::InvalidKey(
             "unexpected public key algorithm parameters".into(),
-        ));
-    }
-    match algorithm.oid {
+        )),
         ID_ED25519 => Ok(KeyAlgorithm::Ed25519),
         oid if oid == ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.17") => {
             Ok(KeyAlgorithm::MlDsa44)
@@ -511,6 +507,48 @@ mod tests {
                 .is_err()
         );
         assert!(VerificationKey::from_der(&bad_parameters, SigningScheme::RsaPkcs1Sha256).is_err());
+    }
+
+    #[test]
+    fn test_key_algorithm_parameter_rules() {
+        use der::asn1::AnyRef;
+
+        // A DER RSAPublicKey with two INTEGER fields, sufficient for parsing.
+        let key_bytes = &[0x30, 0x06, 0x02, 0x01, 0x03, 0x02, 0x01, 0x03];
+        for (oid, expected) in [
+            (ID_EC_PUBLIC_KEY, KeyAlgorithm::EcdsaP256),
+            (RSA_ENCRYPTION, KeyAlgorithm::Rsa),
+            (ID_ED25519, KeyAlgorithm::Ed25519),
+            (
+                ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.17"),
+                KeyAlgorithm::MlDsa44,
+            ),
+            (
+                ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.18"),
+                KeyAlgorithm::MlDsa65,
+            ),
+            (
+                ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.19"),
+                KeyAlgorithm::MlDsa87,
+            ),
+        ] {
+            let key = spki_der(oid, Some(SECP_256_R_1), key_bytes);
+            let mut spki = SubjectPublicKeyInfoRef::try_from(key.as_bytes()).unwrap();
+            let curve = spki.algorithm.parameters;
+            for (parameters, valid) in [
+                (curve, oid == ID_EC_PUBLIC_KEY),
+                (None, oid != ID_EC_PUBLIC_KEY),
+                (Some(AnyRef::NULL), oid == RSA_ENCRYPTION),
+            ] {
+                spki.algorithm.parameters = parameters;
+                let result = key_algorithm(&spki);
+                if valid {
+                    assert_eq!(result.unwrap(), expected);
+                } else {
+                    assert!(matches!(result, Err(Error::InvalidKey(_))), "{oid}");
+                }
+            }
+        }
     }
 
     #[test]
