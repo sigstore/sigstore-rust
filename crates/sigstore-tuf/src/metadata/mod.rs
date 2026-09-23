@@ -74,12 +74,23 @@ pub trait Role: DeserializeOwned {
 }
 
 /// A parsed, signed TUF metadata file.
+///
+/// The fields are private so that the typed payload always matches the
+/// canonical bytes the signatures are checked against; it can only be
+/// created by parsing with [`Metadata::from_slice`].
+///
+/// ```compile_fail
+/// # use sigstore_tuf::{Metadata, Root};
+/// fn bump(metadata: &mut Metadata<Root>) {
+///     metadata.signed.version += 1; // the verified payload cannot be changed
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct Metadata<T> {
     /// The signatures over the canonical `signed` bytes.
-    pub signatures: Vec<Signature>,
+    pub(crate) signatures: Vec<Signature>,
     /// The typed, deserialized payload.
-    pub signed: T,
+    pub(crate) signed: T,
     /// The canonical JSON bytes of the `signed` object — exactly what the
     /// signatures cover.
     canonical_signed: Vec<u8>,
@@ -136,6 +147,21 @@ impl<T: Role> Metadata<T> {
             signed,
             canonical_signed,
         })
+    }
+
+    /// The typed, deserialized payload.
+    pub fn signed(&self) -> &T {
+        &self.signed
+    }
+
+    /// The signatures over [`Metadata::signed_canonical`].
+    pub fn signatures(&self) -> &[Signature] {
+        &self.signatures
+    }
+
+    /// Consume the metadata, returning the typed payload.
+    pub fn into_signed(self) -> T {
+        self.signed
     }
 
     /// The canonical bytes that the signatures cover.

@@ -44,14 +44,14 @@ fn github_declared_key_ids_are_used_verbatim() {
     let md = Metadata::<Root>::from_slice(GITHUB_ROOT).unwrap();
     let declared = "1b8fa2a77525b38ef24804d3d907ca96f76d178a49520333626ba36d319c5790";
     assert!(
-        md.signed.keys.contains_key(declared),
+        md.signed().keys.contains_key(declared),
         "declared key ID must be preserved as the map key"
     );
 
     // And that same key's *recomputed* ID (over {keytype, scheme, keyval}) is
     // the declared one — confirming the divergence is purely about which fields
     // enter the hash, not the key material.
-    let key = &md.signed.keys[declared];
+    let key = &md.signed().keys[declared];
     assert_eq!(
         key.key_id().unwrap(),
         declared,
