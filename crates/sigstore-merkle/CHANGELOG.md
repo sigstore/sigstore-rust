@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-merkle-v0.11.0...sigstore-merkle-v0.12.0) - 2026-09-23
+
+### Other
+
+- *(release)* repair API examples, licensing and trust bootstrap guidance ([#206](https://github.com/sigstore/sigstore-rust/pull/206))
+- *(release)* tighten dependencies, MSRV and feature checks ([#202](https://github.com/sigstore/sigstore-rust/pull/202))
+
 ## [0.9.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-merkle-v0.8.0...sigstore-merkle-v0.9.0) - 2026-06-17
 
 ### Other

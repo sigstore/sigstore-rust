@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-verify-v0.11.0...sigstore-verify-v0.12.0) - 2026-09-23
+
+### Added
+
+- *(verify)* [**breaking**] harden policy, results and trust preparation ([#209](https://github.com/sigstore/sigstore-rust/pull/209))
+- *(artifact)* [**breaking**] stream artifacts from sync and async readers ([#185](https://github.com/sigstore/sigstore-rust/pull/185))
+- complete and harden Rekor v2 support ([#176](https://github.com/sigstore/sigstore-rust/pull/176))
+- *(trust-root)* [**breaking**] make TUF bootstrap trust explicit ([#180](https://github.com/sigstore/sigstore-rust/pull/180))
+
+### Fixed
+
+- *(crypto)* validate and share algorithm resolution ([#207](https://github.com/sigstore/sigstore-rust/pull/207))
+- *(types)* accept ProtoJSON base64 log IDs ([#223](https://github.com/sigstore/sigstore-rust/pull/223))
+- *(test)* reject mutation-harness false positives and honor fixture trust ([#201](https://github.com/sigstore/sigstore-rust/pull/201))
+- *(types)* [**breaking**] check log indices, decode digest bytes unambiguously and bind DSSE verifiers ([#199](https://github.com/sigstore/sigstore-rust/pull/199))
+- accept in-toto statements without predicates ([#221](https://github.com/sigstore/sigstore-rust/pull/221))
+- *(verify)* [**breaking**] tighten managed-key verification ([#157](https://github.com/sigstore/sigstore-rust/pull/157))
+- *(verify)* handle canonical Rekor intoto entries ([#175](https://github.com/sigstore/sigstore-rust/pull/175))
+- *(verify)* bind TSA timestamps to the authority that signed them (TOB-SIGSTORE-11) ([#166](https://github.com/sigstore/sigstore-rust/pull/166))
+- *(types)* [**breaking**] make multi-signature DSSE envelopes unrepresentable (TOB-SIGSTORE-9) ([#170](https://github.com/sigstore/sigstore-rust/pull/170))
+- *(verify)* [**breaking**] remove clock skew, and use `jiff` Timestamp in the interfaces ([#164](https://github.com/sigstore/sigstore-rust/pull/164))
+- *(verify)* [**breaking**] authenticate signature timestamps and bind log entries to the bundle ([#160](https://github.com/sigstore/sigstore-rust/pull/160))
+
+### Other
+
+- *(features)* [**breaking**] separate offline verification from HTTP clients ([#212](https://github.com/sigstore/sigstore-rust/pull/212))
+- *(release)* repair API examples, licensing and trust bootstrap guidance ([#206](https://github.com/sigstore/sigstore-rust/pull/206))
+- *(release)* tighten dependencies, MSRV and feature checks ([#202](https://github.com/sigstore/sigstore-rust/pull/202))
+- *(types)* [**breaking**] deserialize semantic bundle values eagerly ([#196](https://github.com/sigstore/sigstore-rust/pull/196))
+- *(artifact)* [**breaking**] make artifact digests typed ([#184](https://github.com/sigstore/sigstore-rust/pull/184))
+- *(crypto)* [**breaking**] clarify SPKI constructor names ([#178](https://github.com/sigstore/sigstore-rust/pull/178))
+- *(trust-root)* [**breaking**] consolidate transparency key getters and align TimeRange semantics ([#159](https://github.com/sigstore/sigstore-rust/pull/159))
+- *(crypto)* [**breaking**] unify signature verification behind VerificationKey (TOB-SIGSTORE-6) ([#168](https://github.com/sigstore/sigstore-rust/pull/168))
+
 ## [0.11.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-verify-v0.10.0...sigstore-verify-v0.11.0) - 2026-07-08
 
 ### Fixed

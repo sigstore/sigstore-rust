@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-tsa-v0.11.0...sigstore-tsa-v0.12.0) - 2026-09-23
+
+### Fixed
+
+- *(crypto)* validate and share algorithm resolution ([#207](https://github.com/sigstore/sigstore-rust/pull/207))
+- *(verify)* bind TSA timestamps to the authority that signed them (TOB-SIGSTORE-11) ([#166](https://github.com/sigstore/sigstore-rust/pull/166))
+
+### Other
+
+- *(features)* [**breaking**] separate offline verification from HTTP clients ([#212](https://github.com/sigstore/sigstore-rust/pull/212))
+- *(release)* repair API examples, licensing and trust bootstrap guidance ([#206](https://github.com/sigstore/sigstore-rust/pull/206))
+- *(release)* tighten dependencies, MSRV and feature checks ([#202](https://github.com/sigstore/sigstore-rust/pull/202))
+
 ## [0.9.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-tsa-v0.8.0...sigstore-tsa-v0.9.0) - 2026-06-17
 
 ### Other
