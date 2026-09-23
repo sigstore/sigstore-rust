@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-crypto-v0.11.0...sigstore-crypto-v0.12.0) - 2026-09-23
+
+### Added
+
+- *(artifact)* [**breaking**] stream artifacts from sync and async readers ([#185](https://github.com/sigstore/sigstore-rust/pull/185))
+
+### Fixed
+
+- *(crypto)* validate and share algorithm resolution ([#207](https://github.com/sigstore/sigstore-rust/pull/207))
+- *(crypto)* use explicit-scheme SPKI constructor in signing test ([#188](https://github.com/sigstore/sigstore-rust/pull/188))
+- *(sign)* keep unbounded hashing and signing from starving the async executor (TOB-SIGSTORE-8) ([#183](https://github.com/sigstore/sigstore-rust/pull/183))
+- *(verify)* [**breaking**] remove clock skew, and use `jiff` Timestamp in the interfaces ([#164](https://github.com/sigstore/sigstore-rust/pull/164))
+
+### Other
+
+- *(release)* repair API examples, licensing and trust bootstrap guidance ([#206](https://github.com/sigstore/sigstore-rust/pull/206))
+- *(release)* tighten dependencies, MSRV and feature checks ([#202](https://github.com/sigstore/sigstore-rust/pull/202))
+- *(types)* [**breaking**] deserialize semantic bundle values eagerly ([#196](https://github.com/sigstore/sigstore-rust/pull/196))
+- *(artifact)* [**breaking**] make artifact digests typed ([#184](https://github.com/sigstore/sigstore-rust/pull/184))
+- *(crypto)* [**breaking**] clarify SPKI constructor names ([#178](https://github.com/sigstore/sigstore-rust/pull/178))
+- *(trust-root)* [**breaking**] consolidate transparency key getters and align TimeRange semantics ([#159](https://github.com/sigstore/sigstore-rust/pull/159))
+- tuf, crypto: Support ML-DSA ([#142](https://github.com/sigstore/sigstore-rust/pull/142))
+- *(crypto)* [**breaking**] unify signature verification behind VerificationKey (TOB-SIGSTORE-6) ([#168](https://github.com/sigstore/sigstore-rust/pull/168))
+
 ## [0.9.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-crypto-v0.8.0...sigstore-crypto-v0.9.0) - 2026-06-17
 
 ### Other

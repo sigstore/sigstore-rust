@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-tuf-v0.11.0...sigstore-tuf-v0.12.0) - 2026-09-23
+
+### Fixed
+
+- *(tuf)* preserve expired rollback floors and require fresh target authorization ([#198](https://github.com/sigstore/sigstore-rust/pull/198))
+- *(tuf)* reverify cached delegated roles ([#173](https://github.com/sigstore/sigstore-rust/pull/173))
+- *(tuf)* keep wildcards within path segments ([#174](https://github.com/sigstore/sigstore-rust/pull/174))
+
+### Other
+
+- *(release)* repair API examples, licensing and trust bootstrap guidance ([#206](https://github.com/sigstore/sigstore-rust/pull/206))
+- *(release)* tighten dependencies, MSRV and feature checks ([#202](https://github.com/sigstore/sigstore-rust/pull/202))
+- *(tuf)* [**breaking**] remove obsolete target accessors ([#190](https://github.com/sigstore/sigstore-rust/pull/190))
+- *(crypto)* [**breaking**] clarify SPKI constructor names ([#178](https://github.com/sigstore/sigstore-rust/pull/178))
+- tuf, crypto: Support ML-DSA ([#142](https://github.com/sigstore/sigstore-rust/pull/142))
+
 ## [0.10.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-tuf-v0.9.0...sigstore-tuf-v0.10.0) - 2026-06-29
 
 ### Added
