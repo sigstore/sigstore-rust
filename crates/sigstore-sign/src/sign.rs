@@ -139,27 +139,39 @@ impl SigningConfig {
 
     /// Create configuration from a TUF signing config with optional forced Rekor version
     ///
+    /// The Rekor endpoint is always selected from `tuf_config`, so the chosen
+    /// instance (production, staging, or custom) is preserved.
+    ///
     /// # Arguments
     ///
     /// * `tuf_config` - The signing config from TUF
-    /// * `force_rekor_version` - If Some, force a specific Rekor API version
+    /// * `force_rekor_version` - If Some, select a Rekor endpoint with this API
+    ///   version from `tuf_config`; returns an error if none is available.
     pub fn from_tuf_config_with_rekor_version(
         tuf_config: &TufSigningConfig,
-        force_rekor_version: Option<u32>,
+        force_rekor_version: Option<RekorApiVersion>,
     ) -> Result<Self> {
         let fulcio_url = tuf_config
             .get_fulcio_url()
             .map(|e| e.url.clone())
             .ok_or_else(|| Error::Config("Missing Fulcio URL in TUF config".to_string()))?;
 
+        let force_major = force_rekor_version.map(|v| match v {
+            RekorApiVersion::V1 => 1,
+            RekorApiVersion::V2 => 2,
+        });
         let (rekor_url, rekor_api_version) =
-            if let Some(rekor) = tuf_config.get_rekor_url(force_rekor_version) {
+            if let Some(rekor) = tuf_config.get_rekor_url(force_major) {
                 let version = if rekor.major_api_version == 2 {
                     RekorApiVersion::V2
                 } else {
                     RekorApiVersion::V1
                 };
                 (rekor.url.clone(), version)
+            } else if let Some(version) = force_rekor_version {
+                return Err(Error::Config(format!(
+                    "No Rekor {version:?} endpoint in TUF config"
+                )));
             } else {
                 return Err(Error::Config("Missing Rekor URL in TUF config".to_string()));
             };
@@ -175,13 +187,6 @@ impl SigningConfig {
             rekor_api_version,
             oidc_url,
         })
-    }
-
-    /// Set the Rekor API version and automatically update the URL
-    pub fn with_rekor_version(mut self, version: RekorApiVersion) -> Self {
-        self.rekor_api_version = version;
-        self.rekor_url = version.default_url().to_string();
-        self
     }
 
     /// Validate that the configured services can produce a verifiable bundle.
@@ -740,7 +745,10 @@ mod tests {
 
     #[test]
     fn rekor_v2_requires_a_timestamp_authority() {
-        let mut config = SigningConfig::default().with_rekor_version(RekorApiVersion::V2);
+        let mut config = SigningConfig {
+            rekor_api_version: RekorApiVersion::V2,
+            ..Default::default()
+        };
         config.tsa_url = None;
         let error = config.validate().unwrap_err();
         assert!(error
@@ -749,6 +757,53 @@ mod tests {
 
         config.tsa_url = Some("https://timestamp.example".to_string());
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn forced_rekor_version_keeps_tuf_selected_instance() {
+        let staging = TufSigningConfig::from_json(SIGSTORE_STAGING_SIGNING_CONFIG).unwrap();
+
+        let v2 =
+            SigningConfig::from_tuf_config_with_rekor_version(&staging, Some(RekorApiVersion::V2))
+                .unwrap();
+        assert_eq!(v2.rekor_api_version, RekorApiVersion::V2);
+        assert!(v2.rekor_url.contains("sigstage.dev"), "{}", v2.rekor_url);
+        assert_ne!(v2.rekor_url, RekorApiVersion::V2.default_url());
+
+        let v1 =
+            SigningConfig::from_tuf_config_with_rekor_version(&staging, Some(RekorApiVersion::V1))
+                .unwrap();
+        assert_eq!(v1.rekor_api_version, RekorApiVersion::V1);
+        assert_eq!(v1.rekor_url, "https://rekor.sigstage.dev");
+    }
+
+    #[test]
+    fn forced_rekor_version_uses_custom_endpoint_or_errors() {
+        let custom = TufSigningConfig::from_json(
+            r#"{
+                "mediaType": "application/vnd.dev.sigstore.signingconfig.v0.2+json",
+                "caUrls": [{"url": "https://fulcio.example", "majorApiVersion": 1,
+                    "validFor": {"start": "2020-01-01T00:00:00Z"}}],
+                "rekorTlogUrls": [{"url": "https://rekor.example", "majorApiVersion": 1,
+                    "validFor": {"start": "2020-01-01T00:00:00Z"}}],
+                "tsaUrls": [],
+                "oidcUrls": []
+            }"#,
+        )
+        .unwrap();
+
+        let v1 =
+            SigningConfig::from_tuf_config_with_rekor_version(&custom, Some(RekorApiVersion::V1))
+                .unwrap();
+        assert_eq!(v1.rekor_url, "https://rekor.example");
+
+        let error =
+            SigningConfig::from_tuf_config_with_rekor_version(&custom, Some(RekorApiVersion::V2))
+                .unwrap_err();
+        assert!(
+            error.to_string().contains("No Rekor V2 endpoint"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

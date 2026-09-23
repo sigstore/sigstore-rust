@@ -169,14 +169,13 @@ async fn main() {
             .await
             .expect("Failed to fetch production config via TUF")
     };
-    let base_config = SigningConfig::from_tuf_config(&tuf_config)
-        .expect("Missing required endpoints in TUF config");
-
-    let config = if use_v2 {
-        base_config.with_rekor_version(RekorApiVersion::V2)
-    } else {
-        base_config
-    };
+    // Select the Rekor endpoint from the instance's own signing config so that
+    // `--staging --v2` (or a custom instance) never falls back to production.
+    let config = SigningConfig::from_tuf_config_with_rekor_version(
+        &tuf_config,
+        use_v2.then_some(RekorApiVersion::V2),
+    )
+    .expect("Missing required endpoints in TUF config");
 
     println!("  Rekor API: {:?}", config.rekor_api_version);
     println!("  Rekor URL: {}", config.rekor_url);
