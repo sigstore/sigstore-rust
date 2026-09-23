@@ -892,7 +892,8 @@ mod tests {
                     "validFor": {"start": "2020-01-01T00:00:00Z"}}],
                 "rekorTlogUrls": [{"url": "https://rekor.example", "majorApiVersion": 1,
                     "validFor": {"start": "2020-01-01T00:00:00Z"}}],
-                "tsaUrls": [],
+                "tsaUrls": [{"url": "https://tsa.example", "majorApiVersion": 1,
+                    "validFor": {"start": "2020-01-01T00:00:00Z"}}],
                 "oidcUrls": []
             }"#,
         )
