@@ -2,6 +2,13 @@
 
 Rekor transparency-log client for [sigstore-rust](https://github.com/sigstore/sigstore-rust).
 
+## Features
+
+Default features enable the HTTP `client` with `rustls`. For offline entry/body
+parsing and `LogEntry::to_bundle_entry`, use `default-features = false`; neither
+reqwest nor Tokio is then required. `native-tls` selects the alternative HTTP TLS
+backend, and `cache` enables client response caching.
+
 ## Supported APIs
 
 | Capability | Rekor v1 | Rekor v2 |
