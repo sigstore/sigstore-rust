@@ -1,0 +1,49 @@
+{
+  "issuers": [
+    {
+      "issuerUrl": "https://agent.buildkite.com",
+      "audience": "sigstore",
+      "challengeClaim": "sub",
+      "spiffeTrustDomain": "",
+      "issuerType": "ci-provider",
+      "subjectDomain": "",
+      "skipEmailVerification": false
+    },
+    {
+      "issuerUrl": "https://oauth2.sigstore.dev/auth",
+      "audience": "sigstore",
+      "challengeClaim": "email",
+      "spiffeTrustDomain": "",
+      "issuerType": "email",
+      "subjectDomain": "",
+      "skipEmailVerification": false
+    },
+    {
+      "issuerUrl": "https://token.actions.githubusercontent.com",
+      "audience": "sigstore",
+      "challengeClaim": "sub",
+      "spiffeTrustDomain": "",
+      "issuerType": "ci-provider",
+      "subjectDomain": "",
+      "skipEmailVerification": false
+    },
+    {
+      "wildcardIssuerUrl": "https://*.oic.prod-aks.azure.com/*/*",
+      "audience": "sigstore",
+      "challengeClaim": "sub",
+      "spiffeTrustDomain": "",
+      "issuerType": "kubernetes",
+      "subjectDomain": "",
+      "skipEmailVerification": false
+    },
+    {
+      "wildcardIssuerUrl": "https://oidc.circleci.com/org/*",
+      "audience": "sigstore",
+      "challengeClaim": "sub",
+      "spiffeTrustDomain": "",
+      "issuerType": "ci-provider",
+      "subjectDomain": "",
+      "skipEmailVerification": false
+    }
+  ]
+}
