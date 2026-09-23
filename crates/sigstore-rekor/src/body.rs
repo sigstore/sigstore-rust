@@ -248,8 +248,14 @@ pub struct DsseV002Signature {
 pub struct DsseV002Verifier {
     /// Key algorithm details (e.g., "PKIX_ECDSA_P256_SHA_256")
     pub key_details: String,
-    /// X.509 certificate information
-    pub x509_certificate: X509CertificateRaw,
+    /// X.509 certificate, when the signature was made by a certificate's key.
+    ///
+    /// Exactly one of `x509_certificate` and `public_key` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x509_certificate: Option<X509CertificateRaw>,
+    /// Public key, when the signature was made by a managed key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<PublicKeyRaw>,
 }
 
 // ============================================================================
@@ -433,5 +439,47 @@ mod tests {
 
         let body = RekorEntryBody::from_base64_json(&base64_body, "hashedrekord", "0.0.1");
         assert!(body.is_ok());
+    }
+
+    fn parse_dsse_v002(verifier: &str) -> DsseV002Body {
+        let body_json = format!(
+            r#"{{"apiVersion": "0.0.2", "kind": "dsse", "spec": {{"dsseV002": {{
+                "payloadHash": {{"algorithm": "SHA2_256",
+                    "digest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}},
+                "signatures": [{{"content": "c2lnbmF0dXJl", "verifier": {verifier}}}]
+            }}}}}}"#
+        );
+        let base64_body = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            body_json.as_bytes(),
+        );
+        match RekorEntryBody::from_base64_json(&base64_body, "dsse", "0.0.2").unwrap() {
+            RekorEntryBody::DsseV002(body) => body,
+            other => panic!("expected dsse v0.0.2 body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_dsse_v002_with_public_key_verifier() {
+        let body = parse_dsse_v002(
+            r#"{"publicKey": {"rawBytes": "cHVibGlja2V5"}, "keyDetails": "PKIX_ED25519"}"#,
+        );
+        let verifier = &body.spec.dsse_v002.signatures[0].verifier;
+        assert_eq!(verifier.key_details, "PKIX_ED25519");
+        assert!(verifier.x509_certificate.is_none());
+        assert_eq!(
+            verifier.public_key.as_ref().unwrap().raw_bytes.as_bytes(),
+            b"publickey"
+        );
+    }
+
+    #[test]
+    fn test_parse_dsse_v002_with_certificate_verifier() {
+        let body = parse_dsse_v002(
+            r#"{"x509Certificate": {"rawBytes": "Y2VydA=="}, "keyDetails": "PKIX_ECDSA_P256_SHA_256"}"#,
+        );
+        let verifier = &body.spec.dsse_v002.signatures[0].verifier;
+        assert!(verifier.public_key.is_none());
+        assert!(verifier.x509_certificate.is_some());
     }
 }
