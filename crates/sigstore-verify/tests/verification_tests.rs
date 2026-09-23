@@ -474,10 +474,10 @@ fn test_checkpoint_parsing() {
         .expect("checkpoint should be parsed during bundle deserialization");
 
     assert_eq!(
-        checkpoint.origin,
+        checkpoint.origin(),
         "rekor.sigstore.dev - 1193050959916656506"
     );
-    assert_eq!(checkpoint.tree_size, 44238955);
+    assert_eq!(checkpoint.tree_size(), 44238955);
     // root_hash is a Sha256Hash, always 32 bytes (validated by type)
 }
 

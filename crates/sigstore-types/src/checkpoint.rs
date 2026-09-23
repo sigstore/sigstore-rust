@@ -28,24 +28,26 @@ use serde::{Deserialize, Serialize};
 ///
 /// Also known as a "signed note" in the Go ecosystem. Contains the log state
 /// (origin, tree size, root hash) plus one or more cryptographic signatures.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// A `Checkpoint` can only be constructed by parsing its text representation
+/// with [`Checkpoint::from_text`]. Its fields are private so that the parsed
+/// semantic fields always agree with the exact signed bytes returned by
+/// [`Checkpoint::signed_data`].
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Checkpoint {
     /// The origin string identifying the log (e.g., "rekor.sigstore.dev - 2605736670972794746")
-    pub origin: String,
+    origin: String,
     /// Tree size (number of leaves/entries in the log)
-    pub tree_size: u64,
+    tree_size: u64,
     /// Root hash of the Merkle tree (32 bytes SHA-256)
-    pub root_hash: Sha256Hash,
+    root_hash: Sha256Hash,
     /// Other data lines (optional extension data, e.g., "Timestamp: 1689177396617352539")
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub other_content: Vec<String>,
+    other_content: Vec<String>,
     /// Signatures over the checkpoint
-    pub signatures: Vec<CheckpointSignature>,
+    signatures: Vec<CheckpointSignature>,
     /// Raw text of the checkpoint body (used for signature verification).
     /// This is the text before the blank line separator, with trailing newline.
-    #[serde(skip)]
-    pub signed_note_text: String,
+    signed_note_text: String,
 }
 
 /// A signature on a checkpoint.
@@ -200,6 +202,44 @@ impl Checkpoint {
         })
     }
 
+    /// The origin string identifying the log.
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
+
+    /// Tree size (number of leaves/entries in the log).
+    pub fn tree_size(&self) -> u64 {
+        self.tree_size
+    }
+
+    /// Root hash of the Merkle tree.
+    pub fn root_hash(&self) -> &Sha256Hash {
+        &self.root_hash
+    }
+
+    /// Other (extension) data lines in the checkpoint body.
+    pub fn other_content(&self) -> &[String] {
+        &self.other_content
+    }
+
+    /// Signatures over the checkpoint body.
+    pub fn signatures(&self) -> &[CheckpointSignature] {
+        &self.signatures
+    }
+
+    /// Iterate over all signatures matching the given key hint (key ID).
+    ///
+    /// Key hints are only 4 bytes and may collide, so verifiers must try every
+    /// matching signature rather than just the first one.
+    pub fn signatures_by_key_hint<'a>(
+        &'a self,
+        key_hint: &'a KeyHint,
+    ) -> impl Iterator<Item = &'a CheckpointSignature> + 'a {
+        self.signatures
+            .iter()
+            .filter(move |sig| &sig.key_id == key_hint)
+    }
+
     /// Encode the checkpoint to its text representation (without signatures).
     ///
     /// This returns the signed note body that can be used for signature verification.
@@ -222,7 +262,10 @@ impl Checkpoint {
     /// Find a signature matching the given key hint (key ID).
     ///
     /// The key hint is the first 4 bytes of SHA-256(public_key_der).
-    /// Returns the signature if found, or None if no matching signature exists.
+    /// Returns the first signature if found, or None if no matching signature exists.
+    ///
+    /// Key hints may collide; signature verification should use
+    /// [`Checkpoint::signatures_by_key_hint`] and try every match.
     pub fn find_signature_by_key_hint(&self, key_hint: &KeyHint) -> Option<&CheckpointSignature> {
         self.signatures.iter().find(|sig| &sig.key_id == key_hint)
     }
@@ -305,5 +348,54 @@ npv1T/m9N8zX0jPlbh4rB51zL6GpnV9bQaXSOdzAV+s=
         // Non-existent key hint
         let not_found = checkpoint.find_signature_by_key_hint(&KeyHint::new([0, 0, 0, 0]));
         assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_accessors_and_signed_data_match_parsed_text() {
+        // Trailing whitespace on body lines is trimmed for the semantic fields
+        // but must be preserved in the exact signed bytes.
+        let body = "rekor.sigstore.dev - 1193050959916656506 \n42591958\nnpv1T/m9N8zX0jPlbh4rB51zL6GpnV9bQaXSOdzAV+s=\nTimestamp: 1\n";
+        let text = format!(
+            "{body}\n— rekor.sigstore.dev wNI9ajBFAiEA0OP4Pv5ks5MoTTwcM0kS6HMn8gZ5fFPjT9s6vVqXgHkCIDCe5qWSdM4OXpCQ1YNP2KpLo1r/2dRfFHXkPR5h3ywe\n"
+        );
+        let checkpoint = Checkpoint::from_text(&text).unwrap();
+        assert_eq!(
+            checkpoint.origin(),
+            "rekor.sigstore.dev - 1193050959916656506"
+        );
+        assert_eq!(checkpoint.tree_size(), 42591958);
+        assert_eq!(
+            checkpoint.root_hash().to_base64(),
+            "npv1T/m9N8zX0jPlbh4rB51zL6GpnV9bQaXSOdzAV+s="
+        );
+        assert_eq!(checkpoint.other_content(), ["Timestamp: 1".to_string()]);
+        assert_eq!(checkpoint.signatures().len(), 1);
+        assert_eq!(checkpoint.signed_data(), body.as_bytes());
+    }
+
+    #[test]
+    fn test_signatures_by_key_hint_returns_all_collisions() {
+        // Two signatures sharing the same 4-byte key hint (AAAAAA==) plus one other.
+        let text = "example.com/log
+1
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+
+— a AAAAAAE=
+— b AAAAAAI=
+— c AQIDBAM=
+";
+        let checkpoint = Checkpoint::from_text(text).unwrap();
+        let hint = KeyHint::new([0, 0, 0, 0]);
+        let names: Vec<_> = checkpoint
+            .signatures_by_key_hint(&hint)
+            .map(|sig| sig.name.as_str())
+            .collect();
+        assert_eq!(names, ["a", "b"]);
+        assert_eq!(
+            checkpoint
+                .signatures_by_key_hint(&KeyHint::new([9, 9, 9, 9]))
+                .count(),
+            0
+        );
     }
 }

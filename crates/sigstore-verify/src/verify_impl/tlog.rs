@@ -140,7 +140,7 @@ fn verify_merkle_inclusion(entry: &TransparencyLogEntry, proof: &InclusionProof)
             Error::Verification("Rekor v2 inclusion proof has no checkpoint".to_string())
         })?;
         let leaf_index = entry.log_index.value();
-        (leaf_index, checkpoint.tree_size, checkpoint.root_hash)
+        (leaf_index, checkpoint.tree_size(), *checkpoint.root_hash())
     } else {
         let leaf_index = proof.log_index.value();
         let tree_size = proof.tree_size;
@@ -172,7 +172,7 @@ pub fn verify_checkpoint(
 
     // Rekor v1 requires internal consistency with its duplicate proof root.
     // Rekor v2 explicitly treats that field as unauthenticated and ignores it.
-    let checkpoint_root_hash = &checkpoint.root_hash;
+    let checkpoint_root_hash = checkpoint.root_hash();
     let proof_root_hash = &inclusion_proof.root_hash;
 
     if !is_v2 && checkpoint_root_hash.as_bytes() != proof_root_hash.as_bytes() {
@@ -191,7 +191,7 @@ pub fn verify_checkpoint(
     let message = checkpoint.signed_data();
     let now = jiff::Timestamp::now();
     let mut found_matching_key = false;
-    for sig in &checkpoint.signatures {
+    for sig in checkpoint.signatures() {
         for key in rekor_keys.keys_by_hint(&sig.key_id, now) {
             found_matching_key = true;
             if key.verify(message, &sig.signature).is_ok() {

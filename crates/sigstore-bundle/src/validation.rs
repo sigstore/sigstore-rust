@@ -215,10 +215,11 @@ fn validate_inclusion_proof_structure(bundle: &Bundle) -> Result<()> {
             let is_v2 = entry.kind_version == KindVersion::HashedRekordV002;
             if is_v2 {
                 let leaf_index = entry.log_index.value();
-                if leaf_index >= checkpoint.tree_size {
+                if leaf_index >= checkpoint.tree_size() {
                     return Err(Error::Validation(format!(
                         "top-level log_index {} out of range for checkpoint tree size {}",
-                        leaf_index, checkpoint.tree_size
+                        leaf_index,
+                        checkpoint.tree_size()
                     )));
                 }
             } else {
@@ -230,7 +231,7 @@ fn validate_inclusion_proof_structure(bundle: &Bundle) -> Result<()> {
                         leaf_index, tree_size
                     )));
                 }
-                if checkpoint.root_hash != proof.root_hash {
+                if *checkpoint.root_hash() != proof.root_hash {
                     return Err(Error::Validation(
                         "inclusion proof root hash does not match checkpoint root hash".to_string(),
                     ));
