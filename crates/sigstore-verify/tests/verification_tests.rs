@@ -1058,6 +1058,63 @@ fn test_verify_conda_package_tampered() {
 const COSIGN_V3_BLOB_BUNDLE: &str =
     include_str!("../test_data/bundles/cosign-v3-blob.sigstore.json");
 
+/// Issuer extraction accepts the current DER-encoded extension, prefers it
+/// regardless of extension order, and never falls back from a malformed v2.
+/// These mutations exercise parsing only, not certificate authentication.
+#[test]
+fn test_fulcio_issuer_extension_versions() {
+    use sigstore_crypto::parse_certificate_info;
+    use x509_cert::der::{asn1::OctetString, Decode, Encode};
+    use x509_cert::Certificate;
+
+    let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
+    let mut cert = Certificate::from_der(bundle.signing_certificate().unwrap().as_bytes()).unwrap();
+    let extensions = cert.tbs_certificate.extensions.as_ref().unwrap();
+    let mut legacy = extensions
+        .iter()
+        .find(|ext| ext.extn_id.to_string() == "1.3.6.1.4.1.57264.1.1")
+        .unwrap()
+        .clone();
+    let current = extensions
+        .iter()
+        .find(|ext| ext.extn_id.to_string() == "1.3.6.1.4.1.57264.1.8")
+        .unwrap()
+        .clone();
+    legacy.extn_value = OctetString::new(b"https://legacy.example").unwrap();
+
+    for (extensions, expected) in [
+        (vec![legacy.clone()], Some("https://legacy.example")),
+        (
+            vec![current.clone()],
+            Some("https://github.com/login/oauth"),
+        ),
+        (
+            vec![legacy.clone(), current.clone()],
+            Some("https://github.com/login/oauth"),
+        ),
+        (
+            vec![current.clone(), legacy.clone()],
+            Some("https://github.com/login/oauth"),
+        ),
+        (vec![], None),
+    ] {
+        cert.tbs_certificate.extensions = Some(extensions);
+        let info = parse_certificate_info(&cert.to_der().unwrap()).unwrap();
+        assert_eq!(info.issuer.as_deref(), expected);
+    }
+
+    let mut malformed = current;
+    // Raw UTF-8 is accepted only for the legacy OID, not for v2.
+    malformed.extn_value = legacy.extn_value.clone();
+    cert.tbs_certificate.extensions = Some(vec![legacy, malformed]);
+    assert!(parse_certificate_info(&cert.to_der().unwrap()).is_err());
+    cert.tbs_certificate.extensions = None;
+    assert!(parse_certificate_info(&cert.to_der().unwrap())
+        .unwrap()
+        .issuer
+        .is_none());
+}
+
 /// Test that we can parse a bundle produced by cosign v3.x
 #[test]
 fn test_parse_cosign_v3_blob_bundle() {
@@ -1110,6 +1167,67 @@ fn test_verify_cosign_v3_blob_bundle() {
 
     let result = verify(artifact, &bundle, &policy, &production_root());
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
+}
+
+#[test]
+fn fulcio_windows_cover_every_authenticated_time_without_borrowing_authorities() {
+    use sigstore_types::TimeRange;
+
+    let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
+    let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
+    let policy = VerificationPolicy::any_identity();
+    let baseline = verify(artifact, &bundle, &policy, &production_root()).unwrap();
+    let times = baseline.verified_timestamps();
+    assert_eq!(
+        times.len(),
+        2,
+        "fixture must authenticate both TSA and SET times"
+    );
+    let first = *times.iter().min().unwrap();
+    let last = *times.iter().max().unwrap();
+    assert!(
+        first < last,
+        "fixture must have distinct authenticated times"
+    );
+
+    for (window, accepted) in [
+        (None, true),
+        (Some(TimeRange::new(first, None)), true),
+        // Closed endpoints; a retired CA still verifies historical signatures.
+        (Some(TimeRange::new(first, Some(last))), true),
+        // Neither timestamp can mask a failure at the other timestamp.
+        (Some(TimeRange::new(first, Some(first))), false),
+        (Some(TimeRange::new(last, None)), false),
+        (
+            Some(TimeRange::new(
+                "2000-01-01T00:00:00Z".parse().unwrap(),
+                Some("2001-01-01T00:00:00Z".parse().unwrap()),
+            )),
+            false,
+        ),
+    ] {
+        for add_unrelated in [false, true] {
+            let mut root = production_root();
+            for ca in &mut root.certificate_authorities {
+                ca.valid_for = window;
+            }
+            if add_unrelated {
+                // These authorities cannot authenticate this production leaf.
+                // Their unrestricted windows must not rescue its issuing CA.
+                let mut unrelated = staging_root().certificate_authorities;
+                for ca in &mut unrelated {
+                    ca.valid_for = None;
+                }
+                root.certificate_authorities.extend(unrelated);
+            }
+            let result = verify(artifact, &bundle, &policy, &root);
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "window={window:?}, add_unrelated={add_unrelated}: {result:?}"
+            );
+        }
+    }
 }
 
 #[tokio::test]
