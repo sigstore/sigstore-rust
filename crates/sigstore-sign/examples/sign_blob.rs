@@ -16,9 +16,13 @@
 //!     artifact.txt -o artifact.sigstore.json
 //! ```
 //!
-//! Use Rekor V2 API (when available):
+//! Use Rekor V2 API. The log is taken from the instance's signing config;
+//! pass `--rekor-url` to choose one explicitly when the instance does not
+//! publish a V2 log yet:
 //! ```sh
 //! cargo run -p sigstore-sign --features browser --example sign_blob -- --v2 artifact.txt
+//! cargo run -p sigstore-sign --features browser --example sign_blob -- \
+//!     --v2 --rekor-url https://log2025-1.rekor.sigstore.dev artifact.txt
 //! ```
 //!
 //! # In GitHub Actions
@@ -55,6 +59,7 @@ async fn main() {
     let mut tuf_root_path: Option<String> = None;
     let mut staging = false;
     let mut use_v2 = false;
+    let mut rekor_url: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
 
     let mut i = 1;
@@ -96,6 +101,14 @@ async fn main() {
             }
             "--v2" => {
                 use_v2 = true;
+            }
+            "--rekor-url" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("Error: --rekor-url requires a value");
+                    process::exit(1);
+                }
+                rekor_url = Some(args[i].clone());
             }
             "--help" | "-h" => {
                 print_usage(&args[0]);
@@ -171,11 +184,25 @@ async fn main() {
     };
     // Select the Rekor endpoint from the instance's own signing config so that
     // `--staging --v2` (or a custom instance) never falls back to production.
-    let config = SigningConfig::from_tuf_config_with_rekor_version(
-        &tuf_config,
-        use_v2.then_some(RekorApiVersion::V2),
-    )
-    .expect("Missing required endpoints in TUF config");
+    // An explicit `--rekor-url` is the only way to use a log the instance does
+    // not publish.
+    let config = if let Some(url) = rekor_url {
+        let mut config = SigningConfig::from_tuf_config(&tuf_config)
+            .expect("Missing required endpoints in TUF config");
+        config.rekor_url = url;
+        config.rekor_api_version = if use_v2 {
+            RekorApiVersion::V2
+        } else {
+            RekorApiVersion::V1
+        };
+        config
+    } else {
+        SigningConfig::from_tuf_config_with_rekor_version(
+            &tuf_config,
+            use_v2.then_some(RekorApiVersion::V2),
+        )
+        .expect("Missing required endpoints in TUF config")
+    };
 
     println!("  Rekor API: {:?}", config.rekor_api_version);
     println!("  Rekor URL: {}", config.rekor_url);
@@ -328,7 +355,8 @@ fn print_usage(program: &str) {
         "      --instance <URL> --tuf-root <FILE>  Custom instance with trusted TUF bootstrap"
     );
     eprintln!("      --staging        Use Sigstore staging infrastructure");
-    eprintln!("      --v2             Use Rekor V2 API (uses log2025-1.rekor.sigstore.dev)");
+    eprintln!("      --v2             Use Rekor V2 API (log from the instance's signing config)");
+    eprintln!("      --rekor-url <URL>  Use this Rekor log instead of the signing config's");
     eprintln!("  -h, --help           Print this help message");
     eprintln!();
     eprintln!("By default, Rekor V1 API is used (rekor.sigstore.dev).");

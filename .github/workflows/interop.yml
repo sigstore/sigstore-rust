@@ -113,7 +113,10 @@ jobs:
       # =========================================
       - name: "[V2] Sign with sigstore-rust --v2"
         run: |
-          ./target/release/examples/sign_blob --v2 test-artifact-v2.txt -o rust-signed-v2.sigstore.json
+          # The production signing config does not publish a Rekor v2 log yet,
+          # so name the log explicitly instead of relying on a built-in default.
+          ./target/release/examples/sign_blob --v2 --rekor-url https://log2025-1.rekor.sigstore.dev \
+            test-artifact-v2.txt -o rust-signed-v2.sigstore.json
           echo "Bundle created:"
           cat rust-signed-v2.sigstore.json | jq -r '.mediaType'
           echo "Entry kind/version:"
