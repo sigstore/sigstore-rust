@@ -788,7 +788,7 @@ mod tests {
                 requirement.selector = ServiceSelector::Exact;
                 requirement.count = count;
                 // Neither conversion entry point may discard the requirement.
-                for version in [None, Some(1)] {
+                for version in [None, Some(RekorApiVersion::V1)] {
                     let result = SigningConfig::from_tuf_config_with_rekor_version(&tuf, version);
                     assert_eq!(
                         result.is_ok(),
