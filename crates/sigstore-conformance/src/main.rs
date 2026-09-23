@@ -292,7 +292,7 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let certificate_oidc_issuer = certificate_oidc_issuer.unwrap();
 
     // Create verification policy
-    let policy = VerificationPolicy::default()
+    let policy = VerificationPolicy::any_identity()
         .require_identity(certificate_identity)
         .require_issuer(certificate_oidc_issuer);
 

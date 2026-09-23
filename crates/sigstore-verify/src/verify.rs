@@ -58,6 +58,15 @@ impl PublicKeyVerificationPolicy {
 }
 
 /// Policy for verifying certificate-based signatures.
+///
+/// Choose [`Self::new`] to authorize an identity and issuer, or explicitly opt
+/// into [`Self::any_identity`] for cryptographic verification without signer
+/// authorization. There is deliberately no `Default` policy.
+///
+/// ```compile_fail
+/// use sigstore_verify::VerificationPolicy;
+/// let _: VerificationPolicy = Default::default();
+/// ```
 #[derive(Debug, Clone)]
 pub struct VerificationPolicy {
     /// Expected identity (email or URI)
@@ -78,8 +87,19 @@ pub struct VerificationPolicy {
     pub certificate: CertificatePolicy,
 }
 
-impl Default for VerificationPolicy {
-    fn default() -> Self {
+impl VerificationPolicy {
+    /// Require both an exact certificate identity and its OIDC issuer.
+    pub fn new(identity: impl Into<String>, issuer: impl Into<String>) -> Self {
+        Self::any_identity()
+            .require_identity(identity)
+            .require_issuer(issuer)
+    }
+
+    /// Verify cryptography without authorizing a particular signer.
+    ///
+    /// Any identity accepted by the configured certificate authorities may
+    /// verify. Applications must authorize the result separately before use.
+    pub fn any_identity() -> Self {
         Self {
             identity: None,
             issuer: None,
@@ -87,14 +107,12 @@ impl Default for VerificationPolicy {
             certificate: CertificatePolicy::Verify { verify_sct: true },
         }
     }
-}
 
-impl VerificationPolicy {
     /// Create a policy that requires a specific identity
     pub fn with_identity(identity: impl Into<String>) -> Self {
         Self {
             identity: Some(identity.into()),
-            ..Default::default()
+            ..Self::any_identity()
         }
     }
 
@@ -102,7 +120,7 @@ impl VerificationPolicy {
     pub fn with_issuer(issuer: impl Into<String>) -> Self {
         Self {
             issuer: Some(issuer.into()),
-            ..Default::default()
+            ..Self::any_identity()
         }
     }
 
@@ -171,35 +189,77 @@ impl VerificationPolicy {
 /// Result of verification
 ///
 /// This is returned only when verification *succeeds* — any failure is reported
-/// as an [`Err`]. It carries metadata extracted during verification (identity,
-/// issuer, integrated time) plus any non-fatal warnings.
+/// as an [`Err`]. Metadata and evidence are read-only. Check the evidence
+/// getters when accepting results from callers that may use relaxed policies.
+/// Identity/issuer values are certificate claims, not proof of authorization.
+///
+/// ```compile_fail
+/// let result = sigstore_verify::VerificationResult::new();
+/// ```
+/// ```compile_fail
+/// let _: sigstore_verify::VerificationResult = Default::default();
+/// ```
 #[derive(Debug)]
 pub struct VerificationResult {
-    /// Identity from the certificate
-    pub identity: Option<String>,
-    /// Issuer from the certificate
-    pub issuer: Option<String>,
-    /// Integrated time from transparency log
-    pub integrated_time: Option<jiff::Timestamp>,
-    /// Any warnings during verification
-    pub warnings: Vec<String>,
+    identity: Option<String>,
+    issuer: Option<String>,
+    integrated_time: Option<jiff::Timestamp>,
+    certificate_verified: bool,
+    sct_verified: bool,
+    tlog_verified: bool,
+    identity_policy_checked: bool,
+    verified_timestamps: Vec<jiff::Timestamp>,
 }
 
 impl VerificationResult {
     /// Create an empty result to be populated as verification proceeds.
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             identity: None,
             issuer: None,
             integrated_time: None,
-            warnings: Vec::new(),
+            certificate_verified: false,
+            sct_verified: false,
+            tlog_verified: false,
+            identity_policy_checked: false,
+            verified_timestamps: Vec::new(),
         }
     }
-}
 
-impl Default for VerificationResult {
-    fn default() -> Self {
-        Self::new()
+    /// Certificate SAN claim, if present; see [`Self::certificate_verified`].
+    pub fn identity(&self) -> Option<&str> {
+        self.identity.as_deref()
+    }
+    /// Certificate OIDC issuer claim, if present.
+    pub fn issuer(&self) -> Option<&str> {
+        self.issuer.as_deref()
+    }
+    /// An authenticated Rekor v1 integrated time, if inclusion was verified.
+    pub fn integrated_time(&self) -> Option<jiff::Timestamp> {
+        self.integrated_time
+    }
+    /// Whether the signing certificate's chain, EKU and validity were checked.
+    pub fn certificate_verified(&self) -> bool {
+        self.certificate_verified
+    }
+    /// Whether the signing certificate's SCT was verified.
+    pub fn sct_verified(&self) -> bool {
+        self.sct_verified
+    }
+    /// Whether transparency-log inclusion and checkpoints were verified.
+    pub fn tlog_verified(&self) -> bool {
+        self.tlog_verified
+    }
+    /// Whether an identity and/or issuer constraint was matched.
+    ///
+    /// Matching claims is not authorization unless the certificate was also verified.
+    pub fn identity_policy_checked(&self) -> bool {
+        self.identity_policy_checked
+    }
+    /// All authenticated times used during verification (not unsigned hints).
+    /// Managed-key verification does not use TSA tokens for certificate validation.
+    pub fn verified_timestamps(&self) -> &[jiff::Timestamp] {
+        &self.verified_timestamps
     }
 }
 
@@ -207,6 +267,9 @@ impl Default for VerificationResult {
 pub struct Verifier {
     /// Trusted root containing verification material
     trusted_root: TrustedRoot,
+    rekor_keys: sigstore_crypto::Keyring,
+    pub(crate) ct_keys: Vec<(SigningScheme, sigstore_crypto::Keyring)>,
+    pub(crate) fulcio_anchors: Vec<crate::verify_impl::helpers::FulcioAnchor>,
 }
 
 impl Verifier {
@@ -214,10 +277,85 @@ impl Verifier {
     ///
     /// The trusted root is required and contains all cryptographic material
     /// needed for verification (Fulcio CA certs, Rekor keys, TSA certs, etc.)
-    pub fn new(trusted_root: &TrustedRoot) -> Self {
-        Self {
-            trusted_root: trusted_root.clone(),
+    ///
+    /// Prepares configured keys and certificates, rejecting malformed,
+    /// unsupported, duplicate or invalid-window trust material before artifact
+    /// I/O. Empty authority lists are allowed for managed-key or relaxed policies.
+    pub fn new(trusted_root: &TrustedRoot) -> Result<Self> {
+        use sigstore_crypto::{Keyring, VerificationKey};
+        use sigstore_types::Sha256Hash;
+        let mut ids = std::collections::HashSet::new();
+        let logs = trusted_root
+            .tlogs
+            .iter()
+            .map(|log| (true, &log.log_id, &log.public_key))
+            .chain(
+                trusted_root
+                    .ctlogs
+                    .iter()
+                    .map(|log| (false, &log.log_id, &log.public_key)),
+            );
+        for (is_rekor, id, public_key) in logs {
+            validate_trust_window(public_key.valid_for)?;
+            let id = Sha256Hash::try_from_slice(id.key_id.as_bytes())?;
+            if !ids.insert((is_rekor, id)) {
+                return Err(Error::Verification(format!(
+                    "duplicate trusted log ID: {}",
+                    id.to_hex()
+                )));
+            }
+            if is_rekor {
+                VerificationKey::from_spki(&public_key.raw_bytes)?;
+            } else {
+                VerificationKey::from_spki(&public_key.raw_bytes).or_else(|_| {
+                    VerificationKey::from_der(&public_key.raw_bytes, SigningScheme::RsaPkcs1Sha256)
+                })?;
+            }
         }
+        let rekor_keys = trusted_root.rekor_keys()?;
+        let ct_keys: Vec<(SigningScheme, Keyring)> = [
+            SigningScheme::EcdsaP256Sha256,
+            SigningScheme::EcdsaP384Sha384,
+            SigningScheme::RsaPkcs1Sha256,
+            SigningScheme::RsaPkcs1Sha384,
+            SigningScheme::RsaPkcs1Sha512,
+        ]
+        .into_iter()
+        .map(|scheme| Ok((scheme, trusted_root.ctfe_keys(scheme)?)))
+        .collect::<Result<_>>()?;
+        let mut fulcio_anchors = Vec::new();
+        let authorities = trusted_root
+            .certificate_authorities
+            .iter()
+            .map(|ca| (true, &ca.cert_chain, ca.valid_for))
+            .chain(
+                trusted_root
+                    .timestamp_authorities
+                    .iter()
+                    .map(|tsa| (false, &tsa.cert_chain, tsa.valid_for)),
+            );
+        for (is_fulcio, chain, window) in authorities {
+            validate_trust_window(window)?;
+            if chain.certificates.is_empty() {
+                return Err(Error::Verification(
+                    "trusted authority has an empty certificate chain".into(),
+                ));
+            }
+            for cert in &chain.certificates {
+                let der = rustls_pki_types::CertificateDer::from(cert.raw_bytes.as_bytes());
+                let anchor =
+                    webpki::anchor_from_trusted_cert(&der).map_err(Error::TrustedCertificate)?;
+                if is_fulcio {
+                    fulcio_anchors.push((anchor.to_owned(), window));
+                }
+            }
+        }
+        Ok(Self {
+            trusted_root: trusted_root.clone(),
+            rekor_keys,
+            ct_keys,
+            fulcio_anchors,
+        })
     }
 
     /// Verify an artifact against a bundle
@@ -235,9 +373,9 @@ impl Verifier {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let trusted_root = TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)?;
-    /// let verifier = Verifier::new(&trusted_root);
+    /// let verifier = Verifier::new(&trusted_root)?;
     /// let bundle: Bundle = todo!();
-    /// let policy = VerificationPolicy::default();
+    /// let policy = VerificationPolicy::any_identity();
     ///
     /// // Option 1: Verify with raw bytes
     /// let artifact_bytes = b"hello world";
@@ -359,6 +497,7 @@ impl Verifier {
             bundle,
             &signature,
             &self.trusted_root,
+            &self.rekor_keys,
         )?;
 
         // (1): Verify that the signing certificate chains to the root of trust,
@@ -379,7 +518,7 @@ impl Verifier {
                 issuer_spki = Some(crate::verify_impl::helpers::verify_certificate_chain(
                     &bundle.verification_material.content,
                     validation_time,
-                    &self.trusted_root,
+                    &self.fulcio_anchors,
                 )?);
 
                 // Also verify the certificate is within its validity period
@@ -398,10 +537,13 @@ impl Verifier {
                 crate::verify_impl::sct::verify_sct(
                     cert.as_bytes(),
                     issuer_spki.as_bytes(),
-                    &self.trusted_root,
+                    &self.ct_keys,
                 )?;
+                result.sct_verified = true;
             }
+            result.certificate_verified = true;
         }
+        result.verified_timestamps = validation_times;
 
         // (3): Verify against the given `VerificationPolicy`.
 
@@ -442,6 +584,8 @@ impl Verifier {
             }
         }
 
+        result.identity_policy_checked = policy.identity.is_some() || policy.issuer.is_some();
+
         // (4): Verify the inclusion proof and signed checkpoint for the log entry.
         // (5): Verify the inclusion promise for the log entry, if present.
         // (6): Verify the timely insertion of the log entry against the validity
@@ -449,11 +593,12 @@ impl Verifier {
         if policy.verify_tlog {
             let integrated_time = crate::verify_impl::tlog::verify_tlog_entries(
                 bundle,
-                &self.trusted_root,
+                &self.rekor_keys,
                 cert_info.not_before,
                 cert_info.not_after,
             )?;
 
+            result.tlog_verified = true;
             if let Some(time) = integrated_time {
                 result.integrated_time = Some(time);
             }
@@ -518,7 +663,7 @@ impl Verifier {
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let trusted_root = TrustedRoot::from_file("trusted_root.json")?;
-    /// let verifier = Verifier::new(&trusted_root);
+    /// let verifier = Verifier::new(&trusted_root)?;
     /// let bundle = Bundle::from_json(&std::fs::read_to_string("artifact.sigstore.json")?)?;
     /// let public_key = DerPublicKey::from_pem(&std::fs::read_to_string("key.pub")?)?;
     /// let artifact = std::fs::read("artifact.txt")?;
@@ -612,7 +757,7 @@ impl Verifier {
         // SETs) without certificate time validation.
         if policy.verify_tlog {
             for entry in &bundle.verification_material.tlog_entries {
-                crate::verify_impl::tlog::verify_entry_inclusion(entry, &self.trusted_root)?;
+                crate::verify_impl::tlog::verify_entry_inclusion(entry, &self.rekor_keys)?;
 
                 let is_rekor_v1 = matches!(
                     entry.kind_version,
@@ -625,9 +770,11 @@ impl Verifier {
                             jiff::Timestamp::now(),
                         )?;
                         result.integrated_time = Some(time);
+                        result.verified_timestamps.push(time);
                     }
                 }
             }
+            result.tlog_verified = true;
         }
 
         // Verify the signature
@@ -663,6 +810,15 @@ impl Verifier {
 
         Ok(result)
     }
+}
+
+fn validate_trust_window(window: Option<sigstore_types::TimeRange>) -> Result<()> {
+    if window.is_some_and(|range| range.end.is_some_and(|end| end < range.start)) {
+        return Err(Error::Verification(
+            "trusted validity window ends before it starts".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Check that a `MessageSignature`'s declared `messageDigest`, if any, matches
@@ -826,7 +982,7 @@ fn verify_message_signature_crypto(
 /// let bundle = Bundle::from_json(&bundle_json)?;
 /// let artifact = std::fs::read("artifact.txt")?;
 ///
-/// verify(&artifact, &bundle, &sigstore_verify::VerificationPolicy::default(), &trusted_root)?;
+/// verify(&artifact, &bundle, &sigstore_verify::VerificationPolicy::any_identity(), &trusted_root)?;
 /// # Ok(())
 /// # }
 /// ```
@@ -836,7 +992,7 @@ pub fn verify<'a>(
     policy: &VerificationPolicy,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
-    Verifier::new(trusted_root).verify(artifact, bundle, policy)
+    Verifier::new(trusted_root)?.verify(artifact, bundle, policy)
 }
 
 /// Convenience function to verify a managed-key bundle with a caller-supplied
@@ -879,7 +1035,7 @@ pub fn verify_with_key<'a>(
     policy: &PublicKeyVerificationPolicy,
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
-    Verifier::new(trusted_root).verify_with_key(artifact, bundle, public_key, policy)
+    Verifier::new(trusted_root)?.verify_with_key(artifact, bundle, public_key, policy)
 }
 
 #[cfg(test)]
@@ -899,7 +1055,7 @@ mod tests {
 
     #[test]
     fn test_verification_policy_default() {
-        let policy = VerificationPolicy::default();
+        let policy = VerificationPolicy::any_identity();
         assert!(policy.verify_tlog);
         assert_eq!(
             policy.certificate,
@@ -909,7 +1065,7 @@ mod tests {
 
     #[test]
     fn test_verification_policy_builder() {
-        let policy = VerificationPolicy::default()
+        let policy = VerificationPolicy::any_identity()
             .require_identity("test@example.com")
             .require_issuer("https://accounts.google.com")
             .skip_tlog_unsafe();
@@ -924,7 +1080,7 @@ mod tests {
 
     #[test]
     fn test_skip_sct_keeps_certificate_chain_verification() {
-        let policy = VerificationPolicy::default().skip_sct();
+        let policy = VerificationPolicy::any_identity().skip_sct();
 
         assert_eq!(
             policy.certificate,
@@ -934,7 +1090,7 @@ mod tests {
 
     #[test]
     fn test_skip_certificate_chain_preserves_legacy_sct_skip() {
-        let policy = VerificationPolicy::default().skip_certificate_chain();
+        let policy = VerificationPolicy::any_identity().skip_certificate_chain();
 
         assert_eq!(policy.certificate, CertificatePolicy::Skip);
     }

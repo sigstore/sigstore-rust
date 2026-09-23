@@ -21,6 +21,14 @@ pub enum Error {
     #[error("Bundle error: {0}")]
     Bundle(#[from] sigstore_bundle::Error),
 
+    /// Invalid trust-root configuration.
+    #[error("Trust root error: {0}")]
+    TrustRoot(#[from] sigstore_trust_root::Error),
+
+    /// A configured authority certificate could not be parsed.
+    #[error("invalid trusted certificate: {0}")]
+    TrustedCertificate(#[source] webpki::Error),
+
     /// Failed to read artifact input.
     #[error("failed to read artifact: {0}")]
     ArtifactRead(#[source] std::io::Error),
