@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-rekor-v0.12.0...sigstore-rekor-v0.13.0) - 2026-09-23
+
+### Fixed
+
+- *(rekor)* [**breaking**] parse dsse v0.0.2 entries signed with a public key ([#232](https://github.com/sigstore/sigstore-rust/pull/232))
+- *(types)* [**breaking**] keep checkpoint fields consistent with the signed note ([#229](https://github.com/sigstore/sigstore-rust/pull/229))
+
 ## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-rekor-v0.11.0...sigstore-rekor-v0.12.0) - 2026-09-23
 
 ### Added

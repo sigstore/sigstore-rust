@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-sign-v0.12.0...sigstore-sign-v0.13.0) - 2026-09-23
+
+### Fixed
+
+- *(sign)* repair tests broken by independently merged #226/#227/#231 ([#234](https://github.com/sigstore/sigstore-rust/pull/234))
+- *(sign)* [**breaking**] keep the configured instance when selecting a Rekor version ([#227](https://github.com/sigstore/sigstore-rust/pull/227))
+- [**breaking**] restore fixes dropped from the pre-1.0 stack (#214–#219) ([#226](https://github.com/sigstore/sigstore-rust/pull/226))
+
 ## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-sign-v0.11.0...sigstore-sign-v0.12.0) - 2026-09-23
 
 ### Added
