@@ -289,25 +289,62 @@ impl FulcioClientBuilder {
 
 /// OIDC configuration response
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Configuration {
     /// List of supported OIDC issuers
+    #[serde(default)]
     pub issuers: Vec<OIDCIssuer>,
 }
 
+/// How an OIDC issuer is identified (the `issuer` oneof in Fulcio's API)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum IssuerUrl {
+    /// An exact issuer URL
+    #[serde(rename = "issuerUrl")]
+    Exact(String),
+    /// An issuer URL pattern, e.g. `https://oidc.eks.*.amazonaws.com/id/*`.
+    ///
+    /// Fulcio replaces each `*` with `[-_a-zA-Z0-9]+` when matching.
+    #[serde(rename = "wildcardIssuerUrl")]
+    Wildcard(String),
+}
+
 /// OIDC issuer configuration
+///
+/// Optional string fields that Fulcio sends as empty strings are exposed as `None`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct OIDCIssuer {
-    /// Issuer URL
-    pub issuer_url: String,
+    /// Issuer URL, either exact or a wildcard pattern
+    #[serde(flatten)]
+    pub issuer: IssuerUrl,
     /// Audience
+    #[serde(default)]
     pub audience: String,
     /// Challenge claim
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_as_none")]
     pub challenge_claim: Option<String>,
     /// SPIFFE trust domain
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_as_none")]
     pub spiffe_trust_domain: Option<String>,
+    /// Identity provider type (e.g. `email`, `ci-provider`, `kubernetes`)
+    #[serde(default, deserialize_with = "empty_as_none")]
+    pub issuer_type: Option<String>,
+    /// Expected subject domain for URI or username identities
+    #[serde(default, deserialize_with = "empty_as_none")]
+    pub subject_domain: Option<String>,
+    /// Whether Fulcio skips email verification for this issuer
+    #[serde(default)]
+    pub skip_email_verification: bool,
+}
+
+fn empty_as_none<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.filter(|value| !value.is_empty()))
 }
 
 /// Request to create a signing certificate

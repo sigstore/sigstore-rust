@@ -37,6 +37,7 @@ pub mod client;
 pub mod error;
 
 pub use client::{
-    Configuration, FulcioClient, FulcioClientBuilder, SigningCertificate, TrustBundle,
+    Configuration, FulcioClient, FulcioClientBuilder, IssuerUrl, OIDCIssuer, SigningCertificate,
+    TrustBundle,
 };
 pub use error::{Error, Result};
