@@ -80,14 +80,25 @@ impl ServiceEndpoint {
     }
 }
 
-/// Service selector configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// How many of the eligible services a client should use
+/// (`ServiceSelector` in protobuf-specs).
+///
+/// A configuration that omits the selector is treated as [`ServiceSelector::Any`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
 pub enum ServiceSelector {
-    /// Use any available service
+    /// The selector was explicitly left unset (`SERVICE_SELECTOR_UNDEFINED`).
+    ///
+    /// Clients should reject this rather than guess a policy.
+    #[serde(rename = "SERVICE_SELECTOR_UNDEFINED")]
+    Undefined,
+    /// Use all eligible services
+    All,
+    /// Use any one eligible service
     #[default]
     Any,
-    /// Use exactly the specified number of services
+    /// Use exactly [`ServiceConfiguration::count`] eligible services
     Exact,
 }
 
@@ -329,5 +340,39 @@ mod tests {
             .valid_for
             .contains("2021-01-01T00:00:01Z".parse().unwrap()));
         assert!(!endpoint.is_valid());
+    }
+
+    #[test]
+    fn test_service_selectors_parse() {
+        for (json, expected) in [
+            ("ALL", ServiceSelector::All),
+            ("ANY", ServiceSelector::Any),
+            ("EXACT", ServiceSelector::Exact),
+            ("SERVICE_SELECTOR_UNDEFINED", ServiceSelector::Undefined),
+        ] {
+            let config: ServiceConfiguration =
+                serde_json::from_str(&format!(r#"{{"selector": "{json}", "count": 2}}"#)).unwrap();
+            assert_eq!(config.selector, expected);
+            assert_eq!(config.count, Some(2));
+            assert_eq!(
+                serde_json::to_value(expected).unwrap(),
+                serde_json::Value::String(json.to_string())
+            );
+        }
+
+        let omitted: ServiceConfiguration = serde_json::from_str("{}").unwrap();
+        assert_eq!(omitted.selector, ServiceSelector::Any);
+        assert!(serde_json::from_str::<ServiceConfiguration>(r#"{"selector": "SOME"}"#).is_err());
+    }
+
+    #[test]
+    fn test_signing_config_with_all_selector() {
+        let mut json: serde_json::Value =
+            serde_json::from_str(crate::SIGSTORE_PRODUCTION_SIGNING_CONFIG).unwrap();
+        json["rekorTlogConfig"] = serde_json::json!({"selector": "ALL"});
+        json["tsaConfig"] = serde_json::json!({"selector": "ALL"});
+        let config = SigningConfig::from_json(&json.to_string()).unwrap();
+        assert_eq!(config.rekor_tlog_config.selector, ServiceSelector::All);
+        assert_eq!(config.tsa_config.selector, ServiceSelector::All);
     }
 }
