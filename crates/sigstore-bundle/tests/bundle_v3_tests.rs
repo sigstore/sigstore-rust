@@ -124,11 +124,11 @@ fn test_v3_bundle_checkpoint_parsing() {
     let checkpoint = proof.checkpoint.checkpoint().unwrap();
 
     assert_eq!(
-        checkpoint.origin,
+        checkpoint.origin(),
         "rekor.sigstage.dev - 8050909264565447525"
     );
-    assert_eq!(checkpoint.tree_size, 25901138);
-    assert_eq!(checkpoint.root_hash.as_bytes().len(), 32); // Sha256Hash is always 32 bytes
+    assert_eq!(checkpoint.tree_size(), 25901138);
+    assert_eq!(checkpoint.root_hash().as_bytes().len(), 32); // Sha256Hash is always 32 bytes
 }
 
 #[test]

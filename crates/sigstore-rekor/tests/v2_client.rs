@@ -214,8 +214,8 @@ async fn reads_v2_checkpoint_and_tile_storage_paths() {
         b"example.com/log\n1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n\n\xe2\x80\x94 example.com/log AAAAAAA=\n",
     );
     let checkpoint = RekorV2Client::new(url).get_checkpoint().await.unwrap();
-    assert_eq!(checkpoint.origin, "example.com/log");
-    assert_eq!(checkpoint.tree_size, 1);
+    assert_eq!(checkpoint.origin(), "example.com/log");
+    assert_eq!(checkpoint.tree_size(), 1);
     assert!(checkpoint_request
         .recv()
         .unwrap()
