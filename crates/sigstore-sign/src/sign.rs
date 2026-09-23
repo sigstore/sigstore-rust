@@ -819,7 +819,7 @@ mod tests {
                     } else {
                         (&mut tuf.rekor_tlog_config, &mut tuf.rekor_tlog_urls)
                     };
-                    requirement.selector = selector.clone();
+                    requirement.selector = selector;
                     requirement.count = Some(1);
                     match unavailable {
                         "missing" => endpoints.clear(),
