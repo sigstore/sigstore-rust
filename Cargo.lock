@@ -1989,7 +1989,6 @@ dependencies = [
  "jiff",
  "serde_json",
  "sigstore-merkle",
- "sigstore-rekor",
  "sigstore-types",
  "thiserror",
 ]

@@ -15,6 +15,10 @@ Timestamps provide trusted third-party evidence of when a signature was created,
 - **Timestamp verification**: Verify timestamp tokens against TSA certificates
 - **Multiple TSAs**: Built-in support for Sigstore TSA and FreeTSA
 
+HTTP clients require the `client` feature, enabled by the default `rustls` feature.
+Use `default-features = false` for offline ASN.1 parsing and timestamp verification
+without reqwest or Tokio. `native-tls` enables the client with the alternative TLS backend.
+
 ## Usage
 
 ```rust
@@ -22,10 +26,7 @@ use sigstore_tsa::TimestampClient;
 
 // Get a timestamp from the Sigstore TSA
 let client = TimestampClient::sigstore();
-let timestamp_token = client.timestamp_sha256(&digest).await?;
-
-// Or use the convenience function
-let token = sigstore_tsa::timestamp_sigstore(&digest).await?;
+let timestamp_token = client.timestamp_signature(&signature).await?;
 ```
 
 ## ASN.1 Types
