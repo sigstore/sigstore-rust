@@ -788,7 +788,7 @@ mod tests {
                 requirement.selector = ServiceSelector::Exact;
                 requirement.count = count;
                 // Neither conversion entry point may discard the requirement.
-                for version in [None, Some(1)] {
+                for version in [None, Some(RekorApiVersion::V1)] {
                     let result = SigningConfig::from_tuf_config_with_rekor_version(&tuf, version);
                     assert_eq!(
                         result.is_ok(),
@@ -819,7 +819,7 @@ mod tests {
                     } else {
                         (&mut tuf.rekor_tlog_config, &mut tuf.rekor_tlog_urls)
                     };
-                    requirement.selector = selector.clone();
+                    requirement.selector = selector;
                     requirement.count = Some(1);
                     match unavailable {
                         "missing" => endpoints.clear(),
@@ -892,7 +892,8 @@ mod tests {
                     "validFor": {"start": "2020-01-01T00:00:00Z"}}],
                 "rekorTlogUrls": [{"url": "https://rekor.example", "majorApiVersion": 1,
                     "validFor": {"start": "2020-01-01T00:00:00Z"}}],
-                "tsaUrls": [],
+                "tsaUrls": [{"url": "https://tsa.example", "majorApiVersion": 1,
+                    "validFor": {"start": "2020-01-01T00:00:00Z"}}],
                 "oidcUrls": []
             }"#,
         )
