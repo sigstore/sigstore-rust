@@ -4,6 +4,7 @@ use thiserror::Error;
 
 /// Errors that can occur in TSA operations
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// HTTP request error
     #[error("HTTP error: {0}")]
@@ -21,17 +22,18 @@ pub enum Error {
     #[error("Invalid timestamp response: {0}")]
     InvalidResponse(String),
 
-    /// Failed to parse timestamp response
-    #[error("Failed to parse timestamp response: {0}")]
-    ParseError(String),
-
     /// Failed to verify timestamp signature
     #[error("Failed to verify timestamp signature: {0}")]
     SignatureVerificationError(String),
 
     /// Timestamp message hash does not match signature
     #[error("Timestamp message hash mismatch: expected {expected}, got {actual}")]
-    HashMismatch { expected: String, actual: String },
+    HashMismatch {
+        /// The hex-encoded digest the token commits to
+        expected: String,
+        /// The hex-encoded digest computed locally
+        actual: String,
+    },
 
     /// Timestamp response indicates failure status
     #[error("Timestamp response indicates failure status")]
@@ -53,8 +55,8 @@ pub enum Error {
     #[error("TSA certificate validation failed: {0}")]
     CertificateValidationError(String),
 
-    /// Timestamp parsing error
-    #[error("Timestamp parsing error: {0}")]
+    /// The timestamp response or token could not be parsed
+    #[error("Failed to parse timestamp response: {0}")]
     Parse(String),
 
     /// The token is authentic, but its signed time falls outside the

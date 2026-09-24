@@ -24,19 +24,14 @@ without reqwest or Tokio. `native-tls` enables the client with the alternative T
 ```rust
 use sigstore_tsa::TimestampClient;
 
-// Get a timestamp from the Sigstore TSA
-let client = TimestampClient::sigstore();
+// The TSA URL comes from the Sigstore instance's signing config
+let client = TimestampClient::new("https://timestamp.sigstore.dev/api/v1/timestamp")?;
 let timestamp_token = client.timestamp_signature(&signature).await?;
 ```
 
-## ASN.1 Types
-
-The crate provides ASN.1/DER types for RFC 3161 structures:
-
-- `TimeStampReq` - Timestamp request
-- `TimeStampResp` - Timestamp response
-- `TstInfo` - Timestamp token info
-- `Asn1MessageImprint` - Hash algorithm and digest (ASN.1 format)
+Verification is exposed as `verify_timestamp_for_authority`, which checks a
+token against one timestamp authority from the trusted root. The RFC 3161
+ASN.1 structures are internal to the crate.
 
 ## Related Crates
 

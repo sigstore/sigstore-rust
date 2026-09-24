@@ -9,7 +9,9 @@ use rustls_pki_types::{CertificateDer, UnixTime};
 use sigstore_crypto::CertificateInfo;
 use sigstore_trust_root::{TrustedRoot, TsaAuthority};
 use sigstore_types::bundle::VerificationMaterialContent;
-use sigstore_types::{Bundle, DerPublicKey, KindVersion, SignatureBytes, SignatureContent};
+use sigstore_types::{
+    Bundle, DerPublicKey, KindVersion, SignatureBytes, SignatureContent, TimestampToken,
+};
 use webpki::{EndEntityCert, KeyUsage, ALL_VERIFICATION_ALGS};
 
 pub(crate) type FulcioAnchor = (
@@ -40,7 +42,7 @@ pub fn extract_signature(content: &SignatureContent) -> Result<SignatureBytes> {
 /// timestamp; any timestamp that fails verification is an error.
 pub fn extract_tsa_timestamps(
     bundle: &Bundle,
-    signature_bytes: &[u8],
+    signature: &SignatureBytes,
     trusted_root: &TrustedRoot,
 ) -> Result<Vec<jiff::Timestamp>> {
     let rfc3161_timestamps = &bundle
@@ -58,8 +60,8 @@ pub fn extract_tsa_timestamps(
 
     for ts in rfc3161_timestamps {
         timestamps.push(verify_timestamp_against_authorities(
-            ts.signed_timestamp.as_bytes(),
-            signature_bytes,
+            &ts.signed_timestamp,
+            signature,
             &authorities,
         )?);
     }
@@ -77,8 +79,8 @@ pub fn extract_tsa_timestamps(
 /// first success wins. A token whose signing authority's window excludes the
 /// signed time is NOT rescued by another authority's window.
 fn verify_timestamp_against_authorities(
-    ts_bytes: &[u8],
-    signature_bytes: &[u8],
+    timestamp: &TimestampToken,
+    signature: &SignatureBytes,
     authorities: &[TsaAuthority],
 ) -> Result<jiff::Timestamp> {
     // Signed time of a token that some authority authenticated but whose
@@ -87,7 +89,7 @@ fn verify_timestamp_against_authorities(
     let mut last_error: Option<String> = None;
 
     for authority in authorities {
-        match sigstore_tsa::verify_timestamp_for_authority(ts_bytes, signature_bytes, authority) {
+        match sigstore_tsa::verify_timestamp_for_authority(timestamp, signature, authority) {
             Ok(time) => return Ok(time),
             Err(sigstore_tsa::Error::TimestampOutsideValidity { time }) => {
                 rejected_time = Some(time);
@@ -196,7 +198,7 @@ pub fn determine_validation_times(
     trusted_root: &TrustedRoot,
     rekor_keys: &sigstore_crypto::Keyring,
 ) -> Result<Vec<jiff::Timestamp>> {
-    let mut times = extract_tsa_timestamps(bundle, signature.as_bytes(), trusted_root)?;
+    let mut times = extract_tsa_timestamps(bundle, signature, trusted_root)?;
     times.extend(extract_v1_integrated_times_with_promise(
         bundle, rekor_keys,
     )?);
@@ -496,7 +498,7 @@ mod tests {
         fn verify_bundle_timestamp(root: &TrustedRoot) -> Result<Option<i64>> {
             let bundle = Bundle::from_json(TSA_BUNDLE).unwrap();
             let signature = extract_signature(&bundle.content).unwrap();
-            let timestamps = extract_tsa_timestamps(&bundle, signature.as_bytes(), root)?;
+            let timestamps = extract_tsa_timestamps(&bundle, &signature, root)?;
             Ok(timestamps.first().map(|t| t.as_second()))
         }
 
@@ -654,7 +656,7 @@ mod tests {
             let bundle = Bundle::from_json(GITHUB_TSA_BUNDLE).unwrap();
             let signature = extract_signature(&bundle.content).unwrap();
             let root = TrustedRoot::from_json(GITHUB_TRUSTED_ROOT).unwrap();
-            let timestamps = extract_tsa_timestamps(&bundle, signature.as_bytes(), &root)
+            let timestamps = extract_tsa_timestamps(&bundle, &signature, &root)
                 .expect("GitHub bundle timestamp should verify");
             let time = timestamps
                 .first()
