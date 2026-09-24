@@ -372,14 +372,17 @@ base64_newtype!(
 
 /// UUID for a Rekor log entry
 ///
-/// This is the unique identifier for an entry in the transparency log.
+/// This is the unique identifier for an entry in the transparency log. It is
+/// treated as an opaque string: no format is enforced, because Rekor has
+/// used both bare entry hashes and tree-ID-prefixed UUIDs.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct EntryUuid(String);
 
 impl EntryUuid {
-    pub fn new(s: String) -> Self {
-        EntryUuid(s)
+    /// Wrap a string.
+    pub fn new(s: impl Into<String>) -> Self {
+        EntryUuid(s.into())
     }
 
     pub fn as_str(&self) -> &str {
@@ -508,13 +511,16 @@ base64_newtype!(
 /// Key ID for signature key identification
 ///
 /// Optional hint used in DSSE to identify which key was used for signing.
+/// DSSE leaves its format to the signer, so it is treated as an opaque,
+/// unauthenticated string.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct KeyId(String);
 
 impl KeyId {
-    pub fn new(s: String) -> Self {
-        KeyId(s)
+    /// Wrap a string.
+    pub fn new(s: impl Into<String>) -> Self {
+        KeyId(s.into())
     }
 
     pub fn as_str(&self) -> &str {
