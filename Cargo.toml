@@ -70,6 +70,7 @@ tokio = { version = "1.47" }
 
 # Time
 jiff = { version = "0.2", features = ["serde"] }
+zeroize = "1"
 
 # Testing
 hex = "0.4"

@@ -3,13 +3,52 @@
 use crate::error::{Error, Result};
 use ambient_id::Detector;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use zeroize::Zeroizing;
+
+/// A secret string, such as a bearer token or an authorization code.
+///
+/// The value is wiped from memory when dropped, is never printed by `Debug`,
+/// and is only reachable through [`SecretString::expose_secret`], so that
+/// every use of the secret is explicit.
+#[derive(Clone)]
+pub struct SecretString(Zeroizing<String>);
+
+impl SecretString {
+    /// Wrap a secret value.
+    pub fn new(secret: impl Into<String>) -> Self {
+        Self(Zeroizing::new(secret.into()))
+    }
+
+    /// Access the secret value.
+    pub fn expose_secret(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for SecretString {
+    fn from(secret: String) -> Self {
+        Self::new(secret)
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretString {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Self::new)
+    }
+}
+
+impl std::fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecretString(<redacted>)")
+    }
+}
 
 /// An OIDC identity token
 #[derive(Clone)]
 pub struct IdentityToken {
     /// The raw JWT token
-    raw: String,
+    raw: SecretString,
     /// Parsed claims
     claims: TokenClaims,
 }
@@ -21,7 +60,11 @@ impl std::fmt::Debug for IdentityToken {
 }
 
 /// Standard OIDC claims we care about
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// These claims are parsed without verifying the token signature and must
+/// be treated as untrusted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TokenClaims {
     /// Issuer
     pub iss: String,
@@ -31,10 +74,11 @@ pub struct TokenClaims {
     #[serde(default)]
     pub aud: Audience,
     /// Expiration time
-    pub exp: u64,
+    #[serde(with = "unix_seconds")]
+    pub exp: jiff::Timestamp,
     /// Issued at
-    #[serde(default)]
-    pub iat: u64,
+    #[serde(default, with = "unix_seconds_opt")]
+    pub iat: Option<jiff::Timestamp>,
     /// Email (Sigstore-specific)
     #[serde(default)]
     pub email: Option<String>,
@@ -47,12 +91,16 @@ pub struct TokenClaims {
 }
 
 /// Audience can be a single string or array of strings
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum Audience {
+    /// No audience claim
     #[default]
     None,
+    /// A single audience
     Single(String),
+    /// Several audiences
     Multiple(Vec<String>),
 }
 
@@ -68,7 +116,8 @@ impl Audience {
 }
 
 /// Federated claims for CI/CD environments
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FederatedClaims {
     /// Connector ID
     #[serde(default)]
@@ -100,7 +149,7 @@ impl IdentityToken {
             .map_err(|e| Error::Token(format!("failed to parse claims: {}", e)))?;
 
         Ok(Self {
-            raw: token.to_string(),
+            raw: SecretString::new(token),
             claims,
         })
     }
@@ -120,14 +169,9 @@ impl IdentityToken {
         }
     }
 
-    /// Get the raw JWT string
-    pub fn raw(&self) -> &str {
-        &self.raw
-    }
-
-    /// Get the token string (alias for raw)
-    pub fn token(&self) -> &str {
-        &self.raw
+    /// The raw JWT, for presenting the token to a service such as Fulcio.
+    pub fn expose_secret(&self) -> &str {
+        self.raw.expose_secret()
     }
 
     /// Get the issuer
@@ -151,17 +195,13 @@ impl IdentityToken {
     }
 
     /// Get the expiration time
-    pub fn expiration(&self) -> u64 {
+    pub fn expiration(&self) -> jiff::Timestamp {
         self.claims.exp
     }
 
     /// Check if the token is expired
     pub fn is_expired(&self) -> bool {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        self.claims.exp < now
+        self.claims.exp < jiff::Timestamp::now()
     }
 
     /// Get the claims
@@ -172,6 +212,51 @@ impl IdentityToken {
     /// Get the identity for Sigstore (email or subject)
     pub fn identity(&self) -> &str {
         self.claims.email.as_deref().unwrap_or(&self.claims.sub)
+    }
+}
+
+/// JWT NumericDate (seconds since the Unix epoch) as a timestamp.
+mod unix_seconds {
+    use super::*;
+
+    pub fn serialize<S: Serializer>(
+        time: &jiff::Timestamp,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_i64(time.as_second())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<jiff::Timestamp, D::Error> {
+        let seconds = i64::deserialize(deserializer)?;
+        jiff::Timestamp::from_second(seconds).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Optional JWT NumericDate; absent or zero means unset.
+mod unix_seconds_opt {
+    use super::*;
+
+    pub fn serialize<S: Serializer>(
+        time: &Option<jiff::Timestamp>,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        match time {
+            Some(time) => serializer.serialize_some(&time.as_second()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Option<jiff::Timestamp>, D::Error> {
+        match Option::<i64>::deserialize(deserializer)? {
+            None | Some(0) => Ok(None),
+            Some(seconds) => jiff::Timestamp::from_second(seconds)
+                .map(Some)
+                .map_err(serde::de::Error::custom),
+        }
     }
 }
 
@@ -223,5 +308,28 @@ mod tests {
         assert_eq!(token.email(), Some("test@example.com"));
         assert!(!token.is_expired());
         assert!(!format!("{token:?}").contains(&jwt));
+    }
+
+    #[test]
+    fn test_secret_string_is_redacted() {
+        let secret = SecretString::new("hunter2");
+        assert_eq!(secret.expose_secret(), "hunter2");
+        assert!(!format!("{secret:?}").contains("hunter2"));
+    }
+
+    #[test]
+    fn test_claim_times_are_timestamps() {
+        let claims: TokenClaims =
+            serde_json::from_str(r#"{"iss":"i","sub":"s","exp":1700000000,"iat":0}"#).unwrap();
+        assert_eq!(claims.exp.as_second(), 1_700_000_000);
+        assert_eq!(claims.iat, None);
+        let json = serde_json::to_value(&claims).unwrap();
+        assert_eq!(json["exp"], 1_700_000_000);
+
+        let claims: TokenClaims =
+            serde_json::from_str(r#"{"iss":"i","sub":"s","exp":1700000000,"iat":1699990000}"#)
+                .unwrap();
+        assert_eq!(claims.iat.unwrap().as_second(), 1_699_990_000);
+        assert!(serde_json::from_str::<TokenClaims>(r#"{"iss":"i","sub":"s"}"#).is_err());
     }
 }
