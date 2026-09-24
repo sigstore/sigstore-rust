@@ -93,10 +93,9 @@ fn test_validate_v01_bundle() {
 
     // v0.1 requires inclusion promise, not proof
     // This should fail with default options because we require proof
-    let options = ValidationOptions {
-        require_inclusion_proof: false, // v0.1 uses promise, not proof
-        require_timestamp: false,
-    };
+    let options = ValidationOptions::new()
+        .with_require_inclusion_proof(false)
+        .with_require_timestamp(false);
 
     let result = validate_bundle_with_options(&bundle, &options);
     assert!(result.is_ok(), "v0.1 validation failed: {:?}", result.err());
@@ -161,10 +160,9 @@ fn test_v03_bundle_with_timestamp() {
     );
 
     // Validate with timestamp requirement but skip proof (since we use simplified test data)
-    let options = ValidationOptions {
-        require_inclusion_proof: false, // Skip for this test since we use simplified body
-        require_timestamp: true,
-    };
+    let options = ValidationOptions::new()
+        .with_require_inclusion_proof(false)
+        .with_require_timestamp(true);
 
     let result = validate_bundle_with_options(&bundle, &options);
     assert!(
@@ -179,10 +177,9 @@ fn test_v03_bundle_with_timestamp_and_no_tlog_entries() {
     let mut bundle = Bundle::from_json(V03_BUNDLE_WITH_TIMESTAMP).expect("Failed to parse bundle");
     bundle.verification_material.tlog_entries.clear();
 
-    let options = ValidationOptions {
-        require_inclusion_proof: false,
-        require_timestamp: true,
-    };
+    let options = ValidationOptions::new()
+        .with_require_inclusion_proof(false)
+        .with_require_timestamp(true);
 
     let result = validate_bundle_with_options(&bundle, &options);
     assert!(
@@ -224,10 +221,9 @@ fn test_v03_github_attestation_no_tlog_entries() {
     );
 
     // With inclusion proof disabled, the RFC3161 timestamp satisfies validation.
-    let options = ValidationOptions {
-        require_inclusion_proof: false,
-        require_timestamp: true,
-    };
+    let options = ValidationOptions::new()
+        .with_require_inclusion_proof(false)
+        .with_require_timestamp(true);
     let result = validate_bundle_with_options(&bundle, &options);
     assert!(
         result.is_ok(),
@@ -353,11 +349,12 @@ fn test_v03_with_certificate_chain_fails() {
 
     // Should fail because v0.3 requires single certificate
     let result = validate_bundle(&bundle);
-    assert!(result.is_err(), "v0.3 should fail with certificate chain");
-    let err_msg = format!("{:?}", result.err());
     assert!(
-        err_msg.contains("single certificate"),
-        "Error should mention single certificate requirement"
+        matches!(
+            result,
+            Err(sigstore_bundle::Error::CertificateChainNotAllowed(_))
+        ),
+        "v0.3 should fail with certificate chain: {result:?}"
     );
 }
 
@@ -399,15 +396,10 @@ fn test_structural_validation_rejects_root_hash_mismatch() {
     proof.root_hash = Sha256Hash::from_bytes([0u8; 32]);
 
     let result = validate_bundle(&bundle);
-    assert!(
-        result.is_err(),
+    assert_eq!(
+        result,
+        Err(sigstore_bundle::Error::CheckpointRootMismatch),
         "proof root hash inconsistent with checkpoint root hash should fail structural validation"
-    );
-    let err_msg = format!("{:?}", result.err());
-    assert!(
-        err_msg.contains("root hash"),
-        "Error should mention root hash mismatch: {}",
-        err_msg
     );
 }
 

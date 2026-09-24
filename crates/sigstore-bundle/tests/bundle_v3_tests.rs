@@ -105,10 +105,9 @@ fn test_validate_v3_bundle_with_options() {
     let bundle = Bundle::from_json(BUNDLE_V3_JSON).unwrap();
 
     // Validate with custom options
-    let options = ValidationOptions {
-        require_inclusion_proof: true,
-        require_timestamp: false,
-    };
+    let options = ValidationOptions::new()
+        .with_require_inclusion_proof(true)
+        .with_require_timestamp(false);
 
     let result = validate_bundle_with_options(&bundle, &options);
     assert!(result.is_ok(), "Validation failed: {:?}", result.err());

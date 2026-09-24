@@ -132,10 +132,9 @@ fn test_validate_bundle_structure() {
 fn test_validate_bundle_with_inclusion_proof() {
     let bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
 
-    let options = ValidationOptions {
-        require_inclusion_proof: true,
-        require_timestamp: false,
-    };
+    let options = ValidationOptions::new()
+        .with_require_inclusion_proof(true)
+        .with_require_timestamp(false);
 
     let result = validate_bundle_with_options(&bundle, &options);
     assert!(result.is_ok(), "Validation failed: {:?}", result.err());

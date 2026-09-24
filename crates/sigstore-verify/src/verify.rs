@@ -920,10 +920,9 @@ fn signing_scheme_for_content(
 fn validate_structure(bundle: &Bundle, verify_tlog: bool) -> Result<()> {
     validate_bundle_with_options(
         bundle,
-        &ValidationOptions {
-            require_inclusion_proof: verify_tlog,
-            require_timestamp: false,
-        },
+        &ValidationOptions::new()
+            .with_require_inclusion_proof(verify_tlog)
+            .with_require_timestamp(false),
     )
     .map_err(|e| Error::Verification(format!("bundle validation failed: {e}")))
 }

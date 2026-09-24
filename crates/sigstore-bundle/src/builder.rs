@@ -8,7 +8,7 @@ use sigstore_types::{
         VerificationMaterialContent,
     },
     Bundle, CanonicalizedBody, DerCertificate, DsseEnvelope, LogIndex, LogKeyId, MediaType,
-    Result as TypesResult, Sha256Hash, SignatureBytes, SignedTimestamp, TimestampToken,
+    Sha256Hash, SignatureBytes, SignedTimestamp, TimestampToken,
 };
 
 /// Verification material for v0.3 bundles.
@@ -130,12 +130,13 @@ impl BundleV03 {
 }
 
 /// Helper to create a transparency log entry.
+#[derive(Debug, Clone)]
 pub struct TlogEntryBuilder {
     log_index: LogIndex,
     log_id: LogKeyId,
     kind_version: KindVersion,
     integrated_time: Option<jiff::Timestamp>,
-    canonicalized_body: Vec<u8>,
+    canonicalized_body: CanonicalizedBody,
     inclusion_promise: Option<InclusionPromise>,
     inclusion_proof: Option<InclusionProof>,
 }
@@ -153,7 +154,7 @@ impl TlogEntryBuilder {
             log_id,
             kind_version,
             integrated_time: None,
-            canonicalized_body: body.as_bytes().to_vec(),
+            canonicalized_body: body,
             inclusion_promise: None,
             inclusion_proof: None,
         }
@@ -180,27 +181,23 @@ impl TlogEntryBuilder {
     /// Set the inclusion proof.
     ///
     /// # Arguments
-    /// * `log_index` - The log index
+    /// * `log_index` - The log index the proof is for
     /// * `root_hash` - The root hash
     /// * `tree_size` - The tree size
     /// * `hashes` - The proof hashes
-    /// * `checkpoint` - The checkpoint envelope
+    /// * `checkpoint` - The parsed checkpoint (see [`CheckpointData::new`])
     pub fn inclusion_proof(
         mut self,
-        log_index: u64,
+        log_index: LogIndex,
         root_hash: Sha256Hash,
         tree_size: u64,
         hashes: Vec<Sha256Hash>,
-        checkpoint: String,
-    ) -> TypesResult<Self> {
+        checkpoint: CheckpointData,
+    ) -> Self {
         self.inclusion_proof = Some(InclusionProof::new(
-            LogIndex::new(log_index)?,
-            root_hash,
-            tree_size,
-            hashes,
-            CheckpointData::new(checkpoint)?,
+            log_index, root_hash, tree_size, hashes, checkpoint,
         ));
-        Ok(self)
+        self
     }
 
     /// Build the transparency log entry.
@@ -219,7 +216,7 @@ impl TlogEntryBuilder {
             log_index,
             LogId::new(log_id),
             kind_version,
-            CanonicalizedBody::new(canonicalized_body),
+            canonicalized_body,
         );
         // The optional fields are assigned directly: the `with_*` setters take
         // present values, while the builder holds `Option`s.
