@@ -249,13 +249,18 @@ impl FulcioClient {
 /// # Example
 ///
 /// ```no_run
-/// use sigstore_fulcio::FulcioClient;
+/// use sigstore_fulcio::{reqwest, FulcioClient};
 /// use std::time::Duration;
 ///
-/// let client = FulcioClient::builder("https://fulcio.sigstore.dev")
+/// // Proxies, timeouts, TLS roots and the user agent are configured on the
+/// // HTTP client itself.
+/// let http = reqwest::Client::builder()
 ///     .timeout(Duration::from_secs(10))
 ///     .build()?;
-/// # Ok::<(), sigstore_fulcio::Error>(())
+/// let client = FulcioClient::builder("https://fulcio.sigstore.dev")
+///     .with_http_client(http)
+///     .build()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
 /// With the `cache` feature enabled:
@@ -272,8 +277,7 @@ impl FulcioClient {
 #[must_use]
 pub struct FulcioClientBuilder {
     url: String,
-    timeout: Duration,
-    user_agent: String,
+    http_client: Option<reqwest::Client>,
     #[cfg(feature = "cache")]
     cache: Option<Arc<dyn CacheAdapter>>,
 }
@@ -283,23 +287,19 @@ impl FulcioClientBuilder {
     pub fn new(url: impl Into<String>) -> Self {
         Self {
             url: url.into().trim_end_matches('/').to_string(),
-            timeout: DEFAULT_TIMEOUT,
-            user_agent: DEFAULT_USER_AGENT.to_string(),
+            http_client: None,
             #[cfg(feature = "cache")]
             cache: None,
         }
     }
 
-    /// Set the total HTTP request timeout, including reading the response body.
-    /// Defaults to 30 seconds.
-    pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-
-    /// Set the `User-Agent` header. Defaults to `sigstore-rust/<version>`.
-    pub fn user_agent(mut self, user_agent: impl Into<String>) -> Self {
-        self.user_agent = user_agent.into();
+    /// Use a caller-configured HTTP client (timeouts, proxies, TLS roots,
+    /// user agent).
+    ///
+    /// Without one, a client with a 30-second request timeout and a
+    /// `sigstore-rust/<version>` user agent is used.
+    pub fn with_http_client(mut self, http_client: reqwest::Client) -> Self {
+        self.http_client = Some(http_client);
         self
     }
 
@@ -319,11 +319,14 @@ impl FulcioClientBuilder {
 
     /// Build the client
     pub fn build(self) -> Result<FulcioClient> {
-        let client = reqwest::Client::builder()
-            .timeout(self.timeout)
-            .user_agent(self.user_agent)
-            .build()
-            .map_err(|e| Error::Http(format!("failed to build HTTP client: {e}")))?;
+        let client = match self.http_client {
+            Some(client) => client,
+            None => reqwest::Client::builder()
+                .timeout(DEFAULT_TIMEOUT)
+                .user_agent(DEFAULT_USER_AGENT)
+                .build()
+                .map_err(|e| Error::Http(format!("failed to build HTTP client: {e}")))?,
+        };
         Ok(FulcioClient {
             url: self.url,
             client,

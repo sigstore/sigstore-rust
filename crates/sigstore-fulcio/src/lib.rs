@@ -41,3 +41,5 @@ pub use client::{
     TrustBundle,
 };
 pub use error::{Error, Result};
+/// The HTTP client crate used by [`FulcioClientBuilder::with_http_client`].
+pub use reqwest;
