@@ -203,6 +203,7 @@ impl VerificationPolicy {
 pub struct VerificationResult {
     identity: Option<String>,
     issuer: Option<String>,
+    certificate: Option<sigstore_crypto::CertificateInfo>,
     integrated_time: Option<jiff::Timestamp>,
     certificate_verified: bool,
     sct_verified: bool,
@@ -217,6 +218,7 @@ impl VerificationResult {
         Self {
             identity: None,
             issuer: None,
+            certificate: None,
             integrated_time: None,
             certificate_verified: false,
             sct_verified: false,
@@ -233,6 +235,20 @@ impl VerificationResult {
     /// Certificate OIDC issuer claim, if present.
     pub fn issuer(&self) -> Option<&str> {
         self.issuer.as_deref()
+    }
+    /// The signing certificate the signature was verified against, if the bundle
+    /// carried one.
+    ///
+    /// [`Self::identity`] and [`Self::issuer`] are the two claims a policy can
+    /// match on; this exposes the rest, in particular the Fulcio CI claims in
+    /// [`CertificateInfo::ci_claims`], which describe the repository, the commit
+    /// and the build that produced the signature. Like identity and issuer they
+    /// are claims rather than proof of authorization, and are only worth
+    /// anything when [`Self::certificate_verified`] holds.
+    ///
+    /// [`CertificateInfo::ci_claims`]: sigstore_crypto::CertificateInfo::ci_claims
+    pub fn certificate(&self) -> Option<&sigstore_crypto::CertificateInfo> {
+        self.certificate.as_ref()
     }
     /// An authenticated Rekor v1 integrated time, if inclusion was verified.
     pub fn integrated_time(&self) -> Option<jiff::Timestamp> {
@@ -483,9 +499,10 @@ impl Verifier {
             .signing_certificate()
             .ok_or_else(|| Error::Verification("bundle has no signing certificate".into()))?;
 
-        // Store identity and issuer in result
+        // Store the certificate and its two matchable claims in the result
         result.identity = cert_info.identity.clone();
         result.issuer = cert_info.issuer.clone();
+        result.certificate = Some(cert_info.clone());
 
         // (0): Establish the times for the signature
         // First, establish verified times for the signature. This is required to

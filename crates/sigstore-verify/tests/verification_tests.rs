@@ -954,6 +954,32 @@ fn test_verify_conda_package_attestation() {
         Some("https://token.actions.githubusercontent.com")
     );
     assert!(verification.integrated_time().is_some());
+
+    // The verified certificate carries the CI claims describing the build the
+    // signature came from, which the identity and the issuer do not answer.
+    let certificate = verification
+        .certificate()
+        .expect("the bundle carries a signing certificate");
+    assert!(verification.certificate_verified());
+    let claims = &certificate.ci_claims;
+    assert_eq!(
+        claims.source_repository_uri.as_deref(),
+        Some("https://github.com/prefix-dev/sigstore-example")
+    );
+    assert_eq!(
+        claims.source_repository_digest.as_deref(),
+        Some("193b5bd7d3985809503963ae400594ea16df31cf")
+    );
+    assert_eq!(
+        claims.source_repository_ref.as_deref(),
+        Some("refs/heads/main")
+    );
+    assert_eq!(claims.runner_environment.as_deref(), Some("github-hosted"));
+    assert_eq!(claims.build_trigger.as_deref(), Some("push"));
+    assert_eq!(
+        claims.source_repository_visibility_at_signing.as_deref(),
+        Some("public")
+    );
 }
 
 fn conda_attestation_policy() -> VerificationPolicy {
