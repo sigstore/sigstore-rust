@@ -12,9 +12,13 @@ use tokio::fs;
 use crate::CacheResource;
 use crate::{default_cache_dir, CacheAdapter, CacheKey, Result};
 
+// Mirrors `url_to_dirname` in `sigstore-trust-root`'s TUF cache; keep the two
+// consistent until instance cache naming lives in one place.
 fn url_to_dirname(url: &str) -> String {
+    // `https://example.com` and `https://example.com/` share a directory, as
+    // they share cache keys (`CacheKey::new`).
     let mut result = String::new();
-    for byte in url.bytes() {
+    for byte in url.trim_end_matches('/').bytes() {
         match byte {
             b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
                 result.push(byte as char)
@@ -225,6 +229,10 @@ mod tests {
         assert_eq!(
             url_to_dirname("https://example.com"),
             "https%3A%2F%2Fexample.com"
+        );
+        assert_eq!(
+            url_to_dirname("https://example.com/"),
+            url_to_dirname("https://example.com")
         );
         assert_eq!(
             FileSystemCache::for_instance("..")
