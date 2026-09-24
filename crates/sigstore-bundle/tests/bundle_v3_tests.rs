@@ -148,9 +148,7 @@ fn test_v3_bundle_message_signature() {
             );
             assert!(!digest.digest.as_bytes().is_empty());
         }
-        sigstore_types::bundle::SignatureContent::DsseEnvelope(_) => {
-            panic!("Expected MessageSignature, got DsseEnvelope");
-        }
+        other => panic!("Expected MessageSignature, got {other:?}"),
     }
 }
 

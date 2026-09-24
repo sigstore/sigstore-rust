@@ -58,6 +58,11 @@ pub(crate) fn verify_tlog_consistency_with_key(
                     format.version()
                 )))
             }
+            _ => {
+                return Err(Error::Verification(
+                    "unsupported bundle signature content".to_string(),
+                ))
+            }
         }
     }
 
@@ -230,11 +235,16 @@ fn verify_intoto_v002(
             certificate_public_key(&certificate.raw_bytes)?
         }
         VerificationMaterialContent::Certificate(cert) => certificate_public_key(&cert.raw_bytes)?,
-        VerificationMaterialContent::PublicKey { .. } => managed_key.cloned().ok_or_else(|| {
+        VerificationMaterialContent::PublicKey(_) => managed_key.cloned().ok_or_else(|| {
             Error::Verification(
                 "intoto Rekor signature cannot be bound without the managed public key".to_string(),
             )
         })?,
+        _ => {
+            return Err(Error::Verification(
+                "unsupported bundle verification material".to_string(),
+            ))
+        }
     };
 
     let [rekor_sig] = rekor_envelope.signatures.as_slice() else {
@@ -314,7 +324,8 @@ mod tests {
                 sigstore_crypto::SigningScheme::EcdsaP256Sha256,
             )
             .unwrap(),
-        );
+        )
+        .unwrap();
         verify_tlog_consistency(bundle, &artifact)
     }
 
@@ -331,14 +342,13 @@ mod tests {
             VerificationMaterialContent::X509CertificateChain { certificates } => {
                 certificates[0].raw_bytes.clone()
             }
-            VerificationMaterialContent::PublicKey { .. } => {
-                panic!("fixture must use a certificate")
-            }
+            _ => panic!("fixture must use a certificate"),
         };
         let public_key = certificate_public_key(&certificate).unwrap();
-        bundle.verification_material.content = VerificationMaterialContent::PublicKey {
-            hint: sigstore_crypto::sha256(public_key.as_bytes()).to_base64(),
-        };
+        bundle.verification_material.content =
+            VerificationMaterialContent::PublicKey(sigstore_types::PublicKeyIdentifier::new(
+                sigstore_crypto::sha256(public_key.as_bytes()).to_base64(),
+            ));
         let digest = [0u8; 32];
         let artifact = PreparedArtifact::from_artifact(
             Artifact::from(Sha256Hash::from_bytes(digest)),
@@ -347,7 +357,8 @@ mod tests {
                 sigstore_crypto::SigningScheme::EcdsaP256Sha256,
             )
             .unwrap(),
-        );
+        )
+        .unwrap();
         verify_tlog_consistency_with_key(&bundle, &artifact, Some(&public_key)).unwrap();
 
         let wrong_key = DerPublicKey::new(vec![1, 2, 3]);

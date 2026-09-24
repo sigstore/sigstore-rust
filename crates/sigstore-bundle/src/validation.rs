@@ -102,6 +102,9 @@ pub fn validate_bundle_with_options(bundle: &Bundle, options: &ValidationOptions
         MediaType::Bundle0_1 => validate_v0_1(bundle, options),
         MediaType::Bundle0_2 => validate_v0_2(bundle, options),
         MediaType::Bundle0_3 => validate_v0_3(bundle, options),
+        other => Err(Error::Validation(format!(
+            "unsupported bundle media type: {other}"
+        ))),
     }
 }
 
@@ -148,7 +151,12 @@ fn validate_v0_3(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
                 "v0.3 bundle must use single certificate, not chain".to_string(),
             ));
         }
-        sigstore_types::bundle::VerificationMaterialContent::PublicKey { .. } => {}
+        sigstore_types::bundle::VerificationMaterialContent::PublicKey(_) => {}
+        _ => {
+            return Err(Error::Validation(
+                "unsupported verification material".to_string(),
+            ));
+        }
     }
 
     // v0.3 requires inclusion proof

@@ -8,6 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// - Sigstore bundle format: "SHA2_256", "SHA2_384", "SHA2_512"
 /// - Rekor API format: "sha256", "sha384", "sha512"
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HashAlgorithm {
     /// SHA2-256
     Sha2256,

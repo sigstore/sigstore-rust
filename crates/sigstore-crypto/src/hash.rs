@@ -1,5 +1,6 @@
 //! Hashing utilities using aws-lc-rs
 
+use crate::error::{Error, Result};
 use aws_lc_rs::digest::{self, Context, SHA256, SHA384, SHA512};
 use futures_io::AsyncRead;
 use sigstore_types::{ArtifactDigest, HashAlgorithm, Sha256Hash, Sha512Hash};
@@ -40,16 +41,24 @@ pub struct ArtifactHasher {
 }
 
 impl ArtifactHasher {
-    pub fn new(algorithm: HashAlgorithm) -> Self {
+    /// Start hashing with `algorithm`.
+    ///
+    /// Fails for algorithms this version of the crate cannot compute.
+    pub fn new(algorithm: HashAlgorithm) -> Result<Self> {
         let backend = match algorithm {
             HashAlgorithm::Sha2256 => &SHA256,
             HashAlgorithm::Sha2384 => &SHA384,
             HashAlgorithm::Sha2512 => &SHA512,
+            _ => {
+                return Err(Error::UnsupportedAlgorithm(format!(
+                    "cannot compute {algorithm} digests"
+                )))
+            }
         };
-        Self {
+        Ok(Self {
             algorithm,
             context: Context::new(backend),
-        }
+        })
     }
 
     pub fn update(&mut self, data: &[u8]) {
@@ -332,8 +341,8 @@ mod tests {
             let expected = sha256(&data);
 
             let mut hashers = [
-                ArtifactHasher::new(HashAlgorithm::Sha2256),
-                ArtifactHasher::new(HashAlgorithm::Sha2512),
+                ArtifactHasher::new(HashAlgorithm::Sha2256).unwrap(),
+                ArtifactHasher::new(HashAlgorithm::Sha2512).unwrap(),
             ];
             hash_reader(data.as_slice(), &mut hashers).unwrap();
             let [h256, h512] = hashers;

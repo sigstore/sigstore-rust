@@ -31,6 +31,7 @@ fn extract_artifact_digest(bundle: &Bundle) -> Option<Sha256Hash> {
             .message_digest
             .as_ref()
             .and_then(|d| Sha256Hash::try_from(&d.digest).ok()),
+        _ => None,
     }
 }
 
@@ -1235,9 +1236,9 @@ async fn invalid_certificate_does_not_consume_readers() {
     let mut bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
     bundle.verification_material.content =
         sigstore_types::bundle::VerificationMaterialContent::Certificate(
-            sigstore_types::bundle::CertificateContent {
-                raw_bytes: sigstore_types::DerCertificate::new(vec![0]),
-            },
+            sigstore_types::bundle::CertificateContent::new(sigstore_types::DerCertificate::new(
+                vec![0],
+            )),
         );
     let verifier = Verifier::new(&production_root()).unwrap();
     let mut reader = std::io::Cursor::new(b"do not consume");
@@ -1690,10 +1691,7 @@ fn managed_dsse_verifier_is_bound_even_when_tlog_verification_is_skipped() {
     let envelope = DsseEnvelope::new(
         "application/vnd.in-toto+json".into(),
         PayloadBytes::new(payload.clone()),
-        DsseSignature {
-            sig: signature.clone(),
-            keyid: KeyId::default(),
-        },
+        DsseSignature::new(signature.clone(), KeyId::default()),
     );
     let mut bundle = sigstore_bundle::BundleV03::new(
         sigstore_bundle::VerificationMaterialV03::PublicKey {
@@ -1716,17 +1714,12 @@ fn managed_dsse_verifier_is_bound_even_when_tlog_verification_is_skipped() {
             "payloadHash":{"algorithm":"sha256","value":sigstore_crypto::sha256(&payload).to_hex()},
             "signatures":[{"signature":signature.to_base64(),"verifier":PemContent::new(verifier.into_bytes())}]
         }});
-        bundle.verification_material.tlog_entries = vec![TransparencyLogEntry {
-            log_index: LogIndex::new(0).unwrap(),
-            log_id: LogId {
-                key_id: LogKeyId::from_bytes(&[0; 32]),
-            },
-            kind_version: KindVersion::DsseV001,
-            integrated_time: None,
-            inclusion_promise: None,
-            inclusion_proof: None,
-            canonicalized_body: CanonicalizedBody::new(serde_json::to_vec(&body).unwrap()),
-        }];
+        bundle.verification_material.tlog_entries = vec![TransparencyLogEntry::new(
+            LogIndex::new(0).unwrap(),
+            LogId::new(LogKeyId::from_bytes(&[0; 32])),
+            KindVersion::DsseV001,
+            CanonicalizedBody::new(serde_json::to_vec(&body).unwrap()),
+        )];
         let result = Verifier::new(&production_root()).unwrap().verify_with_key(
             b"artifact",
             &bundle,

@@ -21,10 +21,13 @@ pub(crate) type FulcioAnchor = (
 ///
 /// `DsseEnvelope` holds exactly one signature by construction, so timestamp
 /// verification necessarily authenticates the signature used by the bundle.
-pub fn extract_signature(content: &SignatureContent) -> SignatureBytes {
+pub fn extract_signature(content: &SignatureContent) -> Result<SignatureBytes> {
     match content {
-        SignatureContent::MessageSignature(msg_sig) => msg_sig.signature.clone(),
-        SignatureContent::DsseEnvelope(envelope) => envelope.signature.sig.clone(),
+        SignatureContent::MessageSignature(msg_sig) => Ok(msg_sig.signature.clone()),
+        SignatureContent::DsseEnvelope(envelope) => Ok(envelope.signature.sig.clone()),
+        _ => Err(Error::Verification(
+            "unsupported bundle signature content".to_string(),
+        )),
     }
 }
 
@@ -276,10 +279,15 @@ pub fn verify_certificate_chain(
                 .collect();
             (ee, intermediates)
         }
-        VerificationMaterialContent::PublicKey { .. } => {
+        VerificationMaterialContent::PublicKey(_) => {
             return Err(Error::Verification(
                 "public key verification not yet supported".to_string(),
             ));
+        }
+        _ => {
+            return Err(Error::Verification(
+                "unsupported bundle verification material".to_string(),
+            ))
         }
     };
 
@@ -377,7 +385,7 @@ mod tests {
             "../../test_data/bundles/cosign-v3-blob.sigstore.json"
         ))
         .unwrap();
-        let signature = extract_signature(&bundle.content);
+        let signature = extract_signature(&bundle.content).unwrap();
 
         let times = determine_validation_times(
             &bundle,
@@ -487,7 +495,7 @@ mod tests {
 
         fn verify_bundle_timestamp(root: &TrustedRoot) -> Result<Option<i64>> {
             let bundle = Bundle::from_json(TSA_BUNDLE).unwrap();
-            let signature = extract_signature(&bundle.content);
+            let signature = extract_signature(&bundle.content).unwrap();
             let timestamps = extract_tsa_timestamps(&bundle, signature.as_bytes(), root)?;
             Ok(timestamps.first().map(|t| t.as_second()))
         }
@@ -644,7 +652,7 @@ mod tests {
         #[test]
         fn selects_signing_authority_among_many_real_authorities() {
             let bundle = Bundle::from_json(GITHUB_TSA_BUNDLE).unwrap();
-            let signature = extract_signature(&bundle.content);
+            let signature = extract_signature(&bundle.content).unwrap();
             let root = TrustedRoot::from_json(GITHUB_TRUSTED_ROOT).unwrap();
             let timestamps = extract_tsa_timestamps(&bundle, signature.as_bytes(), &root)
                 .expect("GitHub bundle timestamp should verify");

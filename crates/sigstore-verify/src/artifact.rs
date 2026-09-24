@@ -65,14 +65,17 @@ impl ArtifactRequirements {
                     message_scheme: None,
                 })
             }
+            _ => Err(Error::Verification(
+                "unsupported bundle signature content".into(),
+            )),
         }
     }
 
-    fn hashers(&self) -> Vec<ArtifactHasher> {
+    fn hashers(&self) -> Result<Vec<ArtifactHasher>> {
         self.algorithms
             .iter()
             .copied()
-            .map(ArtifactHasher::new)
+            .map(|algorithm| ArtifactHasher::new(algorithm).map_err(Error::from))
             .collect()
     }
 
@@ -114,10 +117,10 @@ impl<'a> PreparedArtifact<'a> {
     pub(crate) fn from_artifact(
         artifact: Artifact<'a>,
         requirements: &ArtifactRequirements,
-    ) -> Self {
-        match artifact {
+    ) -> Result<Self> {
+        Ok(match artifact {
             Artifact::Blob(blob) => {
-                let mut hashers = requirements.hashers();
+                let mut hashers = requirements.hashers()?;
                 for hasher in &mut hashers {
                     hasher.update(blob);
                 }
@@ -130,7 +133,12 @@ impl<'a> PreparedArtifact<'a> {
                 blob: None,
                 digests: vec![digest],
             },
-        }
+            other => {
+                return Err(Error::Verification(format!(
+                    "unsupported artifact input: {other:?}"
+                )))
+            }
+        })
     }
 
     pub(crate) fn from_reader(
@@ -138,7 +146,7 @@ impl<'a> PreparedArtifact<'a> {
         requirements: &ArtifactRequirements,
     ) -> Result<PreparedArtifact<'static>> {
         requirements.check_reader()?;
-        let mut hashers = requirements.hashers();
+        let mut hashers = requirements.hashers()?;
         hash_reader(reader, &mut hashers).map_err(Error::ArtifactRead)?;
         Ok(Self::from_digests(Self::finalize(hashers)))
     }
@@ -148,7 +156,7 @@ impl<'a> PreparedArtifact<'a> {
         requirements: &ArtifactRequirements,
     ) -> Result<PreparedArtifact<'static>> {
         requirements.check_reader()?;
-        let mut hashers = requirements.hashers();
+        let mut hashers = requirements.hashers()?;
         hash_async_reader(reader, &mut hashers)
             .await
             .map_err(Error::ArtifactRead)?;
@@ -206,10 +214,9 @@ mod tests {
 
     #[test]
     fn scheme_and_subjects_select_the_required_digests() {
-        let message = SignatureContent::MessageSignature(sigstore_types::MessageSignature {
-            message_digest: None,
-            signature: SignatureBytes::from_bytes(b"unused"),
-        });
+        let message = SignatureContent::MessageSignature(sigstore_types::MessageSignature::new(
+            SignatureBytes::from_bytes(b"unused"),
+        ));
         let requirements =
             ArtifactRequirements::new(&message, SigningScheme::EcdsaP384Sha384).unwrap();
         let artifact = PreparedArtifact::from_reader(&b"hello"[..], &requirements).unwrap();
@@ -222,7 +229,7 @@ mod tests {
         assert_eq!(reader.position(), 0);
 
         let hash = sigstore_crypto::sha512(b"hello").to_hex();
-        let content = SignatureContent::DsseEnvelope(DsseEnvelope::new("application/vnd.in-toto+json".into(), PayloadBytes::new(format!(r#"{{"_type":"https://in-toto.io/Statement/v1","subject":[{{"digest":{{"sha512":"{hash}"}}}}],"predicateType":"p","predicate":{{}}}}"#).into_bytes()), DsseSignature { sig: SignatureBytes::from_bytes(b"unused"), keyid: Default::default() }));
+        let content = SignatureContent::DsseEnvelope(DsseEnvelope::new("application/vnd.in-toto+json".into(), PayloadBytes::new(format!(r#"{{"_type":"https://in-toto.io/Statement/v1","subject":[{{"digest":{{"sha512":"{hash}"}}}}],"predicateType":"p","predicate":{{}}}}"#).into_bytes()), DsseSignature::new(SignatureBytes::from_bytes(b"unused"), Default::default())));
         let requirements = ArtifactRequirements::new(&content, SigningScheme::Ed25519).unwrap();
         assert_eq!(requirements.algorithms, vec![HashAlgorithm::Sha2512]);
         let artifact = PreparedArtifact::from_reader(&b"hello"[..], &requirements).unwrap();

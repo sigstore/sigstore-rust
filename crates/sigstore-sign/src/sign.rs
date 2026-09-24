@@ -399,6 +399,11 @@ impl Signer {
                 Sha256Hash::try_from_slice(digest.as_bytes())
                     .map_err(|e| Error::Signing(e.to_string()))?
             }
+            other => {
+                return Err(Error::Signing(format!(
+                    "unsupported artifact input: {other:?}"
+                )))
+            }
         };
         self.sign_sha256(artifact_hash).await
     }
@@ -615,10 +620,7 @@ impl Signer {
         let dsse_envelope = DsseEnvelope::new(
             payload_type,
             payload,
-            DsseSignature {
-                sig: signature.clone(),
-                keyid: KeyId::default(),
-            },
+            DsseSignature::new(signature.clone(), KeyId::default()),
         );
 
         // Create and submit DSSE Rekor entry
@@ -774,23 +776,14 @@ impl Attestation {
     fn build_statement(&self) -> sigstore_types::Statement {
         use sigstore_types::Digest;
 
-        sigstore_types::Statement {
-            type_: "https://in-toto.io/Statement/v1".to_string(),
-            subject: self
-                .subjects
+        sigstore_types::Statement::new(
+            self.subjects
                 .iter()
-                .map(|s| Subject {
-                    name: s.name.clone(),
-                    digest: Digest {
-                        sha256: Some(s.digest),
-                        sha512: None,
-                        other: Default::default(),
-                    },
-                })
+                .map(|s| Subject::new(s.name.clone(), Digest::sha256(s.digest)))
                 .collect(),
-            predicate_type: self.predicate_type.clone(),
-            predicate: self.predicate.clone(),
-        }
+            self.predicate_type.clone(),
+            self.predicate.clone(),
+        )
     }
 }
 

@@ -58,6 +58,7 @@ pub struct Checkpoint {
 /// - The signature bytes
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CheckpointSignature {
     /// The name of the signer (appears after the em dash in the signature line)
     #[serde(default, skip_serializing_if = "String::is_empty")]
