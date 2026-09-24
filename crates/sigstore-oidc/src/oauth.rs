@@ -27,39 +27,70 @@ const OOB_REDIRECT_URI: &str = "urn:ietf:wg:oauth:2.0:oob";
 /// Timeout for waiting for the browser callback (5 minutes)
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Default OIDC provider URL for Sigstore public-good instance
-const DEFAULT_SIGSTORE_OIDC_URL: &str = "https://oauth2.sigstore.dev/auth";
-
 /// OAuth configuration for a provider
-#[derive(Debug, Clone)]
+///
+/// Defaults to the `sigstore` client ID and the `openid email` scopes that
+/// Sigstore's identity providers expect.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OAuthConfig {
-    /// Authorization endpoint
-    pub auth_url: String,
-    /// Token endpoint
-    pub token_url: String,
-    /// Client ID
-    pub client_id: String,
-    /// Scopes to request
-    pub scopes: Vec<String>,
+    auth_url: String,
+    token_url: String,
+    client_id: String,
+    scopes: Vec<String>,
 }
 
 impl OAuthConfig {
-    /// Create configuration for Sigstore's public OAuth provider
-    pub fn sigstore() -> Self {
-        Self::from_oidc_url(DEFAULT_SIGSTORE_OIDC_URL)
-    }
-
-    /// Create configuration for a provider given its base OIDC issuer URL.
-    ///
-    /// This appends `/auth` and `/token` to the base URL.
-    pub fn from_oidc_url(url: &str) -> Self {
-        let base = url.trim_end_matches('/');
+    /// Create a configuration from explicit authorization and token endpoints.
+    pub fn new(auth_url: impl Into<String>, token_url: impl Into<String>) -> Self {
         Self {
-            auth_url: format!("{}/auth", base),
-            token_url: format!("{}/token", base),
+            auth_url: auth_url.into(),
+            token_url: token_url.into(),
             client_id: "sigstore".to_string(),
             scopes: vec!["openid".to_string(), "email".to_string()],
         }
+    }
+
+    /// Create a configuration for a [Dex](https://dexidp.io) issuer.
+    ///
+    /// Dex serves its endpoints at `<issuer>/auth` and `<issuer>/token`. This
+    /// is the layout of Sigstore's `https://oauth2.sigstore.dev/auth`, the
+    /// OIDC URL published in the public-good and staging signing configs. It
+    /// does not perform OIDC discovery.
+    pub fn dex(issuer_url: &str) -> Self {
+        let base = issuer_url.trim_end_matches('/');
+        Self::new(format!("{base}/auth"), format!("{base}/token"))
+    }
+
+    /// Use a different OAuth client ID.
+    pub fn with_client_id(mut self, client_id: impl Into<String>) -> Self {
+        self.client_id = client_id.into();
+        self
+    }
+
+    /// Request different scopes.
+    pub fn with_scopes<S: Into<String>>(mut self, scopes: impl IntoIterator<Item = S>) -> Self {
+        self.scopes = scopes.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The authorization endpoint.
+    pub fn auth_url(&self) -> &str {
+        &self.auth_url
+    }
+
+    /// The token endpoint.
+    pub fn token_url(&self) -> &str {
+        &self.token_url
+    }
+
+    /// The OAuth client ID.
+    pub fn client_id(&self) -> &str {
+        &self.client_id
+    }
+
+    /// The requested scopes.
+    pub fn scopes(&self) -> &[String] {
+        &self.scopes
     }
 }
 
@@ -125,7 +156,12 @@ pub trait AuthCallback: crate::templates::HtmlTemplates {
     fn auth_complete(&self) {}
 }
 
-/// Default callback that prints to stdout and uses Sigstore-branded templates
+/// Default callback for command-line tools.
+///
+/// It prints instructions to stdout, reads the out-of-band code from stdin,
+/// and serves Sigstore-branded redirect pages. Libraries that must not write to
+/// stdout should implement [`AuthCallback`] instead.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultAuthCallback;
 
 impl crate::templates::HtmlTemplates for DefaultAuthCallback {
@@ -189,11 +225,6 @@ impl OAuthClient {
         }
     }
 
-    /// Create a client for Sigstore's OAuth provider
-    pub fn sigstore() -> Self {
-        Self::new(OAuthConfig::from_oidc_url(DEFAULT_SIGSTORE_OIDC_URL))
-    }
-
     /// Generate a PKCE verifier and challenge
     fn generate_pkce() -> (String, String) {
         let mut rng = rand::rng();
@@ -217,11 +248,11 @@ impl OAuthClient {
 
     /// Build the authorization URL
     fn build_auth_url(&self, redirect_uri: &str, challenge: &str, state: &str) -> Result<String> {
-        let mut auth_url = Url::parse(&self.config.auth_url)
+        let mut auth_url = Url::parse(self.config.auth_url())
             .map_err(|e| Error::OAuth(format!("invalid auth URL: {}", e)))?;
         auth_url
             .query_pairs_mut()
-            .append_pair("client_id", &self.config.client_id)
+            .append_pair("client_id", self.config.client_id())
             .append_pair("redirect_uri", redirect_uri)
             .append_pair("response_type", "code")
             .append_pair("scope", &self.config.scopes.join(" "))
@@ -474,7 +505,7 @@ impl OAuthClient {
         redirect_uri: &str,
     ) -> Result<IdentityToken> {
         let params = [
-            ("client_id", self.config.client_id.as_str()),
+            ("client_id", self.config.client_id()),
             ("code", code),
             ("code_verifier", verifier),
             ("grant_type", "authorization_code"),
@@ -483,7 +514,7 @@ impl OAuthClient {
 
         let response = self
             .client
-            .post(&self.config.token_url)
+            .post(self.config.token_url())
             .timeout(Duration::from_secs(30))
             .form(&params)
             .send()
@@ -532,37 +563,19 @@ impl OAuthClient {
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let token = get_identity_token(None).await?;
+///     let token = get_identity_token("https://oauth2.sigstore.dev/auth").await?;
 ///     println!("Got token for: {}", token.subject());
 ///     Ok(())
 /// }
 /// ```
-pub async fn get_identity_token(oidc_url: Option<&str>) -> Result<IdentityToken> {
-    let url = oidc_url.unwrap_or(DEFAULT_SIGSTORE_OIDC_URL);
-    let client = OAuthClient::new(OAuthConfig::from_oidc_url(url));
-    client.auth(DefaultAuthCallback).await
-}
-
-/// Get an identity token with a custom callback for UX customization.
-pub async fn get_identity_token_with_callback(
-    oidc_url: Option<&str>,
-    callback: impl AuthCallback,
-) -> Result<IdentityToken> {
-    let url = oidc_url.unwrap_or(DEFAULT_SIGSTORE_OIDC_URL);
-    let client = OAuthClient::new(OAuthConfig::from_oidc_url(url));
-    client.auth(callback).await
-}
-
-/// Get an identity token with options.
 ///
-/// Use this to force OOB mode or customize other behavior.
-pub async fn get_identity_token_with_options(
-    oidc_url: Option<&str>,
-    options: AuthOptions,
-) -> Result<IdentityToken> {
-    let url = oidc_url.unwrap_or(DEFAULT_SIGSTORE_OIDC_URL);
-    let client = OAuthClient::new(OAuthConfig::from_oidc_url(url));
-    client.auth_with_options(DefaultAuthCallback, options).await
+/// `oidc_url` is a Dex issuer URL, such as the OIDC URL of a Sigstore
+/// instance's signing config (see [`OAuthConfig::dex`]). To customize the
+/// callback, endpoints or options, use [`OAuthClient`] directly.
+pub async fn get_identity_token(oidc_url: &str) -> Result<IdentityToken> {
+    OAuthClient::new(OAuthConfig::dex(oidc_url))
+        .auth(DefaultAuthCallback)
+        .await
 }
 
 #[cfg(test)]
@@ -571,7 +584,7 @@ mod tests {
 
     #[tokio::test]
     async fn callback_is_bounded_cancellable_and_checks_state() {
-        let client = OAuthClient::sigstore();
+        let client = OAuthClient::new(OAuthConfig::dex("https://oauth2.sigstore.dev/auth"));
         let callback = DefaultAuthCallback;
         for (request, valid) in [
             (
@@ -623,23 +636,29 @@ mod tests {
     }
 
     #[test]
-    fn test_oauth_config_sigstore() {
-        let config = OAuthConfig::sigstore();
-        assert_eq!(config.client_id, "sigstore");
-        assert!(config.scopes.contains(&"openid".to_string()));
-        assert!(config.scopes.contains(&"email".to_string()));
+    fn test_oauth_config_defaults() {
+        let config = OAuthConfig::new("https://idp.example/authorize", "https://idp.example/token");
+        assert_eq!(config.auth_url(), "https://idp.example/authorize");
+        assert_eq!(config.token_url(), "https://idp.example/token");
+        assert_eq!(config.client_id(), "sigstore");
+        assert_eq!(config.scopes(), ["openid", "email"]);
+
+        let config = config.with_client_id("other").with_scopes(["openid"]);
+        assert_eq!(config.client_id(), "other");
+        assert_eq!(config.scopes(), ["openid"]);
     }
 
     #[test]
-    fn test_oauth_config_from_oidc_url() {
-        let config1 = OAuthConfig::from_oidc_url("https://oauth2.sigstore.dev/auth");
-        assert_eq!(config1.auth_url, "https://oauth2.sigstore.dev/auth/auth");
-        assert_eq!(config1.token_url, "https://oauth2.sigstore.dev/auth/token");
+    fn test_oauth_config_dex() {
+        let config = OAuthConfig::dex("https://oauth2.sigstore.dev/auth");
+        assert_eq!(config.auth_url(), "https://oauth2.sigstore.dev/auth/auth");
+        assert_eq!(config.token_url(), "https://oauth2.sigstore.dev/auth/token");
 
-        // Test trailing slash removal
-        let config2 = OAuthConfig::from_oidc_url("https://oauth2.sigstore.dev/auth/");
-        assert_eq!(config2.auth_url, "https://oauth2.sigstore.dev/auth/auth");
-        assert_eq!(config2.token_url, "https://oauth2.sigstore.dev/auth/token");
+        // Trailing slashes are ignored
+        assert_eq!(
+            OAuthConfig::dex("https://oauth2.sigstore.dev/auth/"),
+            config
+        );
     }
 
     #[test]
