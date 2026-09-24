@@ -3,17 +3,14 @@
 //! This crate implements the Time-Stamp Protocol as specified in RFC 3161,
 //! including request creation, response parsing, and timestamp verification.
 
-pub mod asn1;
+mod asn1;
 #[cfg(feature = "client")]
-pub mod client;
+mod client;
 pub mod error;
-pub mod verify;
+mod verify;
 
-pub use asn1::{
-    AlgorithmIdentifier, Asn1MessageImprint, PkiStatus, TimeStampReq, TimeStampResp, TstInfo,
-};
 #[cfg(feature = "client")]
-pub use client::TimestampClient;
+pub use client::{TimestampClient, TimestampClientBuilder};
 pub use error::{Error, Result};
 pub use sigstore_types::TsaAuthority;
 pub use verify::verify_timestamp_for_authority;

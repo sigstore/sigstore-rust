@@ -13,7 +13,7 @@ use const_oid::ObjectIdentifier;
 use jiff::Timestamp;
 use rustls_pki_types::CertificateDer;
 use sigstore_crypto::{verify_signature, KeyAlgorithm};
-use sigstore_types::{DerPublicKey, SignatureBytes, TsaAuthority};
+use sigstore_types::{DerPublicKey, SignatureBytes, TimestampToken, TsaAuthority};
 use x509_cert::Certificate;
 
 // Re-export webpki from rustls-webpki
@@ -105,7 +105,7 @@ pub(crate) struct TimestampResult {
 /// Parse a timestamp token and return the extracted TstInfo and SignedData.
 ///
 /// This function supports both `TimeStampResp` and direct `ContentInfo` (TimeStampToken) formats.
-pub fn parse_timestamp_token(timestamp_token_bytes: &[u8]) -> Result<(TstInfo, SignedData)> {
+pub(crate) fn parse_timestamp_token(timestamp_token_bytes: &[u8]) -> Result<(TstInfo, SignedData)> {
     use cms::content_info::ContentInfo;
     use x509_cert::der::{Decode, Encode};
 
@@ -116,35 +116,35 @@ pub fn parse_timestamp_token(timestamp_token_bytes: &[u8]) -> Result<(TstInfo, S
             if resp.status.status != PkiStatus::Granted as u8
                 && resp.status.status != PkiStatus::GrantedWithMods as u8
             {
-                return Err(Error::ParseError(format!(
+                return Err(Error::Parse(format!(
                     "Timestamp request not granted: {}",
                     resp.status.status
                 )));
             }
 
-            let token_any = resp.time_stamp_token.ok_or(Error::ParseError(
+            let token_any = resp.time_stamp_token.ok_or(Error::Parse(
                 "TimeStampResp missing timeStampToken".to_string(),
             ))?;
             // We need the DER bytes of the token for ContentInfo parsing
             let bytes = token_any
                 .to_der()
-                .map_err(|e| Error::ParseError(format!("failed to re-encode token: {}", e)))?;
+                .map_err(|e| Error::Parse(format!("failed to re-encode token: {}", e)))?;
 
             // Parse ContentInfo from bytes
             ContentInfo::from_der(&bytes).map_err(|e| {
-                Error::ParseError(format!("failed to decode ContentInfo from token: {}", e))
+                Error::Parse(format!("failed to decode ContentInfo from token: {}", e))
             })?
         }
         Err(_) => {
             // Try as ContentInfo directly
             ContentInfo::from_der(timestamp_token_bytes)
-                .map_err(|e| Error::ParseError(format!("failed to decode TimeStampToken: {}", e)))?
+                .map_err(|e| Error::Parse(format!("failed to decode TimeStampToken: {}", e)))?
         }
     };
 
     // Verify content type is SignedData
     if content_info.content_type != ID_SIGNED_DATA {
-        return Err(Error::ParseError(
+        return Err(Error::Parse(
             "ContentInfo content type is not SignedData".to_string(),
         ));
     }
@@ -153,14 +153,14 @@ pub fn parse_timestamp_token(timestamp_token_bytes: &[u8]) -> Result<(TstInfo, S
     let signed_data_der = content_info
         .content
         .to_der()
-        .map_err(|e| Error::ParseError(format!("failed to encode SignedData content: {}", e)))?;
+        .map_err(|e| Error::Parse(format!("failed to encode SignedData content: {}", e)))?;
 
     let signed_data = SignedData::from_der(&signed_data_der)
-        .map_err(|e| Error::ParseError(format!("failed to decode SignedData: {}", e)))?;
+        .map_err(|e| Error::Parse(format!("failed to decode SignedData: {}", e)))?;
 
     // Verify the content type inside SignedData is TSTInfo
     if signed_data.encap_content_info.econtent_type != asn1::OID_TST_INFO {
-        return Err(Error::ParseError(
+        return Err(Error::Parse(
             "encap content type is not TSTInfo".to_string(),
         ));
     }
@@ -171,7 +171,7 @@ pub fn parse_timestamp_token(timestamp_token_bytes: &[u8]) -> Result<(TstInfo, S
         let tst_info_bytes = content.value();
 
         TstInfo::from_der(tst_info_bytes)
-            .map_err(|e| Error::ParseError(format!("failed to decode TSTInfo: {}", e)))?
+            .map_err(|e| Error::Parse(format!("failed to decode TSTInfo: {}", e)))?
     } else {
         return Err(Error::NoTstInfo);
     };
@@ -214,9 +214,9 @@ pub(crate) fn verify_timestamp_response(
 
     // Extract the timestamp from TSTInfo
     let timestamp = Timestamp::try_from(tst_info.gen_time.to_system_time())
-        .map_err(|_| Error::ParseError("invalid timestamp in TSTInfo".to_string()))?;
+        .map_err(|_| Error::Parse("invalid timestamp in TSTInfo".to_string()))?;
     if timestamp < Timestamp::UNIX_EPOCH {
-        return Err(Error::ParseError("timestamp before epoch".to_string()));
+        return Err(Error::Parse("timestamp before epoch".to_string()));
     }
 
     tracing::debug!("Extracted timestamp: {}", timestamp);
@@ -258,10 +258,12 @@ pub(crate) fn verify_timestamp_response(
 /// trying several authorities can use that variant to distinguish "wrong
 /// authority" from "right authority, wrong time".
 pub fn verify_timestamp_for_authority(
-    timestamp_token_bytes: &[u8],
-    signature_bytes: &[u8],
+    timestamp_token: &TimestampToken,
+    signature: &SignatureBytes,
     authority: &TsaAuthority,
 ) -> Result<Timestamp> {
+    let timestamp_token_bytes = timestamp_token.as_bytes();
+    let signature_bytes = signature.as_bytes();
     let opts = VerifyOpts::new()
         .with_root(CertificateDer::from(authority.root.as_bytes()))
         .with_intermediates(
@@ -292,9 +294,8 @@ fn verify_message_imprint(tst_info: &TstInfo, signature_bytes: &[u8]) -> Result<
     let hash_alg_oid = &message_imprint.hash_algorithm.algorithm;
 
     // Hash the signature bytes using the algorithm specified in the message imprint
-    let algorithm = digest_for_oid(hash_alg_oid).ok_or_else(|| {
-        Error::ParseError(format!("unsupported hash algorithm: {}", hash_alg_oid))
-    })?;
+    let algorithm = digest_for_oid(hash_alg_oid)
+        .ok_or_else(|| Error::Parse(format!("unsupported hash algorithm: {}", hash_alg_oid)))?;
     let computed_hash = aws_lc_rs::digest::digest(algorithm, signature_bytes);
 
     let expected_hash = message_imprint.hashed_message.as_bytes();
@@ -485,7 +486,7 @@ fn verify_message_digest_attribute(
 
     // Hash the TSTInfo content using the algorithm declared by the signer.
     let algorithm = digest_for_oid(digest_alg_oid).ok_or_else(|| {
-        Error::ParseError(format!(
+        Error::Parse(format!(
             "unsupported signer digest algorithm: {}",
             digest_alg_oid
         ))
@@ -721,7 +722,12 @@ mod tests {
         let token = extract_timestamp_token(VALID_BUNDLE);
         let signature = extract_signature(VALID_BUNDLE);
         let authority = fixture_authority(None);
-        let expected_time = verify_timestamp_for_authority(&token, &signature, &authority).unwrap();
+        let expected_time = verify_timestamp_for_authority(
+            &TimestampToken::new(token.clone()),
+            &SignatureBytes::new(signature.clone()),
+            &authority,
+        )
+        .unwrap();
         let mut response = TimeStampResp::from_der(&token).unwrap();
 
         for (status_der, granted) in [
@@ -739,14 +745,17 @@ mod tests {
             let bytes = hex::decode(status_der).unwrap();
             response.status = PkiStatusInfo::from_der(&bytes).unwrap();
             assert_eq!(response.status.to_der().unwrap(), bytes);
-            let result =
-                verify_timestamp_for_authority(&response.to_der().unwrap(), &signature, &authority);
+            let result = verify_timestamp_for_authority(
+                &TimestampToken::new(response.to_der().unwrap()),
+                &SignatureBytes::new(signature.clone()),
+                &authority,
+            );
             if granted {
                 assert_eq!(result.unwrap(), expected_time);
             } else {
                 // Status text must not make a rejected response acceptable,
                 // even when it carries an otherwise valid signed token.
-                assert!(matches!(result, Err(Error::ParseError(message))
+                assert!(matches!(result, Err(Error::Parse(message))
                     if message.contains("not granted")));
             }
         }
@@ -865,8 +874,8 @@ mod tests {
     /// authority (absent `valid_for` window).
     fn authority_token_time() -> Timestamp {
         verify_timestamp_for_authority(
-            &extract_timestamp_token(VALID_BUNDLE),
-            &extract_signature(VALID_BUNDLE),
+            &TimestampToken::new(extract_timestamp_token(VALID_BUNDLE)),
+            &SignatureBytes::new(extract_signature(VALID_BUNDLE)),
             &fixture_authority(None),
         )
         .expect("fixture token should verify under an unrestricted authority")
@@ -887,8 +896,8 @@ mod tests {
         let authority = fixture_authority(Some(window_around(time, -3600, 3600)));
 
         let result = verify_timestamp_for_authority(
-            &extract_timestamp_token(VALID_BUNDLE),
-            &extract_signature(VALID_BUNDLE),
+            &TimestampToken::new(extract_timestamp_token(VALID_BUNDLE)),
+            &SignatureBytes::new(extract_signature(VALID_BUNDLE)),
             &authority,
         );
         assert_eq!(result.unwrap(), time);
@@ -903,8 +912,8 @@ mod tests {
         let authority = fixture_authority(Some(window_around(time, -7200, -3600)));
 
         let result = verify_timestamp_for_authority(
-            &extract_timestamp_token(VALID_BUNDLE),
-            &extract_signature(VALID_BUNDLE),
+            &TimestampToken::new(extract_timestamp_token(VALID_BUNDLE)),
+            &SignatureBytes::new(extract_signature(VALID_BUNDLE)),
             &authority,
         );
         match result.unwrap_err() {
@@ -923,8 +932,8 @@ mod tests {
         authority.leaf = authority.root.clone();
 
         let result = verify_timestamp_for_authority(
-            &extract_timestamp_token(VALID_BUNDLE),
-            &extract_signature(VALID_BUNDLE),
+            &TimestampToken::new(extract_timestamp_token(VALID_BUNDLE)),
+            &SignatureBytes::new(extract_signature(VALID_BUNDLE)),
             &authority,
         );
         match result.unwrap_err() {
@@ -976,8 +985,8 @@ mod tests {
         // Check that it's a parse error
         let err = result.unwrap_err();
         match err {
-            Error::ParseError(_) => (),
-            other => panic!("Expected ParseError, got: {:?}", other),
+            Error::Parse(_) => (),
+            other => panic!("Expected Parse, got: {:?}", other),
         }
     }
 

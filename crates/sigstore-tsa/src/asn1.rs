@@ -6,7 +6,7 @@
 use const_oid::ObjectIdentifier;
 use der::{
     asn1::{BitString, GeneralizedTime, Int, OctetString, Uint},
-    Decode, Encode, Sequence,
+    Encode, Sequence,
 };
 use rand::Rng;
 use sigstore_types::HashAlgorithm;
@@ -68,16 +68,6 @@ impl AlgorithmIdentifier {
         Self {
             algorithm: OID_SHA512,
             parameters: None,
-        }
-    }
-
-    /// Try to convert to a HashAlgorithm enum
-    pub fn to_hash_algorithm(&self) -> Option<HashAlgorithm> {
-        match self.algorithm {
-            OID_SHA256 => Some(HashAlgorithm::Sha2256),
-            OID_SHA384 => Some(HashAlgorithm::Sha2384),
-            OID_SHA512 => Some(HashAlgorithm::Sha2512),
-            _ => None,
         }
     }
 }
@@ -157,30 +147,6 @@ impl TimeStampReq {
         }
     }
 
-    /// Create a new timestamp request without a nonce (not recommended)
-    pub fn new_without_nonce(message_imprint: Asn1MessageImprint) -> Self {
-        Self {
-            version: 1,
-            message_imprint,
-            req_policy: None,
-            nonce: None,
-            cert_req: true,
-        }
-    }
-
-    /// Set the nonce manually (overrides auto-generated nonce).
-    pub fn with_nonce(mut self, nonce: u64) -> Self {
-        let uint = Uint::new(&nonce.to_be_bytes()).expect("valid unsigned integer");
-        self.nonce = Some(Int::from(uint));
-        self
-    }
-
-    /// Set whether to request certificates
-    pub fn with_cert_req(mut self, cert_req: bool) -> Self {
-        self.cert_req = cert_req;
-        self
-    }
-
     /// Encode to DER
     pub fn to_der(&self) -> Result<Vec<u8>, der::Error> {
         Encode::to_der(self)
@@ -236,18 +202,6 @@ pub struct PkiStatusInfo {
     pub fail_info: Option<BitString>,
 }
 
-impl PkiStatusInfo {
-    /// Check if the status indicates success
-    pub fn is_success(&self) -> bool {
-        self.status == PkiStatus::Granted as u8 || self.status == PkiStatus::GrantedWithMods as u8
-    }
-
-    /// Get the status as an enum
-    pub fn status_enum(&self) -> Option<PkiStatus> {
-        PkiStatus::try_from(self.status).ok()
-    }
-}
-
 /// Accuracy of the timestamp
 /// RFC 3161 Section 2.4.2
 #[derive(Clone, Debug, Eq, PartialEq, Sequence)]
@@ -294,13 +248,6 @@ pub struct TstInfo {
     pub extensions: Option<Extensions>,
 }
 
-impl TstInfo {
-    /// Decode from DER bytes
-    pub fn from_der_bytes(bytes: &[u8]) -> Result<Self, der::Error> {
-        Self::from_der(bytes)
-    }
-}
-
 /// Time-stamp response
 /// RFC 3161 Section 2.4.2
 #[derive(Clone, Debug, Eq, PartialEq, Sequence)]
@@ -312,21 +259,10 @@ pub struct TimeStampResp {
     pub time_stamp_token: Option<der::Any>,
 }
 
-impl TimeStampResp {
-    /// Decode from DER bytes
-    pub fn from_der_bytes(bytes: &[u8]) -> Result<Self, der::Error> {
-        Self::from_der(bytes)
-    }
-
-    /// Check if the response indicates success
-    pub fn is_success(&self) -> bool {
-        self.status.is_success() && self.time_stamp_token.is_some()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use der::Decode;
 
     #[test]
     fn test_message_imprint_encode() {

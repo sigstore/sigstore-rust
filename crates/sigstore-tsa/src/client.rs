@@ -2,46 +2,74 @@
 
 use crate::asn1::{AlgorithmIdentifier, Asn1MessageImprint, TimeStampReq};
 use crate::error::{Error, Result};
-use sigstore_types::SignatureBytes;
-use sigstore_types::TimestampToken;
+use sigstore_types::{ArtifactDigest, SignatureBytes, TimestampToken};
 use std::time::Duration;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_USER_AGENT: &str = concat!("sigstore-rust/", env!("CARGO_PKG_VERSION"));
 
 /// A client for interacting with a Time-Stamp Authority
+#[derive(Debug, Clone)]
 pub struct TimestampClient {
-    /// Base URL of the TSA
+    /// Timestamp endpoint URL
     url: String,
     /// HTTP client
     client: reqwest::Client,
 }
 
+/// Builder for [`TimestampClient`]
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct TimestampClientBuilder {
+    url: String,
+    timeout: Duration,
+    user_agent: String,
+}
+
+impl TimestampClientBuilder {
+    /// Total HTTP request timeout, including reading the response body.
+    /// Defaults to 30 seconds.
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// The `User-Agent` header. Defaults to `sigstore-rust/<version>`.
+    pub fn user_agent(mut self, user_agent: impl Into<String>) -> Self {
+        self.user_agent = user_agent.into();
+        self
+    }
+
+    /// Build the client.
+    pub fn build(self) -> Result<TimestampClient> {
+        let client = reqwest::Client::builder()
+            .timeout(self.timeout)
+            .user_agent(self.user_agent)
+            .build()
+            .map_err(|e| Error::Http(format!("failed to build HTTP client: {e}")))?;
+        Ok(TimestampClient {
+            url: self.url,
+            client,
+        })
+    }
+}
+
 impl TimestampClient {
-    /// Create a new TSA client with a 30-second request timeout.
-    pub fn new(url: impl Into<String>) -> Self {
-        Self::new_with_timeout(url, DEFAULT_TIMEOUT)
+    /// Create a TSA client with default settings.
+    ///
+    /// `url` is the full timestamp endpoint, for example the TSA URL from a
+    /// Sigstore instance's signing config.
+    pub fn new(url: impl Into<String>) -> Result<Self> {
+        Self::builder(url).build()
     }
 
-    /// Create a TSA client with a custom total HTTP request timeout,
-    /// including reading the response body.
-    pub fn new_with_timeout(url: impl Into<String>, timeout: Duration) -> Self {
-        Self {
+    /// Configure a TSA client for the timestamp endpoint at `url`.
+    pub fn builder(url: impl Into<String>) -> TimestampClientBuilder {
+        TimestampClientBuilder {
             url: url.into(),
-            client: reqwest::Client::builder()
-                .timeout(timeout)
-                .build()
-                .expect("HTTP client configuration is valid"),
+            timeout: DEFAULT_TIMEOUT,
+            user_agent: DEFAULT_USER_AGENT.to_string(),
         }
-    }
-
-    /// Create a client for the Sigstore TSA
-    pub fn sigstore() -> Self {
-        Self::new("https://timestamp.sigstore.dev/api/v1/timestamp")
-    }
-
-    /// Create a client for the FreeTSA service
-    pub fn freetsa() -> Self {
-        Self::new("https://freetsa.org/tsr")
     }
 
     /// Request a timestamp for the given digest
@@ -104,6 +132,12 @@ impl TimestampClient {
 
         // Return the timestamp token
         Ok(TimestampToken::new(response_bytes.to_vec()))
+    }
+
+    /// Request a timestamp over a precomputed digest.
+    pub async fn timestamp_digest(&self, digest: &ArtifactDigest) -> Result<TimestampToken> {
+        let algorithm = AlgorithmIdentifier::try_from(digest.algorithm())?;
+        self.timestamp(digest.as_bytes(), algorithm).await
     }
 
     /// Request a timestamp for a signature

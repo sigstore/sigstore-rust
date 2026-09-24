@@ -21,7 +21,10 @@ async fn request_timeout_covers_stalled_headers_and_body() {
             std::future::pending::<()>().await;
             drop(stream);
         });
-        let client = TimestampClient::new_with_timeout(url, Duration::from_millis(100));
+        let client = TimestampClient::builder(url)
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
         let signature = SignatureBytes::from_bytes(b"signature");
         let result = timeout(
             Duration::from_secs(3),

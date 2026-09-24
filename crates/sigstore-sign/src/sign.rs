@@ -540,7 +540,8 @@ impl Signer {
         tsa_url: &str,
         signature: &SignatureBytes,
     ) -> Result<TimestampToken> {
-        let tsa = TimestampClient::new(tsa_url.to_string());
+        let tsa = TimestampClient::new(tsa_url)
+            .map_err(|e| Error::Signing(format!("Failed to create TSA client: {}", e)))?;
         tsa.timestamp_signature(signature)
             .await
             .map_err(|e| Error::Signing(format!("Failed to get timestamp: {}", e)))
