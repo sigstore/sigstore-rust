@@ -27,6 +27,7 @@ use sigstore_types::{Bundle, KindVersion, MediaType};
 /// These options only affect presence/shape requirements; they never enable
 /// cryptographic checks (structural validation performs none).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ValidationOptions {
     /// Require an inclusion proof to be present (not just an inclusion
     /// promise). Note that presence is all that is checked; the proof is
@@ -35,6 +36,25 @@ pub struct ValidationOptions {
     /// Require RFC 3161 timestamp verification data to be present. The
     /// timestamps themselves are not verified here.
     pub require_timestamp: bool,
+}
+
+impl ValidationOptions {
+    /// Default options: require an inclusion proof, not a timestamp.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set whether an inclusion proof must be present.
+    pub fn with_require_inclusion_proof(mut self, require: bool) -> Self {
+        self.require_inclusion_proof = require;
+        self
+    }
+
+    /// Set whether RFC 3161 timestamp verification data must be present.
+    pub fn with_require_timestamp(mut self, require: bool) -> Self {
+        self.require_timestamp = require;
+        self
+    }
 }
 
 impl Default for ValidationOptions {
@@ -102,9 +122,7 @@ pub fn validate_bundle_with_options(bundle: &Bundle, options: &ValidationOptions
         MediaType::Bundle0_1 => validate_v0_1(bundle, options),
         MediaType::Bundle0_2 => validate_v0_2(bundle, options),
         MediaType::Bundle0_3 => validate_v0_3(bundle, options),
-        other => Err(Error::Validation(format!(
-            "unsupported bundle media type: {other}"
-        ))),
+        other => Err(Error::UnsupportedMediaType(other)),
     }
 }
 
@@ -112,9 +130,7 @@ pub fn validate_bundle_with_options(bundle: &Bundle, options: &ValidationOptions
 fn validate_v0_1(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
     // v0.1 requires inclusion promise (SET)
     if !bundle.has_inclusion_promise() {
-        return Err(Error::Validation(
-            "v0.1 bundle must have inclusion promise".to_string(),
-        ));
+        return Err(Error::MissingInclusionPromise(bundle.media_type));
     }
 
     // Check well-formedness of inclusion proofs if present
@@ -129,9 +145,7 @@ fn validate_v0_1(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
 fn validate_v0_2(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
     // v0.2 requires inclusion proof with checkpoint
     if options.require_inclusion_proof && !bundle.has_inclusion_proof() {
-        return Err(Error::Validation(
-            "v0.2 bundle must have inclusion proof".to_string(),
-        ));
+        return Err(Error::MissingInclusionProof(bundle.media_type));
     }
 
     // Check well-formedness of inclusion proofs
@@ -147,23 +161,17 @@ fn validate_v0_3(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
     match &bundle.verification_material.content {
         sigstore_types::bundle::VerificationMaterialContent::Certificate(_) => {}
         sigstore_types::bundle::VerificationMaterialContent::X509CertificateChain { .. } => {
-            return Err(Error::Validation(
-                "v0.3 bundle must use single certificate, not chain".to_string(),
-            ));
+            return Err(Error::CertificateChainNotAllowed(bundle.media_type));
         }
         sigstore_types::bundle::VerificationMaterialContent::PublicKey(_) => {}
         _ => {
-            return Err(Error::Validation(
-                "unsupported verification material".to_string(),
-            ));
+            return Err(Error::UnsupportedVerificationMaterial);
         }
     }
 
     // v0.3 requires inclusion proof
     if options.require_inclusion_proof && !bundle.has_inclusion_proof() {
-        return Err(Error::Validation(
-            "v0.3 bundle must have inclusion proof".to_string(),
-        ));
+        return Err(Error::MissingInclusionProof(bundle.media_type));
     }
 
     // Check well-formedness of inclusion proofs
@@ -185,16 +193,12 @@ fn validate_common(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
     // Bundles verified without transparency-log requirements may establish
     // signing time from RFC3161 timestamp data alone.
     if !has_tlog_entries && (options.require_inclusion_proof || !has_timestamp) {
-        return Err(Error::Validation(
-            "bundle must have at least one tlog entry or timestamp verification data".to_string(),
-        ));
+        return Err(Error::MissingSigningTimeEvidence);
     }
 
     // Check timestamp if required
     if options.require_timestamp && !has_timestamp {
-        return Err(Error::Validation(
-            "bundle must have timestamp verification data".to_string(),
-        ));
+        return Err(Error::MissingTimestamp);
     }
 
     Ok(())
@@ -216,33 +220,31 @@ fn validate_common(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
 fn validate_inclusion_proof_structure(bundle: &Bundle) -> Result<()> {
     for entry in &bundle.verification_material.tlog_entries {
         if let Some(proof) = &entry.inclusion_proof {
-            let checkpoint = proof.checkpoint.checkpoint().ok_or_else(|| {
-                Error::Validation("inclusion proof has no checkpoint".to_string())
-            })?;
+            let checkpoint = proof
+                .checkpoint
+                .checkpoint()
+                .ok_or(Error::MissingCheckpoint)?;
 
             let is_v2 = entry.kind_version == KindVersion::HashedRekordV002;
             if is_v2 {
                 let leaf_index = entry.log_index.value();
                 if leaf_index >= checkpoint.tree_size() {
-                    return Err(Error::Validation(format!(
-                        "top-level log_index {} out of range for checkpoint tree size {}",
-                        leaf_index,
-                        checkpoint.tree_size()
-                    )));
+                    return Err(Error::LogIndexOutOfRange {
+                        log_index: leaf_index,
+                        tree_size: checkpoint.tree_size(),
+                    });
                 }
             } else {
                 let leaf_index = proof.log_index.value();
                 let tree_size = proof.tree_size;
                 if leaf_index >= tree_size {
-                    return Err(Error::Validation(format!(
-                        "inclusion proof log_index {} out of range for tree_size {}",
-                        leaf_index, tree_size
-                    )));
+                    return Err(Error::LogIndexOutOfRange {
+                        log_index: leaf_index,
+                        tree_size,
+                    });
                 }
                 if *checkpoint.root_hash() != proof.root_hash {
-                    return Err(Error::Validation(
-                        "inclusion proof root hash does not match checkpoint root hash".to_string(),
-                    ));
+                    return Err(Error::CheckpointRootMismatch);
                 }
             }
         }
