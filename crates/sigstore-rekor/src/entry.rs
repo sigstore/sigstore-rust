@@ -527,7 +527,7 @@ mod tests {
                 log_index: u64::MAX,
                 checkpoint: String::new(),
                 hashes: vec![],
-                root_hash: Sha256Hash::from_bytes([0; 32]),
+                root_hash: Sha256Hash::new([0; 32]),
                 tree_size: 1,
             }),
         });
@@ -539,7 +539,7 @@ mod tests {
     #[test]
     fn test_hashed_rekord_creation() {
         let entry = HashedRekord::new(
-            &Sha256Hash::from_bytes([0u8; 32]),
+            &Sha256Hash::new([0u8; 32]),
             &SignatureBytes::from_bytes(b"signature"),
             &DerCertificate::new(vec![0x30, 0x00]), // Minimal DER sequence
         );
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn v2_serializes_typed_certificate_and_public_key_verifiers() {
-        let digest = Sha256Hash::from_bytes([0; 32]);
+        let digest = Sha256Hash::new([0; 32]);
         let signature = SignatureBytes::from_bytes(b"signature");
         let certificate = HashedRekordV2::new_with_certificate(
             &digest,
@@ -589,7 +589,7 @@ mod tests {
     #[test]
     fn test_hashed_rekord_serializes_lowercase_algorithm() {
         let entry = HashedRekord::new(
-            &Sha256Hash::from_bytes([0u8; 32]),
+            &Sha256Hash::new([0u8; 32]),
             &SignatureBytes::from_bytes(b"signature"),
             &DerCertificate::new(vec![0x30, 0x00]), // Minimal DER sequence
         );

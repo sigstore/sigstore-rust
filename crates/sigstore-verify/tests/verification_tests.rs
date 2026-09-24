@@ -149,7 +149,7 @@ fn test_tampered_inclusion_proof_fails_verification() {
         .inclusion_proof
         .as_mut()
         .expect("bundle has inclusion proof");
-    proof.hashes[0] = Sha256Hash::from_bytes([0u8; 32]);
+    proof.hashes[0] = Sha256Hash::new([0u8; 32]);
 
     // Structural validation intentionally performs no crypto, so the
     // tampered bundle still passes it...
@@ -638,7 +638,7 @@ fn test_verify_github_actions_provenance_bundle() {
         Bundle::from_json(SIGSTORE_JS_PROVENANCE).expect("Failed to parse provenance bundle");
     let artifact_digest = ArtifactDigest::new(
         HashAlgorithm::Sha2512,
-        DigestBytes::from_bytes(
+        DigestBytes::new(
             hex::decode("46d4e2f74c4877316640000a6fdf8a8b59f1e0847667973e9859f774dd31b8f1e0937813b777fb66a2ac67d50540fe34640966eee9fc2ccca387082b4c85cd3c")
                 .unwrap(),
         ),
@@ -707,7 +707,7 @@ fn test_bundle_no_cert_v1() {
     // Verification should fail because there's no certificate
     // Use extracted digest or dummy - doesn't matter since validation should fail first
     let artifact_digest =
-        extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::from_bytes([0u8; 32]));
+        extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::new([0u8; 32]));
     let policy = VerificationPolicy::any_identity();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
@@ -758,7 +758,7 @@ fn test_bundle_no_log_entry() {
     // Verification should fail because we need a tlog entry
     // Use extracted digest or dummy - doesn't matter since validation should fail first
     let artifact_digest =
-        extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::from_bytes([0u8; 32]));
+        extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::new([0u8; 32]));
     let policy = VerificationPolicy::any_identity();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
@@ -803,7 +803,7 @@ fn test_bundle_v3_no_signed_time() {
     // Verification might still work with inclusion proof alone
     // Use extracted digest or dummy - we're testing handling of missing signed time
     let artifact_digest =
-        extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::from_bytes([0u8; 32]));
+        extract_artifact_digest(&bundle).unwrap_or_else(|| Sha256Hash::new([0u8; 32]));
     let policy = VerificationPolicy::any_identity();
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());

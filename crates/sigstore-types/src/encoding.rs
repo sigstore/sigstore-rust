@@ -610,19 +610,6 @@ impl KeyHint {
         KeyHint(bytes)
     }
 
-    /// Create from a slice (must be exactly 4 bytes)
-    pub fn try_from_slice(slice: &[u8]) -> crate::error::Result<Self> {
-        if slice.len() != 4 {
-            return Err(crate::error::Error::Validation(format!(
-                "key hint must be exactly 4 bytes, got {}",
-                slice.len()
-            )));
-        }
-        let mut arr = [0u8; 4];
-        arr.copy_from_slice(slice);
-        Ok(KeyHint(arr))
-    }
-
     /// Get the key hint as a byte slice
     pub fn as_bytes(&self) -> &[u8; 4] {
         &self.0
@@ -631,6 +618,27 @@ impl KeyHint {
     /// Get the key hint as a slice
     pub fn as_slice(&self) -> &[u8] {
         &self.0
+    }
+}
+
+impl TryFrom<&[u8]> for KeyHint {
+    type Error = Error;
+
+    /// The slice must be exactly 4 bytes.
+    fn try_from(slice: &[u8]) -> Result<Self> {
+        let bytes: [u8; 4] = slice.try_into().map_err(|_| {
+            Error::Validation(format!(
+                "key hint must be exactly 4 bytes, got {}",
+                slice.len()
+            ))
+        })?;
+        Ok(KeyHint(bytes))
+    }
+}
+
+impl std::fmt::Display for KeyHint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&hex::encode(self.0))
     }
 }
 
@@ -679,144 +687,225 @@ mod base64_bytes_array4 {
 }
 
 // ============================================================================
-// SHA-256 Hash Type (Fixed Size)
+// Fixed-size hash types
 // ============================================================================
 
-/// SHA-256 hash digest (32 bytes)
-///
-/// Fixed-size hash with compile-time size guarantees.
-/// Serializes as base64, deserializes from either hex (64 chars) or base64.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Sha256Hash([u8; 32]);
+/// Define a fixed-size hash type. Every hash type gets the same constructors,
+/// encodings and conversions, so SHA-256 and SHA-512 stay interchangeable.
+macro_rules! fixed_hash {
+    ($(#[$meta:meta])* $name:ident, $len:literal, $label:literal) => {
+        $(#[$meta])*
+        ///
+        /// Serializes as base64 and deserializes from hex or (ProtoJSON) base64.
+        /// `Display` and `FromStr` use lowercase hex.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub struct $name([u8; $len]);
 
-impl Sha256Hash {
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
-        Sha256Hash(bytes)
-    }
+        impl $name {
+            #[doc = concat!("Wrap a ", $label, " digest.")]
+            pub const fn new(bytes: [u8; $len]) -> Self {
+                Self(bytes)
+            }
 
-    pub fn try_from_slice(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != 32 {
-            return Err(Error::InvalidEncoding(format!(
-                "SHA-256 hash must be 32 bytes, got {}",
-                bytes.len()
-            )));
+            /// Parse a hex-encoded digest.
+            pub fn from_hex(hex_str: &str) -> Result<Self> {
+                let bytes = hex::decode(hex_str)
+                    .map_err(|e| Error::InvalidEncoding(format!("invalid hex: {e}")))?;
+                Self::try_from(bytes.as_slice())
+            }
+
+            /// Parse a base64-encoded digest (standard or URL-safe, padded or not).
+            pub fn from_base64(s: &str) -> Result<Self> {
+                let bytes = decode_protojson_base64(s)
+                    .map_err(|e| Error::InvalidEncoding(format!("invalid base64: {e}")))?;
+                Self::try_from(bytes.as_slice())
+            }
+
+            /// Parse a hex or base64 digest, detecting the encoding by its shape.
+            pub fn from_hex_or_base64(s: &str) -> Result<Self> {
+                if s.len() == 2 * $len && s.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Self::from_hex(s);
+                }
+                Self::from_base64(s)
+            }
+
+            /// Lowercase hex encoding.
+            pub fn to_hex(&self) -> String {
+                hex::encode(self.0)
+            }
+
+            /// Standard, padded base64 encoding.
+            pub fn to_base64(&self) -> String {
+                base64::engine::general_purpose::STANDARD.encode(self.0)
+            }
+
+            /// The digest bytes.
+            pub fn as_bytes(&self) -> &[u8; $len] {
+                &self.0
+            }
+
+            /// The digest bytes as a slice.
+            pub fn as_slice(&self) -> &[u8] {
+                &self.0
+            }
         }
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(bytes);
-        Ok(Sha256Hash(arr))
-    }
 
-    pub fn from_hex(hex_str: &str) -> Result<Self> {
-        let bytes = hex::decode(hex_str)
-            .map_err(|e| Error::InvalidEncoding(format!("invalid hex: {}", e)))?;
-        Self::try_from_slice(&bytes)
-    }
+        impl TryFrom<&[u8]> for $name {
+            type Error = Error;
 
-    pub fn from_base64(s: &str) -> Result<Self> {
-        let bytes = decode_protojson_base64(s)
-            .map_err(|e| Error::InvalidEncoding(format!("invalid base64: {}", e)))?;
-        Self::try_from_slice(&bytes)
-    }
-
-    /// Parse from hex or base64 string (auto-detect format)
-    pub fn from_hex_or_base64(s: &str) -> Result<Self> {
-        if s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Self::from_hex(s);
+            fn try_from(bytes: &[u8]) -> Result<Self> {
+                let bytes: [u8; $len] = bytes.try_into().map_err(|_| {
+                    Error::InvalidEncoding(format!(
+                        concat!($label, " hash must be ", $len, " bytes, got {}"),
+                        bytes.len()
+                    ))
+                })?;
+                Ok(Self(bytes))
+            }
         }
-        Self::from_base64(s)
-    }
 
-    pub fn to_hex(&self) -> String {
-        hex::encode(self.0)
-    }
+        impl TryFrom<DigestBytes> for $name {
+            type Error = Error;
 
-    pub fn to_base64(&self) -> String {
-        base64::engine::general_purpose::STANDARD.encode(self.0)
-    }
+            fn try_from(digest: DigestBytes) -> Result<Self> {
+                Self::try_from(digest.as_bytes())
+            }
+        }
 
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
+        impl TryFrom<&DigestBytes> for $name {
+            type Error = Error;
 
-    pub fn as_slice(&self) -> &[u8] {
-        &self.0
-    }
+            fn try_from(digest: &DigestBytes) -> Result<Self> {
+                Self::try_from(digest.as_bytes())
+            }
+        }
+
+        impl From<[u8; $len]> for $name {
+            fn from(bytes: [u8; $len]) -> Self {
+                Self(bytes)
+            }
+        }
+
+        impl From<$name> for [u8; $len] {
+            fn from(hash: $name) -> Self {
+                hash.0
+            }
+        }
+
+        impl From<$name> for DigestBytes {
+            fn from(hash: $name) -> Self {
+                DigestBytes(hash.0.to_vec())
+            }
+        }
+
+        impl From<&$name> for DigestBytes {
+            fn from(hash: &$name) -> Self {
+                DigestBytes(hash.0.to_vec())
+            }
+        }
+
+        impl AsRef<[u8]> for $name {
+            fn as_ref(&self) -> &[u8] {
+                &self.0
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(&self.to_hex())
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = Error;
+
+            fn from_str(s: &str) -> Result<Self> {
+                Self::from_hex(s)
+            }
+        }
+
+        impl serde::Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                serializer.serialize_str(&self.to_base64())
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let s = String::deserialize(deserializer)?;
+                Self::from_hex_or_base64(&s).map_err(serde::de::Error::custom)
+            }
+        }
+
+        impl PartialEq<DigestBytes> for $name {
+            fn eq(&self, other: &DigestBytes) -> bool {
+                self.as_slice() == other.as_bytes()
+            }
+        }
+
+        impl PartialEq<$name> for DigestBytes {
+            fn eq(&self, other: &$name) -> bool {
+                self.as_bytes() == other.as_slice()
+            }
+        }
+
+        impl PartialEq<[u8; $len]> for $name {
+            fn eq(&self, other: &[u8; $len]) -> bool {
+                &self.0 == other
+            }
+        }
+
+        impl PartialEq<$name> for [u8; $len] {
+            fn eq(&self, other: &$name) -> bool {
+                self == &other.0
+            }
+        }
+
+        impl<'a> PartialEq<&'a [u8]> for $name {
+            fn eq(&self, other: &&'a [u8]) -> bool {
+                self.as_slice() == *other
+            }
+        }
+
+        impl PartialEq<$name> for &[u8] {
+            fn eq(&self, other: &$name) -> bool {
+                *self == other.as_slice()
+            }
+        }
+
+        impl PartialEq<Vec<u8>> for $name {
+            fn eq(&self, other: &Vec<u8>) -> bool {
+                self.as_slice() == other.as_slice()
+            }
+        }
+
+        impl PartialEq<$name> for Vec<u8> {
+            fn eq(&self, other: &$name) -> bool {
+                self.as_slice() == other.as_slice()
+            }
+        }
+    };
 }
 
-impl AsRef<[u8]> for Sha256Hash {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
-}
+fixed_hash!(
+    /// SHA-256 hash digest (32 bytes)
+    Sha256Hash,
+    32,
+    "SHA-256"
+);
 
-impl From<[u8; 32]> for Sha256Hash {
-    fn from(bytes: [u8; 32]) -> Self {
-        Sha256Hash(bytes)
-    }
-}
-
-impl serde::Serialize for Sha256Hash {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_base64())
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for Sha256Hash {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        Sha256Hash::from_hex_or_base64(&s).map_err(serde::de::Error::custom)
-    }
-}
-
-// ============================================================================
-// SHA-512 Hash Type (Fixed Size)
-// ============================================================================
-
-/// SHA-512 hash digest (64 bytes).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Sha512Hash([u8; 64]);
-
-impl Sha512Hash {
-    pub fn from_bytes(bytes: [u8; 64]) -> Self {
-        Self(bytes)
-    }
-
-    pub fn try_from_slice(bytes: &[u8]) -> Result<Self> {
-        let bytes: [u8; 64] = bytes.try_into().map_err(|_| {
-            Error::InvalidEncoding(format!(
-                "SHA-512 hash must be 64 bytes, got {}",
-                bytes.len()
-            ))
-        })?;
-        Ok(Self(bytes))
-    }
-
-    pub fn from_hex(value: &str) -> Result<Self> {
-        let bytes =
-            hex::decode(value).map_err(|e| Error::InvalidEncoding(format!("invalid hex: {e}")))?;
-        Self::try_from_slice(&bytes)
-    }
-
-    pub fn to_hex(&self) -> String {
-        hex::encode(self.0)
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 64] {
-        &self.0
-    }
-}
-
-impl AsRef<[u8]> for Sha512Hash {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
-}
+fixed_hash!(
+    /// SHA-512 hash digest (64 bytes)
+    Sha512Hash,
+    64,
+    "SHA-512"
+);
 
 // ============================================================================
 // Arbitrary Digest Type (Flexible Size)
@@ -824,17 +913,34 @@ impl AsRef<[u8]> for Sha512Hash {
 
 /// Arbitrary length hash digest
 ///
-/// Flexible-size hash. Serializes as base64, deserializes from either hex or base64.
+/// Flexible-size hash. Serializes as base64, deserializes from base64.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DigestBytes(Vec<u8>);
 
 impl DigestBytes {
-    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+    /// Wrap digest bytes.
+    pub fn new(bytes: Vec<u8>) -> Self {
         DigestBytes(bytes)
     }
 
+    /// The digest bytes.
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
+    }
+
+    /// Take ownership of the digest bytes.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+
+    /// Length of the digest in bytes.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the digest is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     /// Decode an explicitly hex-encoded digest (wire JSON uses base64 instead).
@@ -842,6 +948,11 @@ impl DigestBytes {
         hex::decode(value)
             .map(Self)
             .map_err(|e| Error::InvalidEncoding(e.to_string()))
+    }
+
+    /// Lowercase hex encoding.
+    pub fn to_hex(&self) -> String {
+        hex::encode(&self.0)
     }
 }
 
@@ -851,21 +962,21 @@ impl AsRef<[u8]> for DigestBytes {
     }
 }
 
-impl From<Sha256Hash> for DigestBytes {
-    fn from(hash: Sha256Hash) -> Self {
-        DigestBytes(hash.as_bytes().to_vec())
-    }
-}
-
-impl From<&Sha256Hash> for DigestBytes {
-    fn from(hash: &Sha256Hash) -> Self {
-        DigestBytes(hash.as_bytes().to_vec())
-    }
-}
-
 impl From<&[u8]> for DigestBytes {
     fn from(bytes: &[u8]) -> Self {
         DigestBytes(bytes.to_vec())
+    }
+}
+
+impl From<Vec<u8>> for DigestBytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        DigestBytes(bytes)
+    }
+}
+
+impl std::fmt::Display for DigestBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.to_hex())
     }
 }
 
@@ -886,76 +997,6 @@ impl<'de> serde::Deserialize<'de> for DigestBytes {
         let s = String::deserialize(deserializer)?;
         let bytes = decode_protojson_base64(&s).map_err(serde::de::Error::custom)?;
         Ok(DigestBytes(bytes))
-    }
-}
-
-impl TryFrom<DigestBytes> for Sha256Hash {
-    type Error = Error;
-
-    fn try_from(digest: DigestBytes) -> std::result::Result<Self, Self::Error> {
-        Self::try_from_slice(&digest.0)
-    }
-}
-
-impl TryFrom<&DigestBytes> for Sha256Hash {
-    type Error = Error;
-
-    fn try_from(digest: &DigestBytes) -> std::result::Result<Self, Self::Error> {
-        Self::try_from_slice(&digest.0)
-    }
-}
-
-impl From<Sha256Hash> for [u8; 32] {
-    fn from(hash: Sha256Hash) -> Self {
-        hash.0
-    }
-}
-
-impl PartialEq<DigestBytes> for Sha256Hash {
-    fn eq(&self, other: &DigestBytes) -> bool {
-        self.as_slice() == other.as_bytes()
-    }
-}
-
-impl PartialEq<Sha256Hash> for DigestBytes {
-    fn eq(&self, other: &Sha256Hash) -> bool {
-        self.as_bytes() == other.as_slice()
-    }
-}
-
-impl PartialEq<[u8; 32]> for Sha256Hash {
-    fn eq(&self, other: &[u8; 32]) -> bool {
-        &self.0 == other
-    }
-}
-
-impl PartialEq<Sha256Hash> for [u8; 32] {
-    fn eq(&self, other: &Sha256Hash) -> bool {
-        self == &other.0
-    }
-}
-
-impl<'a> PartialEq<&'a [u8]> for Sha256Hash {
-    fn eq(&self, other: &&'a [u8]) -> bool {
-        self.as_slice() == *other
-    }
-}
-
-impl PartialEq<Sha256Hash> for &[u8] {
-    fn eq(&self, other: &Sha256Hash) -> bool {
-        *self == other.as_slice()
-    }
-}
-
-impl PartialEq<Vec<u8>> for Sha256Hash {
-    fn eq(&self, other: &Vec<u8>) -> bool {
-        self.as_slice() == other.as_slice()
-    }
-}
-
-impl PartialEq<Sha256Hash> for Vec<u8> {
-    fn eq(&self, other: &Sha256Hash) -> bool {
-        self.as_slice() == other.as_slice()
     }
 }
 
@@ -1108,7 +1149,7 @@ mod tests {
         assert!(LogIndex::new(u64::MAX).is_err());
         assert!(serde_json::from_str::<LogIndex>(&u64::MAX.to_string()).is_err());
         for bytes in [vec![0; 48], vec![0xff; 32], vec![0xfb; 64]] {
-            let digest = DigestBytes::from_bytes(bytes.clone());
+            let digest = DigestBytes::new(bytes.clone());
             assert_eq!(
                 serde_json::from_str::<DigestBytes>(&serde_json::to_string(&digest).unwrap())
                     .unwrap(),
@@ -1256,8 +1297,8 @@ mod tests {
     #[test]
     fn test_digest_interoperability() {
         let raw_bytes = [5u8; 32];
-        let sha_hash = Sha256Hash::from_bytes(raw_bytes);
-        let digest_bytes = DigestBytes::from_bytes(raw_bytes.to_vec());
+        let sha_hash = Sha256Hash::new(raw_bytes);
+        let digest_bytes = DigestBytes::new(raw_bytes.to_vec());
 
         // From/TryFrom conversions
         let converted_digest: DigestBytes = sha_hash.into();
@@ -1273,7 +1314,7 @@ mod tests {
         assert_eq!(array, raw_bytes);
 
         // Invalid length TryFrom
-        let bad_digest = DigestBytes::from_bytes(vec![1u8; 16]);
+        let bad_digest = DigestBytes::new(vec![1u8; 16]);
         let bad_sha_result = Sha256Hash::try_from(bad_digest);
         assert!(bad_sha_result.is_err());
 
@@ -1296,5 +1337,31 @@ mod tests {
 
         assert_eq!(digest_bytes, vec_bytes);
         assert_eq!(vec_bytes, digest_bytes);
+    }
+
+    #[test]
+    fn test_sha512_hash_matches_sha256_hash_api() {
+        let hash = Sha512Hash::new([7u8; 64]);
+        let hex = hash.to_hex();
+        assert_eq!(hash.to_string(), hex);
+        assert_eq!(hex.parse::<Sha512Hash>().unwrap(), hash);
+        assert_eq!(Sha512Hash::from_base64(&hash.to_base64()).unwrap(), hash);
+        assert_eq!(Sha512Hash::from_hex_or_base64(&hex).unwrap(), hash);
+
+        let json = serde_json::to_string(&hash).unwrap();
+        assert_eq!(json, format!("\"{}\"", hash.to_base64()));
+        assert_eq!(serde_json::from_str::<Sha512Hash>(&json).unwrap(), hash);
+
+        let digest = DigestBytes::from(hash);
+        assert_eq!(Sha512Hash::try_from(&digest).unwrap(), hash);
+        assert_eq!(hash, digest);
+        assert!(Sha512Hash::try_from(&[0u8; 32][..]).is_err());
+
+        let sha256 = Sha256Hash::new([1u8; 32]);
+        assert_eq!(sha256.to_string().parse::<Sha256Hash>().unwrap(), sha256);
+        assert_eq!(
+            KeyHint::try_from(&[1u8, 2, 3, 4][..]).unwrap().to_string(),
+            "01020304"
+        );
     }
 }

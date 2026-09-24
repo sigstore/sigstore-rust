@@ -396,7 +396,7 @@ impl Signer {
                         digest.algorithm()
                     )));
                 }
-                Sha256Hash::try_from_slice(digest.as_bytes())
+                Sha256Hash::try_from(digest.as_bytes())
                     .map_err(|e| Error::Signing(e.to_string()))?
             }
             other => {

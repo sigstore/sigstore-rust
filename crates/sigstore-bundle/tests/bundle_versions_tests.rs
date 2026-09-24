@@ -374,7 +374,7 @@ fn test_structural_validation_does_not_verify_inclusion_proof_crypto() {
         .inclusion_proof
         .as_mut()
         .expect("bundle has inclusion proof");
-    proof.hashes[0] = Sha256Hash::from_bytes([0u8; 32]);
+    proof.hashes[0] = Sha256Hash::new([0u8; 32]);
 
     let result = validate_bundle(&bundle);
     assert!(
@@ -393,7 +393,7 @@ fn test_structural_validation_rejects_root_hash_mismatch() {
         .inclusion_proof
         .as_mut()
         .expect("bundle has inclusion proof");
-    proof.root_hash = Sha256Hash::from_bytes([0u8; 32]);
+    proof.root_hash = Sha256Hash::new([0u8; 32]);
 
     let result = validate_bundle(&bundle);
     assert_eq!(

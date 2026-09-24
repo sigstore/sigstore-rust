@@ -81,7 +81,7 @@ fn entry_with_body_field(path: &[&str], value: serde_json::Value) -> String {
 
 fn request() -> HashedRekordV2 {
     HashedRekordV2::new_with_certificate(
-        &Sha256Hash::from_bytes([1; 32]),
+        &Sha256Hash::new([1; 32]),
         &SignatureBytes::from_bytes(b"signature"),
         &DerCertificate::new(vec![0x30, 0x00]),
         RekorV2KeyDetails::PkixEcdsaP256Sha256,
@@ -174,7 +174,7 @@ async fn create_entry_rejects_mismatched_algorithm_semantics() {
 async fn create_entry_rejects_a_response_for_a_different_submission() {
     let (url, _received) = serve_once("201 Created", "application/json", VALID_ENTRY.as_bytes());
     let different = HashedRekordV2::new_with_certificate(
-        &Sha256Hash::from_bytes([2; 32]),
+        &Sha256Hash::new([2; 32]),
         &SignatureBytes::from_bytes(b"other signature"),
         &DerCertificate::new(vec![0x30, 0x00]),
         RekorV2KeyDetails::PkixEcdsaP256Sha256,

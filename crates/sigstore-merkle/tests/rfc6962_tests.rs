@@ -223,7 +223,7 @@ fn test_inclusion_four_leaves() {
 #[test]
 fn test_inclusion_wrong_root() {
     let leaf_hash = hash_leaf(b"test");
-    let wrong_root = Sha256Hash::from_bytes([0u8; 32]);
+    let wrong_root = Sha256Hash::new([0u8; 32]);
     let result = verify_inclusion_proof(&leaf_hash, 0, 1, &[], &wrong_root);
     assert!(result.is_err(), "Should fail with wrong root");
 }
@@ -256,7 +256,7 @@ fn test_consistency_same_size() {
 #[test]
 fn test_consistency_empty_old_tree() {
     let root = hash_leaf(b"test");
-    let empty_root = Sha256Hash::from_bytes([0u8; 32]);
+    let empty_root = Sha256Hash::new([0u8; 32]);
     let result = sigstore_merkle::verify_consistency_proof(0, 1, &[], &empty_root, &root);
     assert!(result.is_ok(), "Empty old tree should be consistent");
 }

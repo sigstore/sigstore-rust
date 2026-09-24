@@ -197,12 +197,12 @@ impl<'a> PreparedArtifact<'a> {
     }
 
     pub(crate) fn sha256(&self) -> Result<Sha256Hash> {
-        Sha256Hash::try_from_slice(self.digest(HashAlgorithm::Sha2256)?.as_bytes())
+        Sha256Hash::try_from(self.digest(HashAlgorithm::Sha2256)?.as_bytes())
             .map_err(|e| Error::Verification(e.to_string()))
     }
 
     pub(crate) fn sha512(&self) -> Result<Sha512Hash> {
-        Sha512Hash::try_from_slice(self.digest(HashAlgorithm::Sha2512)?.as_bytes())
+        Sha512Hash::try_from(self.digest(HashAlgorithm::Sha2512)?.as_bytes())
             .map_err(|e| Error::Verification(e.to_string()))
     }
 }

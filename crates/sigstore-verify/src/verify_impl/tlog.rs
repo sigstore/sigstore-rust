@@ -234,7 +234,7 @@ pub fn verify_set(entry: &TransparencyLogEntry, rekor_keys: &Keyring) -> Result<
     // time, require the log key's validity window to cover it: an entry must
     // have been integrated while the log key was valid.
     let decoded_key_id = entry.log_id.key_id.as_bytes();
-    let key_id = Sha256Hash::try_from_slice(decoded_key_id)
+    let key_id = Sha256Hash::try_from(decoded_key_id)
         .map_err(|e| Error::Verification(format!("invalid Rekor log ID: {e}")))?;
     let keyring = rekor_keys;
     let log_key = if let Some(integrated_ts) = entry.integrated_time {

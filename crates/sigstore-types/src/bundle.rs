@@ -804,7 +804,7 @@ mod tests {
             assert_eq!(statement.subject[0].name, "");
             assert_eq!(
                 statement.subject[0].digest.sha256,
-                Some(Sha256Hash::from_bytes([0; 32]))
+                Some(Sha256Hash::new([0; 32]))
             );
         } else {
             panic!("expected DSSE envelope");

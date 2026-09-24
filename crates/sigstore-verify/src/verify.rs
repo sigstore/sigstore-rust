@@ -297,7 +297,7 @@ impl Verifier {
             );
         for (is_rekor, id, public_key) in logs {
             validate_trust_window(public_key.valid_for)?;
-            let id = Sha256Hash::try_from_slice(id.key_id.as_bytes())?;
+            let id = Sha256Hash::try_from(id.key_id.as_bytes())?;
             if !ids.insert((is_rekor, id)) {
                 return Err(Error::Verification(format!(
                     "duplicate trusted log ID: {}",
@@ -1109,7 +1109,7 @@ mod tests {
         )
         .with_message_digest(sigstore_types::bundle::MessageDigest::new(
             HashAlgorithm::Sha2384,
-            sigstore_types::DigestBytes::from_bytes(vec![0; 48]),
+            sigstore_types::DigestBytes::new(vec![0; 48]),
         ));
 
         assert_eq!(

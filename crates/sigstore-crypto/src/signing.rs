@@ -284,7 +284,7 @@ impl KeyPair {
                 let mut hash = [0u8; 32];
                 hash.copy_from_slice(digest.as_ref());
                 Ok((
-                    Sha256Hash::from_bytes(hash),
+                    Sha256Hash::new(hash),
                     SignatureBytes::new(sig.as_ref().to_vec()),
                 ))
             }
