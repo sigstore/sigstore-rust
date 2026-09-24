@@ -153,18 +153,22 @@ impl SigningConfig {
         tuf_config: &TufSigningConfig,
         force_rekor_version: Option<RekorApiVersion>,
     ) -> Result<Self> {
+        let force_major = force_rekor_version.map(|v| match v {
+            RekorApiVersion::V1 => 1,
+            RekorApiVersion::V2 => 2,
+        });
+
         // This signer submits to one Rekor and one TSA. Reject requirements it
         // cannot satisfy before discarding the TUF service-selection metadata.
-        for (service, config) in [
-            ("Rekor", &tuf_config.rekor_tlog_config),
-            ("TSA", &tuf_config.tsa_config),
+        for (service, config, eligible) in [
+            (
+                "Rekor",
+                &tuf_config.rekor_tlog_config,
+                tuf_config.get_rekor_urls(force_major),
+            ),
+            ("TSA", &tuf_config.tsa_config, tuf_config.get_tsa_urls()),
         ] {
-            if matches!(config.selector, ServiceSelector::Exact) && config.count != Some(1) {
-                return Err(Error::Config(format!(
-                    "{service} EXACT selector requires count 1 for this signer; got {:?}",
-                    config.count
-                )));
-            }
+            check_single_service_requirement(service, config, &eligible)?;
         }
 
         let fulcio_url = tuf_config
@@ -172,10 +176,6 @@ impl SigningConfig {
             .map(|e| e.url.clone())
             .ok_or_else(|| Error::Config("Missing Fulcio URL in TUF config".to_string()))?;
 
-        let force_major = force_rekor_version.map(|v| match v {
-            RekorApiVersion::V1 => 1,
-            RekorApiVersion::V2 => 2,
-        });
         let (rekor_url, rekor_api_version) =
             if let Some(rekor) = tuf_config.get_rekor_url(force_major) {
                 let version = if rekor.major_api_version == 2 {
@@ -217,6 +217,52 @@ impl SigningConfig {
             self.rekor_api_version,
             self.tsa_url.as_deref(),
         )
+    }
+}
+
+/// Check that a TUF service requirement can be met by submitting to one service.
+///
+/// `eligible` are the endpoints the signer could choose from. ANY and EXACT
+/// with count 1 are satisfiable; ALL is satisfiable only when the eligible
+/// endpoints belong to a single operator. UNDEFINED and unknown selectors are
+/// rejected rather than guessed.
+fn check_single_service_requirement(
+    service: &str,
+    config: &sigstore_trust_root::ServiceConfiguration,
+    eligible: &[&sigstore_trust_root::ServiceEndpoint],
+) -> Result<()> {
+    match config.selector {
+        ServiceSelector::Any => Ok(()),
+        ServiceSelector::Exact if config.count == Some(1) => Ok(()),
+        ServiceSelector::Exact => Err(Error::Config(format!(
+            "{service} EXACT selector requires count 1 for this signer; got {:?}",
+            config.count
+        ))),
+        ServiceSelector::All => {
+            // Endpoints without an operator cannot be shown to share one.
+            let mut operators = eligible.iter().map(|e| e.operator.as_deref());
+            let single_operator = match operators.next() {
+                None => true,
+                Some(None) => eligible.len() == 1,
+                Some(Some(first)) => operators.all(|op| op == Some(first)),
+            };
+            if single_operator {
+                Ok(())
+            } else {
+                Err(Error::Config(format!(
+                    "{service} ALL selector requires submitting to {} services; \
+                     this signer supports one",
+                    eligible.len()
+                )))
+            }
+        }
+        ServiceSelector::Undefined => Err(Error::Config(format!(
+            "{service} service selector is undefined"
+        ))),
+        _ => Err(Error::Config(format!(
+            "{service} service selector {:?} is not supported by this signer",
+            config.selector
+        ))),
     }
 }
 
@@ -802,6 +848,46 @@ mod tests {
                 assert_eq!(
                     SigningConfig::from_tuf_config(&tuf).is_ok(),
                     count == Some(1)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tuf_all_and_undefined_selectors_are_not_silently_reduced() {
+        let baseline = TufSigningConfig::from_json(SIGSTORE_PRODUCTION_SIGNING_CONFIG).unwrap();
+        for tsa in [false, true] {
+            let service = if tsa { "TSA" } else { "Rekor" };
+            let with_selector = |selector, second_operator: Option<&str>| {
+                let mut tuf = baseline.clone();
+                let (requirement, endpoints) = if tsa {
+                    (&mut tuf.tsa_config, &mut tuf.tsa_urls)
+                } else {
+                    (&mut tuf.rekor_tlog_config, &mut tuf.rekor_tlog_urls)
+                };
+                requirement.selector = selector;
+                if let Some(operator) = second_operator {
+                    let mut second = endpoints[0].clone();
+                    second.url.push_str("/second");
+                    second.operator = Some(operator.into());
+                    endpoints.push(second);
+                }
+                SigningConfig::from_tuf_config(&tuf)
+            };
+
+            // ALL is satisfiable by one submission when a single operator runs
+            // every eligible service.
+            with_selector(ServiceSelector::All, None).unwrap();
+            with_selector(ServiceSelector::All, Some("sigstore.dev")).unwrap();
+
+            for (selector, second) in [
+                (ServiceSelector::All, Some("second.example")),
+                (ServiceSelector::Undefined, None),
+            ] {
+                let error = with_selector(selector, second).unwrap_err();
+                assert!(
+                    matches!(&error, Error::Config(message) if message.contains(service)),
+                    "{selector:?}: {error}"
                 );
             }
         }
