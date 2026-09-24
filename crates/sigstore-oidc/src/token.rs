@@ -260,20 +260,6 @@ mod unix_seconds_opt {
     }
 }
 
-/// Known OIDC issuers
-pub mod issuers {
-    /// Sigstore's public Dex instance
-    pub const SIGSTORE_OAUTH: &str = "https://oauth2.sigstore.dev/auth";
-    /// GitHub Actions OIDC
-    pub const GITHUB_ACTIONS: &str = "https://token.actions.githubusercontent.com";
-    /// Google Accounts
-    pub const GOOGLE: &str = "https://accounts.google.com";
-    /// Microsoft
-    pub const MICROSOFT: &str = "https://login.microsoftonline.com";
-    /// GitLab
-    pub const GITLAB: &str = "https://gitlab.com";
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -70,7 +70,8 @@ use sigstore_sign::{SigningContext, SigningConfig};
 
 let endpoints = sigstore_trust_root::SigningConfig::production().await?;
 let config = SigningConfig::from_tuf_config(&endpoints)?;
-let token = sigstore_oidc::get_identity_token(config.oidc_url.as_deref()).await?;
+let oidc_url = config.oidc_url.as_deref().ok_or("signing config lists no OIDC provider")?;
+let token = sigstore_oidc::get_identity_token(oidc_url).await?;
 let signer = SigningContext::with_config(config).signer(token);
 
 // Sign the artifact - returns a Sigstore bundle

@@ -335,6 +335,7 @@ async fn get_token(
     println!("  Starting interactive authentication...");
     println!();
 
+    let oidc_url = oidc_url.ok_or("the signing config lists no OIDC provider")?;
     get_identity_token(oidc_url)
         .await
         .map_err(|e| format!("OAuth failed: {}", e))
