@@ -5,9 +5,8 @@
 
 use crate::entry::RekorV2KeyDetails;
 use serde::{Deserialize, Serialize};
-use sigstore_types::encoding::base64_bytes;
 use sigstore_types::{
-    DerCertificate, DerPublicKey, HashAlgorithm, HexHash, PemContent, SignatureBytes,
+    DerCertificate, DerPublicKey, DigestBytes, HashAlgorithm, HexHash, PemContent, SignatureBytes,
 };
 
 /// Parsed Rekor entry body
@@ -116,9 +115,8 @@ pub struct HashedRekordV002Data {
 pub struct HashedRekordV002DataInner {
     /// Algorithm used for the logged digest.
     pub algorithm: HashAlgorithm,
-    /// Base64-encoded hash digest
-    #[serde(with = "base64_bytes")]
-    pub digest: Vec<u8>,
+    /// Hash digest (base64 on the wire)
+    pub digest: DigestBytes,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,9 +228,8 @@ pub struct DsseV002Data {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PayloadHash {
     pub algorithm: HashAlgorithm,
-    /// Base64-encoded hash digest
-    #[serde(with = "base64_bytes")]
-    pub digest: Vec<u8>,
+    /// Hash digest (base64 on the wire)
+    pub digest: DigestBytes,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

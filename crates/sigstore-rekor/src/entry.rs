@@ -324,11 +324,35 @@ pub struct HashedRekordData {
     pub hash: HashedRekordHash,
 }
 
+/// Serde helper for lowercase hash algorithm serialization (for Rekor API)
+///
+/// Use this with `#[serde(with = "rekor_hash_algorithm")]` on `HashAlgorithm`
+/// fields that need to serialize as "sha256" instead of "SHA2_256".
+mod rekor_hash_algorithm {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use sigstore_types::HashAlgorithm;
+
+    pub fn serialize<S>(algo: &HashAlgorithm, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(algo.as_rekor_str())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<HashAlgorithm, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse::<HashAlgorithm>().map_err(serde::de::Error::custom)
+    }
+}
+
 /// Hash in HashedRekord
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HashedRekordHash {
     /// Hash algorithm (serializes as lowercase for Rekor API)
-    #[serde(with = "sigstore_types::hash::hash_algorithm_lowercase")]
+    #[serde(with = "rekor_hash_algorithm")]
     pub algorithm: HashAlgorithm,
     /// Hash value (hex encoded)
     pub value: String,

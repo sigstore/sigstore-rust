@@ -82,27 +82,3 @@ impl<'de> Deserialize<'de> for HashAlgorithm {
         s.parse::<HashAlgorithm>().map_err(serde::de::Error::custom)
     }
 }
-
-/// Serde helper for lowercase hash algorithm serialization (for Rekor API)
-///
-/// Use this with `#[serde(with = "hash_algorithm_lowercase")]` on `HashAlgorithm`
-/// fields that need to serialize as "sha256" instead of "SHA2_256".
-pub mod hash_algorithm_lowercase {
-    use super::HashAlgorithm;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(algo: &HashAlgorithm, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(algo.as_rekor_str())
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<HashAlgorithm, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        s.parse::<HashAlgorithm>().map_err(serde::de::Error::custom)
-    }
-}

@@ -69,80 +69,8 @@ where
 // Serde helper modules (for use with raw Vec<u8> when needed)
 // ============================================================================
 
-/// Serde helper for base64 encoding/decoding of byte arrays
-///
-/// Use this with `#[serde(with = "base64_bytes")]` on `Vec<u8>` fields.
-pub mod base64_bytes {
-    use base64::{engine::general_purpose::STANDARD, Engine};
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&STANDARD.encode(bytes))
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        super::decode_protojson_base64(&s).map_err(serde::de::Error::custom)
-    }
-}
-
-/// Serde helper for optional base64 encoding/decoding
-pub mod base64_bytes_option {
-    use base64::{engine::general_purpose::STANDARD, Engine};
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(bytes: &Option<Vec<u8>>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match bytes {
-            Some(b) => serializer.serialize_some(&STANDARD.encode(b)),
-            None => serializer.serialize_none(),
-        }
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let opt: Option<String> = Option::deserialize(deserializer)?;
-        match opt {
-            Some(s) => super::decode_protojson_base64(&s)
-                .map(Some)
-                .map_err(serde::de::Error::custom),
-            None => Ok(None),
-        }
-    }
-}
-
-/// Serde helper for hex encoding/decoding of byte arrays
-pub mod hex_bytes {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&hex::encode(bytes))
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        hex::decode(s).map_err(serde::de::Error::custom)
-    }
-}
-
 /// Serde helper for u64 fields serialized as strings.
-pub mod string_u64 {
+pub(crate) mod string_u64 {
     use serde::{Deserializer, Serializer};
 
     pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
@@ -170,7 +98,7 @@ pub mod string_u64 {
 /// `None`. Any other value must be representable as a `jiff::Timestamp`, or
 /// deserialization fails: an unrepresentable timestamp is rejected at parse
 /// time instead of being carried around as a raw integer.
-pub mod string_timestamp_opt {
+pub(crate) mod string_timestamp_opt {
     use serde::{Deserializer, Serializer};
 
     pub fn serialize<S>(value: &Option<jiff::Timestamp>, serializer: S) -> Result<S::Ok, S::Error>

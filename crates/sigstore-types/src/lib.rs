@@ -24,7 +24,6 @@ pub use bundle::{
 pub use checkpoint::{Checkpoint, CheckpointSignature};
 pub use dsse::{pae, DsseEnvelope, DsseSignature};
 pub use encoding::{
-    base64_bytes, base64_bytes_option, hex_bytes, string_timestamp_opt, string_u64,
     CanonicalizedBody, DerCertificate, DerPublicKey, DigestBytes, EntryUuid, HexHash, HexLogId,
     KeyHint, KeyId, LogIndex, LogKeyId, PayloadBytes, PemContent, Sha256Hash, Sha512Hash,
     SignatureBytes, SignedTimestamp, TimestampToken,

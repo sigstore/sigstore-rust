@@ -64,7 +64,7 @@ pub(crate) fn verify_hashedrekord_entry(
                     logged.data.algorithm
                 )));
             }
-            let expected = Sha256Hash::try_from(logged.data.digest.as_slice()).map_err(|e| {
+            let expected = Sha256Hash::try_from(&logged.data.digest).map_err(|e| {
                 Error::Verification(format!("invalid digest in Rekor entry: {}", e))
             })?;
             validate_artifact_hash(&hash, &expected)?;
