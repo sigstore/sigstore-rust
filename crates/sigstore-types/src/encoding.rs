@@ -493,6 +493,7 @@ impl std::fmt::Display for EntryUuid {
 pub struct LogIndex(u64);
 
 impl LogIndex {
+    /// Create a log index; fails if it does not fit a protobuf `int64`.
     pub fn new(index: u64) -> Result<Self> {
         if index > i64::MAX as u64 {
             return Err(Error::Validation("log index exceeds protobuf int64".into()));
@@ -500,10 +501,12 @@ impl LogIndex {
         Ok(Self(index))
     }
 
-    pub fn value(self) -> u64 {
+    /// The index.
+    pub fn get(self) -> u64 {
         self.0
     }
 
+    /// The index as a protobuf `int64`; never negative.
     pub fn as_i64(self) -> i64 {
         self.0 as i64
     }
@@ -512,6 +515,31 @@ impl LogIndex {
 impl TryFrom<u64> for LogIndex {
     type Error = Error;
     fn try_from(index: u64) -> Result<Self> {
+        Self::new(index)
+    }
+}
+
+impl TryFrom<i64> for LogIndex {
+    type Error = Error;
+    fn try_from(index: i64) -> Result<Self> {
+        u64::try_from(index)
+            .map(Self)
+            .map_err(|_| Error::Validation("log index must not be negative".into()))
+    }
+}
+
+impl From<LogIndex> for u64 {
+    fn from(index: LogIndex) -> Self {
+        index.0
+    }
+}
+
+impl std::str::FromStr for LogIndex {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self> {
+        let index = s
+            .parse::<u64>()
+            .map_err(|e| Error::Validation(format!("invalid log index {s:?}: {e}")))?;
         Self::new(index)
     }
 }
@@ -1207,10 +1235,10 @@ mod tests {
     #[test]
     fn log_index_deserializes_only_non_negative_protobuf_int64_values() {
         assert_eq!(
-            serde_json::from_str::<LogIndex>("\"42\"").unwrap().value(),
+            serde_json::from_str::<LogIndex>("\"42\"").unwrap().get(),
             42
         );
-        assert_eq!(serde_json::from_str::<LogIndex>("42").unwrap().value(), 42);
+        assert_eq!(serde_json::from_str::<LogIndex>("42").unwrap().get(), 42);
         assert!(serde_json::from_str::<LogIndex>("-1").is_err());
         assert!(serde_json::from_str::<LogIndex>("\"-1\"").is_err());
         assert!(serde_json::from_str::<LogIndex>("9223372036854775808").is_err());
@@ -1363,5 +1391,16 @@ mod tests {
             KeyHint::try_from(&[1u8, 2, 3, 4][..]).unwrap().to_string(),
             "01020304"
         );
+    }
+
+    #[test]
+    fn test_log_index_conversions() {
+        let index: LogIndex = "42".parse().unwrap();
+        assert_eq!(index.get(), 42);
+        assert_eq!(u64::from(index), 42);
+        assert_eq!(LogIndex::try_from(42i64).unwrap(), index);
+        assert!(LogIndex::try_from(-1i64).is_err());
+        assert!(LogIndex::try_from(u64::MAX).is_err());
+        assert!("-1".parse::<LogIndex>().is_err());
     }
 }

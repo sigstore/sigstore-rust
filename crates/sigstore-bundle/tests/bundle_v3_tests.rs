@@ -222,7 +222,7 @@ fn test_inclusion_proof_verification() {
     let root_hash = &proof.root_hash;
 
     // Verify the inclusion proof
-    let leaf_index = proof.log_index.value();
+    let leaf_index = proof.log_index.get();
     let tree_size = proof.tree_size;
 
     let result = verify_inclusion_proof(&leaf_hash, leaf_index, tree_size, proof_hashes, root_hash);

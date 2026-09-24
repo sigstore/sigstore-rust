@@ -95,7 +95,7 @@ async fn create_entry_returns_the_protobuf_entry_without_lossy_conversion() {
 
     let entry = client.create_entry(request()).await.unwrap();
 
-    assert_eq!(entry.log_index.value(), 7);
+    assert_eq!(entry.log_index.get(), 7);
     assert_eq!(
         entry.log_id.key_id.to_base64(),
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -202,8 +202,8 @@ async fn create_entry_ignores_unauthenticated_duplicate_proof_fields() {
         .create_entry(request())
         .await
         .unwrap();
-    assert_eq!(entry.log_index.value(), 7);
-    assert_eq!(entry.inclusion_proof.unwrap().log_index.value(), 0);
+    assert_eq!(entry.log_index.get(), 7);
+    assert_eq!(entry.inclusion_proof.unwrap().log_index.get(), 0);
 }
 
 #[tokio::test]

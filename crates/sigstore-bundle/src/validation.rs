@@ -227,7 +227,7 @@ fn validate_inclusion_proof_structure(bundle: &Bundle) -> Result<()> {
 
             let is_v2 = entry.kind_version == KindVersion::HashedRekordV002;
             if is_v2 {
-                let leaf_index = entry.log_index.value();
+                let leaf_index = entry.log_index.get();
                 if leaf_index >= checkpoint.tree_size() {
                     return Err(Error::LogIndexOutOfRange {
                         log_index: leaf_index,
@@ -235,7 +235,7 @@ fn validate_inclusion_proof_structure(bundle: &Bundle) -> Result<()> {
                     });
                 }
             } else {
-                let leaf_index = proof.log_index.value();
+                let leaf_index = proof.log_index.get();
                 let tree_size = proof.tree_size;
                 if leaf_index >= tree_size {
                     return Err(Error::LogIndexOutOfRange {

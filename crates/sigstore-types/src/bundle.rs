@@ -735,7 +735,7 @@ mod tests {
             "canonicalizedBody": "e30="
         }"#;
         let entry: TransparencyLogEntry = serde_json::from_str(json).unwrap();
-        assert_eq!(entry.log_index.value(), 0);
+        assert_eq!(entry.log_index.get(), 0);
         assert_eq!(entry.integrated_time.unwrap().as_second(), 1700000000);
     }
 
@@ -748,7 +748,7 @@ mod tests {
             "checkpoint": {"envelope": "test\n1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n\n— test AAAAAAAA\n"}
         }"#;
         let proof: InclusionProof = serde_json::from_str(json).unwrap();
-        assert_eq!(proof.log_index.value(), 0);
+        assert_eq!(proof.log_index.get(), 0);
         assert_eq!(proof.tree_size, 1);
         assert!(proof.hashes.is_empty());
     }
@@ -773,11 +773,11 @@ mod tests {
 
         // Verify tlog entry parsed with default logIndex
         let entry = &bundle.verification_material.tlog_entries[0];
-        assert_eq!(entry.log_index.value(), 0);
+        assert_eq!(entry.log_index.get(), 0);
 
         // Verify inclusion proof parsed without logIndex and hashes
         let proof = entry.inclusion_proof.as_ref().unwrap();
-        assert_eq!(proof.log_index.value(), 0);
+        assert_eq!(proof.log_index.get(), 0);
         assert!(proof.hashes.is_empty());
 
         // Verify DSSE envelope with subject missing name

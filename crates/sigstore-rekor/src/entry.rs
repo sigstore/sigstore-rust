@@ -518,7 +518,7 @@ mod tests {
         let converted = entry
             .to_bundle_entry(sigstore_types::KindVersion::HashedRekordV001)
             .unwrap();
-        assert_eq!(converted.log_index.value(), 123);
+        assert_eq!(converted.log_index.get(), 123);
         assert_eq!(converted.canonicalized_body, entry.body);
         assert_eq!(converted.integrated_time, entry.integrated_time);
         entry.verification = Some(Verification {

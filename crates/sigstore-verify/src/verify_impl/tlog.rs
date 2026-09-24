@@ -139,10 +139,10 @@ fn verify_merkle_inclusion(entry: &TransparencyLogEntry, proof: &InclusionProof)
         let checkpoint = proof.checkpoint.checkpoint().ok_or_else(|| {
             Error::Verification("Rekor v2 inclusion proof has no checkpoint".to_string())
         })?;
-        let leaf_index = entry.log_index.value();
+        let leaf_index = entry.log_index.get();
         (leaf_index, checkpoint.tree_size(), *checkpoint.root_hash())
     } else {
-        let leaf_index = proof.log_index.value();
+        let leaf_index = proof.log_index.get();
         let tree_size = proof.tree_size;
         (leaf_index, tree_size, proof.root_hash)
     };
