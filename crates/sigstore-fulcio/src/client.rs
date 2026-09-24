@@ -339,7 +339,7 @@ impl FulcioClientBuilder {
 pub struct Configuration {
     /// List of supported OIDC issuers
     #[serde(default)]
-    pub issuers: Vec<OIDCIssuer>,
+    pub issuers: Vec<OidcIssuer>,
 }
 
 /// How an OIDC issuer is identified (the `issuer` oneof in Fulcio's API)
@@ -362,7 +362,7 @@ pub enum IssuerUrl {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
-pub struct OIDCIssuer {
+pub struct OidcIssuer {
     /// Issuer URL, either exact or a wildcard pattern
     #[serde(flatten)]
     pub issuer: IssuerUrl,
