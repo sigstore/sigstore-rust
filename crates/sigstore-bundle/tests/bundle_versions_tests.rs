@@ -68,7 +68,7 @@ fn test_parse_v01_bundle() {
 
     // Check media type
     assert_eq!(bundle.media_type, sigstore_types::MediaType::Bundle0_1);
-    assert_eq!(bundle.version(), sigstore_types::MediaType::Bundle0_1);
+    assert_eq!(bundle.media_type(), sigstore_types::MediaType::Bundle0_1);
 
     // Check it has x509CertificateChain (not single certificate)
     match &bundle.verification_material.content {
@@ -122,7 +122,7 @@ fn test_parse_v03_bundle() {
 
     // Check media type
     assert_eq!(bundle.media_type, sigstore_types::MediaType::Bundle0_3);
-    assert_eq!(bundle.version(), sigstore_types::MediaType::Bundle0_3);
+    assert_eq!(bundle.media_type(), sigstore_types::MediaType::Bundle0_3);
 
     // Check it has single certificate (not chain)
     match &bundle.verification_material.content {
@@ -203,7 +203,7 @@ fn test_v03_github_attestation_no_tlog_entries() {
     let bundle =
         Bundle::from_json(V03_BUNDLE_GITHUB_NO_TLOG).expect("Failed to parse GitHub bundle");
 
-    assert_eq!(bundle.version(), sigstore_types::MediaType::Bundle0_3);
+    assert_eq!(bundle.media_type(), sigstore_types::MediaType::Bundle0_3);
     assert!(bundle.verification_material.tlog_entries.is_empty());
     assert_eq!(
         bundle
@@ -275,8 +275,8 @@ fn test_media_type_parsing() {
     let v01 = Bundle::from_json(V01_BUNDLE).expect("Failed to parse v0.1");
     let v03 = Bundle::from_json(V03_BUNDLE_WITH_PROOF).expect("Failed to parse v0.3");
 
-    assert_eq!(v01.version(), sigstore_types::MediaType::Bundle0_1);
-    assert_eq!(v03.version(), sigstore_types::MediaType::Bundle0_3);
+    assert_eq!(v01.media_type(), sigstore_types::MediaType::Bundle0_1);
+    assert_eq!(v03.media_type(), sigstore_types::MediaType::Bundle0_3);
 }
 
 // ==== Error Cases ====

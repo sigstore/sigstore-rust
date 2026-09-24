@@ -3,7 +3,7 @@
 //! These tests validate the complete verification flow using real bundles.
 
 use sigstore_trust_root::{SigstoreInstance, TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
-use sigstore_types::{ArtifactDigest, DigestBytes, HashAlgorithm, LogIndex, Sha256Hash};
+use sigstore_types::{ArtifactDigest, DigestBytes, HashAlgorithm, LogIndex, MediaType, Sha256Hash};
 use sigstore_verify::bundle::{validate_bundle, validate_bundle_with_options, ValidationOptions};
 use sigstore_verify::types::Bundle;
 use sigstore_verify::{verify, PublicKeyVerificationPolicy, VerificationPolicy, Verifier};
@@ -17,7 +17,7 @@ fn extract_artifact_digest(bundle: &Bundle) -> Option<Sha256Hash> {
     match &bundle.content {
         sigstore_verify::types::SignatureContent::DsseEnvelope(env) => {
             if env.payload_type == "application/vnd.in-toto+json" {
-                let payload_bytes = env.decode_payload();
+                let payload_bytes = env.payload.as_bytes().to_vec();
                 let payload_str = String::from_utf8(payload_bytes).ok()?;
                 let statement: serde_json::Value = serde_json::from_str(&payload_str).ok()?;
                 let subject = statement["subject"].as_array()?.first()?;
@@ -91,7 +91,7 @@ const GITHUB_PRIVATE_ATTESTATION_BUNDLE: &str =
 fn test_parse_v03_bundle() {
     let bundle = Bundle::from_json(V03_BUNDLE).expect("Failed to parse v0.3 bundle");
 
-    assert!(bundle.media_type.contains("v0.3"));
+    assert_eq!(bundle.media_type, MediaType::Bundle0_3);
     assert!(bundle.has_inclusion_proof());
     assert!(!bundle.verification_material.tlog_entries.is_empty());
 }
@@ -100,7 +100,7 @@ fn test_parse_v03_bundle() {
 fn test_parse_v03_dsse_bundle() {
     let bundle = Bundle::from_json(V03_BUNDLE_DSSE).expect("Failed to parse DSSE bundle");
 
-    assert!(bundle.media_type.contains("v0.3"));
+    assert_eq!(bundle.media_type, MediaType::Bundle0_3);
     assert!(bundle.has_inclusion_proof());
     assert!(bundle.has_inclusion_promise());
 
@@ -506,7 +506,7 @@ fn test_parse_dsse_bundle_from_python() {
     // DSSE bundle from sigstore-python test data
     let bundle = Bundle::from_json(DSSE_BUNDLE).expect("Failed to parse DSSE bundle");
 
-    assert!(bundle.media_type.contains("0.1"));
+    assert_eq!(bundle.media_type, MediaType::Bundle0_1);
 
     // Check DSSE envelope structure
     match &bundle.content {
@@ -551,7 +551,7 @@ fn test_parse_cve_2022_36056_bundle() {
     let bundle = Bundle::from_json(BUNDLE_CVE_2022_36056).expect("Failed to parse CVE test bundle");
 
     // Should parse successfully
-    assert!(bundle.media_type.contains("v0.3"));
+    assert_eq!(bundle.media_type, MediaType::Bundle0_3);
 
     // Check it's a hashedrekord type
     let entry = &bundle.verification_material.tlog_entries[0];
@@ -597,7 +597,10 @@ fn test_github_actions_provenance_bundle() {
 
     // Should parse successfully
     assert!(
-        bundle.media_type.contains("0.1") || bundle.media_type.contains("0.2"),
+        matches!(
+            bundle.media_type,
+            MediaType::Bundle0_1 | MediaType::Bundle0_2
+        ),
         "Expected v0.1 or v0.2 bundle"
     );
 
@@ -695,7 +698,7 @@ fn test_bundle_no_cert_v1() {
     let bundle = Bundle::from_json(BUNDLE_NO_CERT_V1).expect("Failed to parse bundle_no_cert_v1");
 
     // Should parse successfully
-    assert!(bundle.media_type.contains("0.1"));
+    assert_eq!(bundle.media_type, MediaType::Bundle0_1);
 
     // But should not have a certificate
     let cert = bundle.signing_certificate();
@@ -724,7 +727,7 @@ fn test_bundle_no_checkpoint() {
         Bundle::from_json(BUNDLE_NO_CHECKPOINT).expect("Failed to parse bundle_no_checkpoint");
 
     // Should parse successfully
-    assert!(bundle.media_type.contains("0.2"));
+    assert_eq!(bundle.media_type, MediaType::Bundle0_2);
 
     // Should have a tlog entry
     assert!(!bundle.verification_material.tlog_entries.is_empty());
@@ -747,7 +750,7 @@ fn test_bundle_no_log_entry() {
         Bundle::from_json(BUNDLE_NO_LOG_ENTRY).expect("Failed to parse bundle_no_log_entry");
 
     // Should parse successfully
-    assert!(bundle.media_type.contains("0.1"));
+    assert_eq!(bundle.media_type, MediaType::Bundle0_1);
 
     // But should have no tlog entries
     assert!(
@@ -781,7 +784,7 @@ fn test_bundle_v3_no_signed_time() {
         .expect("Failed to parse bundle_v3_no_signed_time");
 
     // Should parse successfully
-    assert!(bundle.media_type.contains("0.3"));
+    assert_eq!(bundle.media_type, MediaType::Bundle0_3);
 
     // Should have a tlog entry
     assert!(!bundle.verification_material.tlog_entries.is_empty());
@@ -819,7 +822,7 @@ fn test_bundle_v3_github_whl() {
         Bundle::from_json(BUNDLE_V3_GITHUB_WHL).expect("Failed to parse bundle_v3_github_whl");
 
     // Should parse successfully
-    assert!(bundle.media_type.contains("0.2"));
+    assert_eq!(bundle.media_type, MediaType::Bundle0_2);
 
     // Should have certificate (raw DER bytes)
     let cert = bundle
@@ -867,7 +870,11 @@ fn test_parse_conda_attestation_bundle() {
         Bundle::from_json(CONDA_ATTESTATION_BUNDLE).expect("Failed to parse conda attestation");
 
     // Should be v0.3 bundle
-    assert!(bundle.media_type.contains("0.3"), "Expected v0.3 bundle");
+    assert_eq!(
+        bundle.media_type,
+        MediaType::Bundle0_3,
+        "Expected v0.3 bundle"
+    );
 
     // Should be DSSE envelope with in-toto attestation
     match &bundle.content {
@@ -879,7 +886,7 @@ fn test_parse_conda_attestation_bundle() {
             assert!(!env.signature.sig.as_bytes().is_empty());
 
             // Decode payload and verify it's a conda attestation
-            let payload_bytes = env.decode_payload();
+            let payload_bytes = env.payload.as_bytes().to_vec();
             let payload_str =
                 String::from_utf8(payload_bytes).expect("Payload should be valid UTF-8");
             let statement: serde_json::Value =
@@ -1688,7 +1695,7 @@ fn managed_dsse_verifier_is_bound_even_when_tlog_verification_is_skipped() {
         .sign(&pae("application/vnd.in-toto+json", &payload))
         .unwrap();
     let envelope = DsseEnvelope::new(
-        "application/vnd.in-toto+json".into(),
+        "application/vnd.in-toto+json",
         PayloadBytes::new(payload.clone()),
         DsseSignature::new(signature.clone(), KeyId::default()),
     );

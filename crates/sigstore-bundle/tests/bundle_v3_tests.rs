@@ -65,7 +65,7 @@ fn test_parse_v3_bundle() {
     let bundle = Bundle::from_json(BUNDLE_V3_JSON).unwrap();
 
     // Check media type
-    assert_eq!(bundle.version(), MediaType::Bundle0_3);
+    assert_eq!(bundle.media_type(), MediaType::Bundle0_3);
 
     // Check we have a certificate
     assert!(bundle.signing_certificate().is_some());

@@ -48,10 +48,8 @@ impl MediaType {
     }
 }
 
-impl std::ops::Deref for MediaType {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
+impl AsRef<str> for MediaType {
+    fn as_ref(&self) -> &str {
         self.as_str()
     }
 }
@@ -94,20 +92,6 @@ impl FromStr for MediaType {
             _ => Err(Error::InvalidMediaType(s.to_string())),
         }
     }
-}
-
-/// Bundle version enum for serde
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum BundleVersion {
-    /// Version 0.1
-    #[serde(rename = "0.1")]
-    V0_1,
-    /// Version 0.2
-    #[serde(rename = "0.2")]
-    V0_2,
-    /// Version 0.3
-    #[serde(rename = "0.3")]
-    V0_3,
 }
 
 /// The main Sigstore bundle structure
@@ -153,8 +137,8 @@ impl Bundle {
         serde_json::to_string_pretty(self).map_err(Error::Json)
     }
 
-    /// Get the bundle version from the media type
-    pub fn version(&self) -> MediaType {
+    /// The bundle's media type, which identifies its format version
+    pub fn media_type(&self) -> MediaType {
         self.media_type
     }
 
@@ -798,7 +782,7 @@ mod tests {
 
         // Verify DSSE envelope with subject missing name
         if let super::SignatureContent::DsseEnvelope(env) = &bundle.content {
-            let payload = env.decode_payload();
+            let payload = env.payload.as_bytes().to_vec();
             let statement: super::super::intoto::Statement =
                 serde_json::from_slice(&payload).expect("should parse in-toto statement");
             assert_eq!(statement.subject[0].name, "");

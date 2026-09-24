@@ -1127,7 +1127,7 @@ mod tests {
 
     fn in_toto_envelope(payload: &str) -> sigstore_types::DsseEnvelope {
         sigstore_types::DsseEnvelope::new(
-            "application/vnd.in-toto+json".to_string(),
+            "application/vnd.in-toto+json",
             sigstore_types::PayloadBytes::from_bytes(payload.as_bytes()),
             unused_signature(),
         )
@@ -1188,7 +1188,7 @@ mod tests {
         data: &[u8],
     ) -> sigstore_types::DsseEnvelope {
         sigstore_types::DsseEnvelope::new(
-            "application/vnd.in-toto+json".to_string(),
+            "application/vnd.in-toto+json",
             sigstore_types::PayloadBytes::from_bytes(DSSE_TEST_PAYLOAD),
             sigstore_types::DsseSignature::new(
                 keypair.sign(data).unwrap(),

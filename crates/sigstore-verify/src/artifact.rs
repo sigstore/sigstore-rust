@@ -229,7 +229,7 @@ mod tests {
         assert_eq!(reader.position(), 0);
 
         let hash = sigstore_crypto::sha512(b"hello").to_hex();
-        let content = SignatureContent::DsseEnvelope(DsseEnvelope::new("application/vnd.in-toto+json".into(), PayloadBytes::new(format!(r#"{{"_type":"https://in-toto.io/Statement/v1","subject":[{{"digest":{{"sha512":"{hash}"}}}}],"predicateType":"p","predicate":{{}}}}"#).into_bytes()), DsseSignature::new(SignatureBytes::from_bytes(b"unused"), Default::default())));
+        let content = SignatureContent::DsseEnvelope(DsseEnvelope::new("application/vnd.in-toto+json", PayloadBytes::new(format!(r#"{{"_type":"https://in-toto.io/Statement/v1","subject":[{{"digest":{{"sha512":"{hash}"}}}}],"predicateType":"p","predicate":{{}}}}"#).into_bytes()), DsseSignature::new(SignatureBytes::from_bytes(b"unused"), Default::default())));
         let requirements = ArtifactRequirements::new(&content, SigningScheme::Ed25519).unwrap();
         assert_eq!(requirements.algorithms, vec![HashAlgorithm::Sha2512]);
         let artifact = PreparedArtifact::from_reader(&b"hello"[..], &requirements).unwrap();

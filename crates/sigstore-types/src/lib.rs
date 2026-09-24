@@ -16,10 +16,10 @@ pub mod tsa_authority;
 
 pub use artifact::{Artifact, ArtifactDigest};
 pub use bundle::{
-    Bundle, BundleVersion, CertificateContent, CheckpointData, InclusionPromise, InclusionProof,
-    KindVersion, LogId, MediaType, MessageDigest, MessageSignature, PublicKeyIdentifier,
-    Rfc3161Timestamp, SignatureContent, TimestampVerificationData, TransparencyLogEntry,
-    VerificationMaterial, VerificationMaterialContent, X509Certificate,
+    Bundle, CertificateContent, CheckpointData, InclusionPromise, InclusionProof, KindVersion,
+    LogId, MediaType, MessageDigest, MessageSignature, PublicKeyIdentifier, Rfc3161Timestamp,
+    SignatureContent, TimestampVerificationData, TransparencyLogEntry, VerificationMaterial,
+    VerificationMaterialContent, X509Certificate,
 };
 pub use checkpoint::{Checkpoint, CheckpointSignature};
 pub use dsse::{pae, DsseEnvelope, DsseSignature};

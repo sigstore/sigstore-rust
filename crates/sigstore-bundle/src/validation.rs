@@ -118,7 +118,7 @@ pub fn validate_bundle(bundle: &Bundle) -> Result<()> {
 /// Those checks require trusted key material and are performed by the
 /// verification path in the `sigstore-verify` crate.
 pub fn validate_bundle_with_options(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
-    match bundle.version() {
+    match bundle.media_type() {
         MediaType::Bundle0_1 => validate_v0_1(bundle, options),
         MediaType::Bundle0_2 => validate_v0_2(bundle, options),
         MediaType::Bundle0_3 => validate_v0_3(bundle, options),
