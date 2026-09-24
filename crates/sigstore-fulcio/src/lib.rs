@@ -14,7 +14,7 @@
 //! use sigstore_fulcio::FulcioClient;
 //!
 //! # async fn example() -> Result<(), sigstore_fulcio::Error> {
-//! let client = FulcioClient::public();
+//! let client = FulcioClient::new("https://fulcio.sigstore.dev")?;
 //! let config = client.get_configuration().await?;
 //! println!("Supported issuers: {:?}", config.issuers);
 //! # Ok(())
@@ -30,7 +30,7 @@
 //! let cache = FileSystemCache::default_location()?;
 //! let client = FulcioClient::builder("https://fulcio.sigstore.dev")
 //!     .with_cache(cache)
-//!     .build();
+//!     .build()?;
 //! ```
 
 pub mod client;

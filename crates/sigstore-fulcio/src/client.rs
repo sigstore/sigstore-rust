@@ -8,6 +8,7 @@ use sigstore_types::{DerCertificate, SignatureBytes};
 use std::time::Duration;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_USER_AGENT: &str = concat!("sigstore-rust/", env!("CARGO_PKG_VERSION"));
 
 #[cfg(feature = "cache")]
 use sigstore_cache::{CacheAdapter, CacheKey, CacheResource};
@@ -15,6 +16,7 @@ use sigstore_cache::{CacheAdapter, CacheKey, CacheResource};
 use std::sync::Arc;
 
 /// A client for interacting with Fulcio
+#[derive(Clone)]
 pub struct FulcioClient {
     /// Base URL of the Fulcio instance
     url: String,
@@ -25,20 +27,26 @@ pub struct FulcioClient {
     cache: Option<Arc<dyn CacheAdapter>>,
 }
 
+impl std::fmt::Debug for FulcioClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FulcioClient")
+            .field("url", &self.url)
+            .finish_non_exhaustive()
+    }
+}
+
 impl FulcioClient {
-    /// Create a new Fulcio client with a 30-second request timeout.
-    pub fn new(url: impl Into<String>) -> Self {
+    /// Create a Fulcio client with default settings.
+    ///
+    /// `url` is the Fulcio base URL, for example the CA URL from a Sigstore
+    /// instance's signing config.
+    pub fn new(url: impl Into<String>) -> Result<Self> {
         Self::builder(url).build()
     }
 
-    /// Create a client for the public Sigstore Fulcio instance
-    pub fn public() -> Self {
-        Self::new("https://fulcio.sigstore.dev")
-    }
-
-    /// Create a client for the Sigstore staging Fulcio instance
-    pub fn staging() -> Self {
-        Self::new("https://fulcio.sigstage.dev")
+    /// The Fulcio base URL this client talks to.
+    pub fn url(&self) -> &str {
+        &self.url
     }
 
     /// Create a builder for configuring the client
@@ -95,16 +103,18 @@ impl FulcioClient {
             .map_err(|e| Error::Http(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(Error::Api(format!(
-                "failed to get configuration: {}",
-                response.status()
-            )));
+            return Err(Error::Status {
+                status: response.status().as_u16(),
+                message: "failed to get configuration".to_string(),
+            });
         }
 
-        response
-            .json()
+        let body = response
+            .bytes()
             .await
-            .map_err(|e| Error::Http(format!("failed to parse JSON: {}", e)))
+            .map_err(|e| Error::Http(e.to_string()))?;
+        serde_json::from_slice(&body)
+            .map_err(|e| Error::InvalidResponse(format!("configuration: {e}")))
     }
 
     /// Request a signing certificate
@@ -127,13 +137,13 @@ impl FulcioClient {
         // Extract public key and convert to PEM for the API
         let public_key_pem = key_pair
             .public_key_der()
-            .map_err(|e| Error::Api(format!("failed to export public key: {}", e)))?
+            .map_err(|e| Error::Signing(format!("failed to export public key: {}", e)))?
             .to_pem();
 
         // Create proof of possession by signing the identity (email or subject)
         let proof_of_possession = key_pair
             .sign(identity_token.identity().as_bytes())
-            .map_err(|e| Error::Api(format!("failed to create proof of possession: {}", e)))?;
+            .map_err(|e| Error::Signing(format!("failed to create proof of possession: {}", e)))?;
 
         let request = CreateSigningCertificateRequest {
             credentials: Credentials {
@@ -157,18 +167,21 @@ impl FulcioClient {
             .map_err(|e| Error::Http(e.to_string()))?;
 
         if !response.status().is_success() {
-            let status = response.status();
+            let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
-            return Err(Error::Api(format!(
-                "failed to create signing certificate: {} - {}",
-                status, body
-            )));
+            return Err(Error::Status {
+                status,
+                message: format!("failed to create signing certificate: {body}"),
+            });
         }
 
-        response
-            .json()
+        let body = response
+            .bytes()
             .await
-            .map_err(|e| Error::Http(format!("failed to parse JSON: {}", e)))
+            .map_err(|e| Error::Http(e.to_string()))?;
+        let wire: SigningCertificateWire = serde_json::from_slice(&body)
+            .map_err(|e| Error::InvalidResponse(format!("signing certificate: {e}")))?;
+        SigningCertificate::try_from(wire)
     }
 
     /// Get the trust bundle (CA certificates)
@@ -176,38 +189,38 @@ impl FulcioClient {
     /// With the `cache` feature enabled and a cache configured, this will
     /// cache the trust bundle with the default TTL (24 hours).
     pub async fn get_trust_bundle(&self) -> Result<TrustBundle> {
+        // The cache holds the raw response, which is parsed like a fresh one.
         #[cfg(feature = "cache")]
         if let Some(ref cache) = self.cache {
             if let Ok(Some(cached)) = cache
                 .get(&CacheKey::new(CacheResource::FulcioTrustBundle, &self.url))
                 .await
             {
-                if let Ok(bundle) = serde_json::from_slice(&cached) {
+                if let Ok(bundle) = TrustBundle::from_json(&cached) {
                     return Ok(bundle);
                 }
             }
         }
 
-        let bundle = self.fetch_trust_bundle().await?;
+        let body = self.fetch_trust_bundle().await?;
+        let bundle = TrustBundle::from_json(&body)?;
 
         #[cfg(feature = "cache")]
         if let Some(ref cache) = self.cache {
-            if let Ok(json) = serde_json::to_vec(&bundle) {
-                let _ = cache
-                    .set(
-                        &CacheKey::new(CacheResource::FulcioTrustBundle, &self.url),
-                        &json,
-                        CacheResource::FulcioTrustBundle.default_ttl(),
-                    )
-                    .await;
-            }
+            let _ = cache
+                .set(
+                    &CacheKey::new(CacheResource::FulcioTrustBundle, &self.url),
+                    &body,
+                    CacheResource::FulcioTrustBundle.default_ttl(),
+                )
+                .await;
         }
 
         Ok(bundle)
     }
 
     /// Fetch trust bundle from the API (bypassing cache)
-    async fn fetch_trust_bundle(&self) -> Result<TrustBundle> {
+    async fn fetch_trust_bundle(&self) -> Result<Vec<u8>> {
         let url = format!("{}/api/v2/trustBundle", self.url);
         let response = self
             .client
@@ -217,16 +230,17 @@ impl FulcioClient {
             .map_err(|e| Error::Http(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(Error::Api(format!(
-                "failed to get trust bundle: {}",
-                response.status()
-            )));
+            return Err(Error::Status {
+                status: response.status().as_u16(),
+                message: "failed to get trust bundle".to_string(),
+            });
         }
 
         response
-            .json()
+            .bytes()
             .await
-            .map_err(|e| Error::Http(format!("failed to parse JSON: {}", e)))
+            .map(|body| body.to_vec())
+            .map_err(|e| Error::Http(e.to_string()))
     }
 }
 
@@ -236,10 +250,12 @@ impl FulcioClient {
 ///
 /// ```no_run
 /// use sigstore_fulcio::FulcioClient;
+/// use std::time::Duration;
 ///
-/// // Without caching
 /// let client = FulcioClient::builder("https://fulcio.sigstore.dev")
-///     .build();
+///     .timeout(Duration::from_secs(10))
+///     .build()?;
+/// # Ok::<(), sigstore_fulcio::Error>(())
 /// ```
 ///
 /// With the `cache` feature enabled:
@@ -251,11 +267,13 @@ impl FulcioClient {
 /// let cache = FileSystemCache::default_location()?;
 /// let client = FulcioClient::builder("https://fulcio.sigstore.dev")
 ///     .with_cache(cache)
-///     .build();
+///     .build()?;
 /// ```
+#[must_use]
 pub struct FulcioClientBuilder {
     url: String,
     timeout: Duration,
+    user_agent: String,
     #[cfg(feature = "cache")]
     cache: Option<Arc<dyn CacheAdapter>>,
 }
@@ -264,8 +282,9 @@ impl FulcioClientBuilder {
     /// Create a new builder with the given URL
     pub fn new(url: impl Into<String>) -> Self {
         Self {
-            url: url.into(),
+            url: url.into().trim_end_matches('/').to_string(),
             timeout: DEFAULT_TIMEOUT,
+            user_agent: DEFAULT_USER_AGENT.to_string(),
             #[cfg(feature = "cache")]
             cache: None,
         }
@@ -273,8 +292,14 @@ impl FulcioClientBuilder {
 
     /// Set the total HTTP request timeout, including reading the response body.
     /// Defaults to 30 seconds.
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Set the `User-Agent` header. Defaults to `sigstore-rust/<version>`.
+    pub fn user_agent(mut self, user_agent: impl Into<String>) -> Self {
+        self.user_agent = user_agent.into();
         self
     }
 
@@ -293,16 +318,18 @@ impl FulcioClientBuilder {
     }
 
     /// Build the client
-    pub fn build(self) -> FulcioClient {
-        FulcioClient {
+    pub fn build(self) -> Result<FulcioClient> {
+        let client = reqwest::Client::builder()
+            .timeout(self.timeout)
+            .user_agent(self.user_agent)
+            .build()
+            .map_err(|e| Error::Http(format!("failed to build HTTP client: {e}")))?;
+        Ok(FulcioClient {
             url: self.url,
-            client: reqwest::Client::builder()
-                .timeout(self.timeout)
-                .build()
-                .expect("HTTP client configuration is valid"),
+            client,
             #[cfg(feature = "cache")]
             cache: self.cache,
-        }
+        })
     }
 }
 
@@ -367,123 +394,213 @@ where
 }
 
 /// Request to create a signing certificate
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateSigningCertificateRequest {
-    /// OIDC credentials
-    pub credentials: Credentials,
-    /// Public key request
-    pub public_key_request: PublicKeyRequest,
+struct CreateSigningCertificateRequest {
+    credentials: Credentials,
+    public_key_request: PublicKeyRequest,
 }
 
-/// OIDC credentials
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// OIDC credentials. Deliberately not `Debug`: it holds the raw token.
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Credentials {
-    /// OIDC identity token
-    pub oidc_identity_token: String,
+struct Credentials {
+    oidc_identity_token: String,
 }
 
-/// Public key request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PublicKeyRequest {
-    /// Public key
-    pub public_key: PublicKeyData,
-    /// Proof of possession (signature)
-    pub proof_of_possession: SignatureBytes,
+struct PublicKeyRequest {
+    public_key: PublicKeyData,
+    proof_of_possession: SignatureBytes,
 }
 
-/// Public key data for API requests
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PublicKeyData {
-    /// Algorithm (ECDSA, RSA, ED25519) - optional when using PEM format
-    pub algorithm: String,
-    /// PEM or DER-encoded key content
-    pub content: String,
+#[derive(Serialize)]
+struct PublicKeyData {
+    /// Empty: the PEM content identifies the algorithm.
+    algorithm: String,
+    content: String,
 }
 
-/// Signing certificate response
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SigningCertificate {
-    /// Certificate chain
+struct SigningCertificateWire {
     #[serde(default)]
-    pub signed_certificate_embedded_sct: Option<CertificateChain>,
-    /// Certificate with detached SCT
+    signed_certificate_embedded_sct: Option<ChainWire>,
     #[serde(default)]
-    pub signed_certificate_detached_sct: Option<CertificateWithSCT>,
+    signed_certificate_detached_sct: Option<DetachedSctWire>,
 }
 
-/// Certificate chain
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CertificateChain {
-    /// Chain of certificates (PEM encoded)
-    pub chain: ChainContent,
+#[derive(Deserialize)]
+struct ChainWire {
+    chain: ChainContentWire,
 }
 
-/// Chain content
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChainContent {
-    /// Certificates in the chain
-    pub certificates: Vec<String>,
+#[derive(Deserialize)]
+struct ChainContentWire {
+    certificates: Vec<String>,
 }
 
-/// Certificate with detached SCT
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CertificateWithSCT {
-    /// Certificate chain
-    pub chain: ChainContent,
-    /// Signed certificate timestamp
-    pub signed_certificate_timestamp: String,
+struct DetachedSctWire {
+    chain: ChainContentWire,
+    signed_certificate_timestamp: String,
 }
 
-/// Trust bundle response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TrustBundle {
-    /// Certificate chains
-    pub chains: Vec<CertificateChain>,
+#[derive(Deserialize)]
+struct TrustBundleWire {
+    #[serde(default)]
+    chains: Vec<ChainWire>,
+}
+
+/// Parse a PEM chain; a chain must contain at least one certificate.
+fn parse_chain(chain: ChainContentWire) -> Result<Vec<DerCertificate>> {
+    if chain.certificates.is_empty() {
+        return Err(Error::InvalidResponse(
+            "certificate chain is empty".to_string(),
+        ));
+    }
+    chain
+        .certificates
+        .iter()
+        .map(|pem| {
+            DerCertificate::from_pem(pem)
+                .map_err(|e| Error::InvalidResponse(format!("invalid certificate PEM: {e}")))
+        })
+        .collect()
+}
+
+/// A certificate issued by Fulcio, leaf first.
+///
+/// Fulcio either embeds the Signed Certificate Timestamp in the leaf
+/// certificate or returns it alongside.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SigningCertificate {
+    /// The SCT is embedded in the leaf certificate.
+    EmbeddedSct {
+        /// The certificate chain, leaf first; never empty.
+        chain: Vec<DerCertificate>,
+    },
+    /// The SCT is returned separately.
+    DetachedSct {
+        /// The certificate chain, leaf first; never empty.
+        chain: Vec<DerCertificate>,
+        /// The base64-encoded Signed Certificate Timestamp.
+        signed_certificate_timestamp: String,
+    },
+}
+
+impl TryFrom<SigningCertificateWire> for SigningCertificate {
+    type Error = Error;
+
+    fn try_from(wire: SigningCertificateWire) -> Result<Self> {
+        match (
+            wire.signed_certificate_embedded_sct,
+            wire.signed_certificate_detached_sct,
+        ) {
+            (Some(embedded), None) => Ok(Self::EmbeddedSct {
+                chain: parse_chain(embedded.chain)?,
+            }),
+            (None, Some(detached)) => Ok(Self::DetachedSct {
+                chain: parse_chain(detached.chain)?,
+                signed_certificate_timestamp: detached.signed_certificate_timestamp,
+            }),
+            (None, None) => Err(Error::InvalidResponse(
+                "response contains no certificate".to_string(),
+            )),
+            (Some(_), Some(_)) => Err(Error::InvalidResponse(
+                "response contains both an embedded and a detached SCT".to_string(),
+            )),
+        }
+    }
 }
 
 impl SigningCertificate {
-    /// Get the raw PEM certificates from whichever variant is present
-    fn pem_certificates(&self) -> Option<&Vec<String>> {
-        self.signed_certificate_embedded_sct
-            .as_ref()
-            .map(|c| &c.chain.certificates)
-            .or_else(|| {
-                self.signed_certificate_detached_sct
-                    .as_ref()
-                    .map(|c| &c.chain.certificates)
-            })
+    /// The certificate chain, leaf first.
+    pub fn certificate_chain(&self) -> &[DerCertificate] {
+        match self {
+            Self::EmbeddedSct { chain } | Self::DetachedSct { chain, .. } => chain,
+        }
     }
 
-    /// Get the leaf certificate as a type-safe DerCertificate
-    ///
-    /// This parses the PEM-encoded certificate and returns it as a DerCertificate,
-    /// which is more suitable for use with other sigstore APIs.
-    pub fn leaf_certificate(&self) -> Result<DerCertificate> {
-        let pem = self
-            .pem_certificates()
-            .and_then(|certs| certs.first())
-            .ok_or_else(|| Error::Api("No certificate in response".to_string()))?;
+    /// The leaf (signing) certificate.
+    pub fn leaf_certificate(&self) -> &DerCertificate {
+        // Chains are non-empty by construction.
+        &self.certificate_chain()[0]
+    }
+}
 
-        DerCertificate::from_pem(pem)
-            .map_err(|e| Error::Api(format!("Invalid certificate PEM: {e}")))
+/// Fulcio's CA certificate chains.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TrustBundle {
+    /// Certificate chains, each leaf (intermediate) first.
+    pub chains: Vec<Vec<DerCertificate>>,
+}
+
+impl TrustBundle {
+    /// Parse Fulcio's `/api/v2/trustBundle` response.
+    pub fn from_json(json: &[u8]) -> Result<Self> {
+        let wire: TrustBundleWire = serde_json::from_slice(json)
+            .map_err(|e| Error::InvalidResponse(format!("trust bundle: {e}")))?;
+        let chains = wire
+            .chains
+            .into_iter()
+            .map(|chain| parse_chain(chain.chain))
+            .collect::<Result<_>>()?;
+        Ok(Self { chains })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PEM: &str = include_str!("../tests/fixtures/root.pem");
+
+    fn parse(json: serde_json::Value) -> Result<SigningCertificate> {
+        let wire: SigningCertificateWire = serde_json::from_value(json).unwrap();
+        SigningCertificate::try_from(wire)
     }
 
-    /// Get all certificates in the chain as type-safe DerCertificates
-    ///
-    /// This parses all PEM-encoded certificates and returns them as DerCertificates.
-    pub fn certificate_chain(&self) -> Result<Vec<DerCertificate>> {
-        self.pem_certificates()
-            .ok_or_else(|| Error::Api("No certificate chain in response".to_string()))?
-            .iter()
-            .map(|pem| {
-                DerCertificate::from_pem(pem)
-                    .map_err(|e| Error::Api(format!("Invalid certificate PEM: {e}")))
-            })
-            .collect()
+    #[test]
+    fn signing_certificate_models_the_sct_oneof() {
+        let chain = serde_json::json!({ "chain": { "certificates": [PEM] } });
+        let embedded = parse(serde_json::json!({ "signedCertificateEmbeddedSct": chain })).unwrap();
+        assert!(matches!(embedded, SigningCertificate::EmbeddedSct { .. }));
+        assert_eq!(embedded.certificate_chain().len(), 1);
+        assert_eq!(
+            embedded.leaf_certificate(),
+            &embedded.certificate_chain()[0]
+        );
+
+        let detached = parse(serde_json::json!({
+            "signedCertificateDetachedSct": {
+                "chain": { "certificates": [PEM] },
+                "signedCertificateTimestamp": "c2N0",
+            }
+        }))
+        .unwrap();
+        assert!(matches!(
+            detached,
+            SigningCertificate::DetachedSct { ref signed_certificate_timestamp, .. }
+                if signed_certificate_timestamp == "c2N0"
+        ));
+
+        for invalid in [
+            serde_json::json!({}),
+            serde_json::json!({ "signedCertificateEmbeddedSct": { "chain": { "certificates": [] } } }),
+            serde_json::json!({
+                "signedCertificateEmbeddedSct": chain,
+                "signedCertificateDetachedSct": {
+                    "chain": { "certificates": [PEM] },
+                    "signedCertificateTimestamp": "c2N0",
+                },
+            }),
+        ] {
+            assert!(matches!(parse(invalid), Err(Error::InvalidResponse(_))));
+        }
     }
 }

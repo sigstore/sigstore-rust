@@ -19,8 +19,9 @@ async fn request_timeout_covers_stalled_headers_and_body() {
             drop(stream);
         });
         let client = FulcioClient::builder(url)
-            .with_timeout(Duration::from_millis(100))
-            .build();
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
         let result = timeout(Duration::from_secs(3), client.get_configuration()).await;
         server.abort();
         assert!(matches!(result.expect("request hung"), Err(Error::Http(_))));
