@@ -27,28 +27,23 @@ pub fn verify_inclusion_proof(
     expected_root: &Sha256Hash,
 ) -> Result<()> {
     if tree_size == 0 {
-        return Err(Error::InvalidTreeSize(
-            "tree size cannot be zero".to_string(),
-        ));
+        return Err(Error::EmptyTree);
     }
 
     if leaf_index >= tree_size {
-        return Err(Error::InvalidLeafIndex(format!(
-            "leaf index {} >= tree size {}",
-            leaf_index, tree_size
-        )));
+        return Err(Error::LeafIndexOutOfRange {
+            leaf_index,
+            tree_size,
+        });
     }
 
     // Validate proof length matches expected for this tree size and leaf index
     let expected_proof_len = expected_inclusion_proof_length(leaf_index, tree_size);
     if proof_hashes.len() != expected_proof_len {
-        return Err(Error::InvalidProof(format!(
-            "expected {} proof hashes for leaf {} in tree of size {}, got {}",
-            expected_proof_len,
-            leaf_index,
-            tree_size,
-            proof_hashes.len()
-        )));
+        return Err(Error::WrongProofLength {
+            expected: expected_proof_len,
+            actual: proof_hashes.len(),
+        });
     }
 
     // Compute the root hash using the RFC 6962 algorithm
@@ -73,9 +68,9 @@ pub fn verify_inclusion_proof(
 
     // Verify the calculated root matches expected
     if &hash != expected_root {
-        return Err(Error::HashMismatch {
-            expected: expected_root.to_hex(),
-            actual: hash.to_hex(),
+        return Err(Error::RootMismatch {
+            expected: *expected_root,
+            actual: hash,
         });
     }
 
@@ -102,25 +97,23 @@ pub fn verify_consistency_proof(
     new_root: &Sha256Hash,
 ) -> Result<()> {
     if old_size > new_size {
-        return Err(Error::InvalidTreeSize(format!(
-            "old size {} > new size {}",
-            old_size, new_size
-        )));
+        return Err(Error::TreeSizeDecreased { old_size, new_size });
     }
 
     // Handle empty old tree case
     if old_size == 0 {
         // Empty tree is consistent with any tree, but proof must be empty
         if !proof_hashes.is_empty() {
-            return Err(Error::InvalidProof(
-                "proof should be empty when old tree is empty".to_string(),
-            ));
+            return Err(Error::WrongProofLength {
+                expected: 0,
+                actual: proof_hashes.len(),
+            });
         }
         // If both are empty, roots must match
         if new_size == 0 && old_root != new_root {
-            return Err(Error::HashMismatch {
-                expected: old_root.to_hex(),
-                actual: new_root.to_hex(),
+            return Err(Error::RootMismatch {
+                expected: *old_root,
+                actual: *new_root,
             });
         }
         return Ok(());
@@ -129,50 +122,41 @@ pub fn verify_consistency_proof(
     if old_size == new_size {
         // Same size, roots must match
         if old_root != new_root {
-            return Err(Error::HashMismatch {
-                expected: old_root.to_hex(),
-                actual: new_root.to_hex(),
+            return Err(Error::RootMismatch {
+                expected: *old_root,
+                actual: *new_root,
             });
         }
         if !proof_hashes.is_empty() {
-            return Err(Error::InvalidProof(
-                "proof should be empty for same-size trees".to_string(),
-            ));
+            return Err(Error::WrongProofLength {
+                expected: 0,
+                actual: proof_hashes.len(),
+            });
         }
         return Ok(());
     }
 
     // Normal case: old_size > 0 and new_size > old_size
-    if proof_hashes.is_empty() {
-        return Err(Error::InvalidProof(
-            "proof cannot be empty for different-size trees".to_string(),
-        ));
-    }
-
     // Find the largest power of 2 less than or equal to old_size
     let shift = old_size.trailing_zeros() as usize;
-    let (inner, border) = decompose_inclusion_proof(old_size - 1, new_size)?;
+    let (inner, border) = decompose_inclusion_proof(old_size - 1, new_size);
     let inner = inner.saturating_sub(shift);
 
     // The proof includes the root hash for the sub-tree of size 2^shift,
     // unless old_size is exactly 2^shift
-    let (seed, start) = if old_size == (1 << shift) {
-        (old_root, 0)
-    } else {
-        if proof_hashes.is_empty() {
-            return Err(Error::InvalidProof("insufficient proof hashes".to_string()));
-        }
-        (&proof_hashes[0], 1)
-    };
-
+    let start = usize::from(old_size != (1 << shift));
     let expected_len = start + inner + border;
     if proof_hashes.len() != expected_len {
-        return Err(Error::InvalidProof(format!(
-            "expected {} proof hashes, got {}",
-            expected_len,
-            proof_hashes.len()
-        )));
+        return Err(Error::WrongProofLength {
+            expected: expected_len,
+            actual: proof_hashes.len(),
+        });
     }
+    let seed = if start == 0 {
+        old_root
+    } else {
+        &proof_hashes[0]
+    };
 
     let proof = &proof_hashes[start..];
     let mask = (old_size - 1) >> shift;
@@ -187,19 +171,17 @@ pub fn verify_consistency_proof(
 
     // Verify both roots
     if &calc_old_root != old_root {
-        return Err(Error::VerificationFailed(format!(
-            "old root mismatch: expected {}, got {}",
-            old_root.to_hex(),
-            calc_old_root.to_hex()
-        )));
+        return Err(Error::RootMismatch {
+            expected: *old_root,
+            actual: calc_old_root,
+        });
     }
 
     if &calc_new_root != new_root {
-        return Err(Error::VerificationFailed(format!(
-            "new root mismatch: expected {}, got {}",
-            new_root.to_hex(),
-            calc_new_root.to_hex()
-        )));
+        return Err(Error::RootMismatch {
+            expected: *new_root,
+            actual: calc_new_root,
+        });
     }
 
     Ok(())
@@ -208,10 +190,10 @@ pub fn verify_consistency_proof(
 /// Decompose an inclusion proof into inner and border path lengths
 ///
 /// Returns (inner_path_length, border_path_length)
-fn decompose_inclusion_proof(index: u64, tree_size: u64) -> Result<(usize, usize)> {
+fn decompose_inclusion_proof(index: u64, tree_size: u64) -> (usize, usize) {
     let inner = inner_proof_size(index, tree_size);
     let border = index.checked_shr(inner as u32).unwrap_or(0).count_ones() as usize;
-    Ok((inner, border))
+    (inner, border)
 }
 
 /// Calculate the inner proof size for a given index and tree size
@@ -294,12 +276,12 @@ mod tests {
     fn test_decompose_inclusion_proof() {
         // Test various tree sizes and indices
         // For tree_size=1, index=0: no proof needed
-        let (inner, border) = decompose_inclusion_proof(0, 1).unwrap();
+        let (inner, border) = decompose_inclusion_proof(0, 1);
         assert_eq!(inner, 0);
         assert_eq!(border, 0);
 
         // For tree_size=2, index=0: 0 ^ 1 = 1, bit_length(1) = 1
-        let (inner, border) = decompose_inclusion_proof(0, 2).unwrap();
+        let (inner, border) = decompose_inclusion_proof(0, 2);
         assert_eq!(inner, 1);
         assert_eq!(border, 0);
 
@@ -308,7 +290,7 @@ mod tests {
         // inner = bit_length(1 ^ (2-1)) = bit_length(1 ^ 1) = bit_length(0) = 0
         // border = count_ones(1 >> 0) = count_ones(1) = 1
         // So we expect 0 inner hashes and 1 border hash = 1 total
-        let (inner, border) = decompose_inclusion_proof(1, 2).unwrap();
+        let (inner, border) = decompose_inclusion_proof(1, 2);
         assert_eq!(inner, 0);
         assert_eq!(border, 1);
 
@@ -317,7 +299,7 @@ mod tests {
         // inner = bit_length(4 ^ 5) = bit_length(1) = 1.
         // index >> inner = 4 >> 1 = 2 (binary 10).
         // bit_length(2) = 2, but count_ones(2) = 1.
-        let (inner, border) = decompose_inclusion_proof(4, 6).unwrap();
+        let (inner, border) = decompose_inclusion_proof(4, 6);
         assert_eq!(inner, 1);
         assert_eq!(border, 1);
     }
@@ -361,5 +343,43 @@ mod tests {
         // Verify leaf 1
         let result = verify_inclusion_proof(&hash1, 1, 2, &[hash0], &root);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_errors_carry_structured_details() {
+        let leaf = crate::hash_leaf(b"leaf");
+        let other = crate::hash_leaf(b"other");
+        assert_eq!(
+            verify_inclusion_proof(&leaf, 0, 0, &[], &leaf),
+            Err(Error::EmptyTree)
+        );
+        assert_eq!(
+            verify_inclusion_proof(&leaf, 3, 2, &[], &leaf),
+            Err(Error::LeafIndexOutOfRange {
+                leaf_index: 3,
+                tree_size: 2
+            })
+        );
+        assert_eq!(
+            verify_inclusion_proof(&leaf, 0, 2, &[], &leaf),
+            Err(Error::WrongProofLength {
+                expected: 1,
+                actual: 0
+            })
+        );
+        assert_eq!(
+            verify_inclusion_proof(&leaf, 0, 1, &[], &other),
+            Err(Error::RootMismatch {
+                expected: other,
+                actual: leaf
+            })
+        );
+        assert_eq!(
+            verify_consistency_proof(2, 1, &[], &leaf, &leaf),
+            Err(Error::TreeSizeDecreased {
+                old_size: 2,
+                new_size: 1
+            })
+        );
     }
 }
