@@ -4,6 +4,7 @@ use thiserror::Error;
 
 /// Errors that can occur in cryptographic operations
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// Key generation error
     #[error("Key generation error: {0}")]
@@ -33,14 +34,6 @@ pub enum Error {
     #[error("DER error: {0}")]
     Der(String),
 
-    /// Base64 error
-    #[error("Base64 error: {0}")]
-    Base64(#[from] base64::DecodeError),
-
-    /// AWS-LC-RS error
-    #[error("Crypto error: {0}")]
-    AwsLc(String),
-
     /// Checkpoint parsing/verification error
     #[error("Checkpoint error: {0}")]
     Checkpoint(String),
@@ -52,18 +45,6 @@ pub enum Error {
     /// Invalid key error
     #[error("Invalid key: {0}")]
     InvalidKey(String),
-}
-
-impl From<aws_lc_rs::error::Unspecified> for Error {
-    fn from(_: aws_lc_rs::error::Unspecified) -> Self {
-        Error::AwsLc("unspecified error".to_string())
-    }
-}
-
-impl From<aws_lc_rs::error::KeyRejected> for Error {
-    fn from(e: aws_lc_rs::error::KeyRejected) -> Self {
-        Error::InvalidKeyFormat(e.to_string())
-    }
 }
 
 /// Result type for cryptographic operations

@@ -14,11 +14,11 @@ der = { workspace = true }
 spki = { workspace = true }
 const-oid = { workspace = true }
 thiserror = { workspace = true }
-base64 = { workspace = true }
 x509-cert = { workspace = true }
 jiff = { workspace = true }
 futures-io = { workspace = true }
 
 [dev-dependencies]
+base64 = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }

@@ -13,7 +13,8 @@ use sigstore_types::{DerPublicKey, HashAlgorithm, Sha256Hash, SignatureBytes};
 use spki::{AlgorithmIdentifier, SubjectPublicKeyInfo};
 
 /// Supported signing schemes
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SigningScheme {
     /// ECDSA P-256 with SHA-256
     EcdsaP256Sha256,
@@ -116,7 +117,8 @@ impl SigningScheme {
 }
 
 /// Key algorithm derived from the certificate/public key
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum KeyAlgorithm {
     /// ECDSA P-256
     EcdsaP256,
@@ -188,34 +190,77 @@ impl KeyAlgorithm {
 }
 
 /// A key pair for signing
-pub enum KeyPair {
-    /// ECDSA P-256 key pair
+///
+/// The key material and the cryptographic backend are private, so new key
+/// types can be supported without changing this type.
+pub struct KeyPair(KeyPairInner);
+
+enum KeyPairInner {
     EcdsaP256(EcdsaKeyPair),
 }
 
+impl std::fmt::Debug for KeyPair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyPair")
+            .field("algorithm", &self.algorithm())
+            .finish_non_exhaustive()
+    }
+}
+
 impl KeyPair {
-    /// Generate a new ECDSA P-256 key pair
-    pub fn generate_ecdsa_p256() -> Result<Self> {
-        let rng = SystemRandom::new();
-        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng)
-            .map_err(|_| Error::KeyGeneration("failed to generate ECDSA P-256 key".to_string()))?;
-        let key_pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, pkcs8.as_ref())?;
-        Ok(KeyPair::EcdsaP256(key_pair))
+    /// Generate a new key pair for `algorithm`.
+    ///
+    /// Only [`KeyAlgorithm::EcdsaP256`] is supported for signing today.
+    pub fn generate(algorithm: KeyAlgorithm) -> Result<Self> {
+        match algorithm {
+            KeyAlgorithm::EcdsaP256 => {
+                let rng = SystemRandom::new();
+                let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng)
+                    .map_err(|_| {
+                        Error::KeyGeneration("failed to generate ECDSA P-256 key".to_string())
+                    })?;
+                Self::from_pkcs8_der(pkcs8.as_ref())
+            }
+            other => Err(Error::UnsupportedAlgorithm(format!(
+                "key generation is not supported for {other:?}"
+            ))),
+        }
     }
 
-    /// Get the public key bytes
+    /// Generate a new ECDSA P-256 key pair
+    pub fn generate_ecdsa_p256() -> Result<Self> {
+        Self::generate(KeyAlgorithm::EcdsaP256)
+    }
+
+    /// Load a key pair from a DER-encoded PKCS#8 private key.
+    ///
+    /// Only ECDSA P-256 keys are supported today.
+    pub fn from_pkcs8_der(pkcs8: &[u8]) -> Result<Self> {
+        let key_pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, pkcs8)
+            .map_err(|e| Error::InvalidKeyFormat(e.to_string()))?;
+        Ok(Self(KeyPairInner::EcdsaP256(key_pair)))
+    }
+
+    /// The key algorithm of this key pair.
+    pub fn algorithm(&self) -> KeyAlgorithm {
+        match &self.0 {
+            KeyPairInner::EcdsaP256(_) => KeyAlgorithm::EcdsaP256,
+        }
+    }
+
+    /// Get the raw public key bytes (for ECDSA, the uncompressed SEC1 point)
     pub fn public_key_bytes(&self) -> &[u8] {
-        match self {
-            KeyPair::EcdsaP256(kp) => kp.public_key().as_ref(),
+        match &self.0 {
+            KeyPairInner::EcdsaP256(kp) => kp.public_key().as_ref(),
         }
     }
 
     /// Sign data with this key pair
     pub fn sign(&self, data: &[u8]) -> Result<SignatureBytes> {
         let rng = SystemRandom::new();
-        match self {
-            KeyPair::EcdsaP256(kp) => {
-                let sig = kp.sign(&rng, data)?;
+        match &self.0 {
+            KeyPairInner::EcdsaP256(kp) => {
+                let sig = kp.sign(&rng, data).map_err(signing_failed)?;
                 Ok(SignatureBytes::new(sig.as_ref().to_vec()))
             }
         }
@@ -233,9 +278,9 @@ impl KeyPair {
     /// Returns the message digest along with the signature.
     pub fn sign_prehashed(&self, hasher: Sha256Hasher) -> Result<(Sha256Hash, SignatureBytes)> {
         let digest = hasher.finish_digest();
-        match self {
-            KeyPair::EcdsaP256(kp) => {
-                let sig = kp.sign_digest(&digest)?;
+        match &self.0 {
+            KeyPairInner::EcdsaP256(kp) => {
+                let sig = kp.sign_digest(&digest).map_err(signing_failed)?;
                 let mut hash = [0u8; 32];
                 hash.copy_from_slice(digest.as_ref());
                 Ok((
@@ -253,9 +298,9 @@ impl KeyPair {
     pub fn sign_digest(&self, digest: &Sha256Hash) -> Result<SignatureBytes> {
         let digest = Digest::import_less_safe(digest.as_bytes(), &SHA256)
             .map_err(|_| Error::Signing("invalid SHA-256 digest".to_string()))?;
-        match self {
-            KeyPair::EcdsaP256(kp) => {
-                let sig = kp.sign_digest(&digest)?;
+        match &self.0 {
+            KeyPairInner::EcdsaP256(kp) => {
+                let sig = kp.sign_digest(&digest).map_err(signing_failed)?;
                 Ok(SignatureBytes::new(sig.as_ref().to_vec()))
             }
         }
@@ -263,9 +308,7 @@ impl KeyPair {
 
     /// Get the signing scheme for this key pair
     pub fn default_scheme(&self) -> SigningScheme {
-        match self {
-            KeyPair::EcdsaP256(_) => SigningScheme::EcdsaP256Sha256,
-        }
+        self.algorithm().default_signing_scheme()
     }
 
     /// Get the public key as a type-safe DerPublicKey
@@ -273,8 +316,8 @@ impl KeyPair {
     /// Returns the public key in DER-encoded SubjectPublicKeyInfo format.
     /// Use `.to_pem()` on the result if you need PEM format.
     pub fn public_key_der(&self) -> Result<DerPublicKey> {
-        match self {
-            KeyPair::EcdsaP256(kp) => {
+        match &self.0 {
+            KeyPairInner::EcdsaP256(kp) => {
                 let alg_id = AlgorithmIdentifier {
                     oid: ID_EC_PUBLIC_KEY,
                     parameters: Some(
@@ -296,6 +339,10 @@ impl KeyPair {
             }
         }
     }
+}
+
+fn signing_failed(_: aws_lc_rs::error::Unspecified) -> Error {
+    Error::Signing("the cryptographic backend failed to sign".to_string())
 }
 
 #[cfg(test)]
@@ -364,5 +411,21 @@ mod tests {
         // Uncompressed P-256 key should be 65 bytes (0x04 + 32 bytes X + 32 bytes Y)
         assert_eq!(bytes.len(), 65);
         assert_eq!(bytes[0], 0x04);
+    }
+
+    #[test]
+    fn key_pair_is_opaque_and_round_trips_pkcs8() {
+        use aws_lc_rs::signature::EcdsaKeyPair;
+        let rng = SystemRandom::new();
+        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng).unwrap();
+        let key = KeyPair::from_pkcs8_der(pkcs8.as_ref()).unwrap();
+        assert_eq!(key.algorithm(), KeyAlgorithm::EcdsaP256);
+        assert_eq!(key.default_scheme(), SigningScheme::EcdsaP256Sha256);
+        assert_eq!(format!("{key:?}"), "KeyPair { algorithm: EcdsaP256, .. }");
+        assert!(KeyPair::from_pkcs8_der(b"not a key").is_err());
+        assert!(matches!(
+            KeyPair::generate(KeyAlgorithm::Ed25519),
+            Err(Error::UnsupportedAlgorithm(_))
+        ));
     }
 }
