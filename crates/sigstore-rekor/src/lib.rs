@@ -15,7 +15,7 @@
 //! # #[cfg(feature = "client")]
 //! # async fn example() -> Result<(), sigstore_rekor::Error> {
 //! use sigstore_rekor::RekorClient;
-//! let client = RekorClient::public();
+//! let client = RekorClient::new("https://rekor.sigstore.dev");
 //! let log_info = client.get_log_info().await?;
 //! println!("Tree size: {}", log_info.tree_size);
 //! # Ok(())
@@ -42,10 +42,7 @@ pub mod error;
 
 pub use body::RekorEntryBody;
 #[cfg(feature = "client")]
-pub use client::{
-    get_public_log_info, RekorClient, RekorClientBuilder, RekorV2Client, RekorV2EntryBundle,
-    RekorV2Tile,
-};
+pub use client::{RekorClient, RekorClientBuilder, RekorV2Client, RekorV2EntryBundle, RekorV2Tile};
 pub use entry::{
     DsseEntry, HashedRekord, HashedRekordV2, LogEntry, LogInfo, RekorApiVersion, RekorV2KeyDetails,
     SearchIndex,

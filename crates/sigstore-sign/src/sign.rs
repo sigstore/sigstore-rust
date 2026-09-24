@@ -91,7 +91,7 @@ impl Default for SigningConfig {
         let rekor_api_version = RekorApiVersion::default();
         Self {
             fulcio_url: "https://fulcio.sigstore.dev".to_string(),
-            rekor_url: rekor_api_version.default_url().to_string(),
+            rekor_url: "https://rekor.sigstore.dev".to_string(),
             tsa_url: Some("https://timestamp.sigstore.dev/api/v1/timestamp".to_string()),
             signing_scheme: SigningScheme::EcdsaP256Sha256,
             rekor_api_version,
@@ -874,7 +874,7 @@ mod tests {
                 .unwrap();
         assert_eq!(v2.rekor_api_version, RekorApiVersion::V2);
         assert!(v2.rekor_url.contains("sigstage.dev"), "{}", v2.rekor_url);
-        assert_ne!(v2.rekor_url, RekorApiVersion::V2.default_url());
+        assert_ne!(v2.rekor_url, "https://log2025-1.rekor.sigstore.dev");
 
         let v1 =
             SigningConfig::from_tuf_config_with_rekor_version(&staging, Some(RekorApiVersion::V1))

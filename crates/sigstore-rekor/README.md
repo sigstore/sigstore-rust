@@ -32,7 +32,7 @@ must obtain an RFC 3161 timestamp and include it in the bundle.
 use sigstore_rekor::RekorClient;
 
 # async fn example() -> Result<(), sigstore_rekor::Error> {
-let client = RekorClient::public();
+let client = RekorClient::new("https://rekor.sigstore.dev");
 let log = client.get_log_info().await?;
 println!("tree size: {}", log.tree_size);
 # Ok(())

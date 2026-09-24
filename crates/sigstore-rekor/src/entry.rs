@@ -8,35 +8,18 @@ use sigstore_types::{
 use std::collections::HashMap;
 
 /// Rekor API version
+///
+/// The version determines the entry formats and the API, not the log URL:
+/// v1 and v2 logs are separate services, and a Sigstore instance publishes
+/// the URLs of its logs in its signing config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RekorApiVersion {
     /// V1 API - uses hashedrekord 0.0.1 and dsse 0.0.1
-    /// Available at: <https://rekor.sigstore.dev>
     #[default]
     V1,
-    /// V2 API - uses hashedrekord 0.0.2 for both artifacts and DSSE envelopes
-    /// Returns inclusion proofs with checkpoints and requires RFC 3161 timestamps
-    /// Available at: <https://log2025-1.rekor.sigstore.dev> (as of Oct 2025)
-    /// Note: V2 uses a different URL than V1!
+    /// V2 API - uses hashedrekord 0.0.2 for both artifacts and DSSE envelopes.
+    /// Returns inclusion proofs with checkpoints and requires RFC 3161 timestamps.
     V2,
-}
-
-impl RekorApiVersion {
-    /// Get the default Rekor URL for this API version
-    pub fn default_url(&self) -> &'static str {
-        match self {
-            RekorApiVersion::V1 => "https://rekor.sigstore.dev",
-            RekorApiVersion::V2 => "https://log2025-1.rekor.sigstore.dev",
-        }
-    }
-
-    /// Get the default staging Rekor URL for this API version
-    pub fn default_staging_url(&self) -> &'static str {
-        match self {
-            RekorApiVersion::V1 => "https://rekor.sigstage.dev",
-            RekorApiVersion::V2 => "https://log2025-alpha2.rekor.sigstage.dev",
-        }
-    }
 }
 
 /// A log entry from Rekor
@@ -48,8 +31,8 @@ pub struct LogEntry {
     pub uuid: EntryUuid,
     /// Canonicalized JSON body of the entry.
     pub body: CanonicalizedBody,
-    /// Integrated time. Always present in Rekor V1 API responses; `None` for
-    /// entries converted from the V2 API, which has no integrated time.
+    /// Integrated time reported by the Rekor v1 API. `None` if the response
+    /// omits it.
     #[serde(
         default,
         with = "jiff::fmt::serde::timestamp::second::optional",
@@ -69,8 +52,9 @@ pub struct LogEntry {
 impl LogEntry {
     /// Convert a Rekor response into bundle verification material.
     ///
-    /// Checks protobuf index bounds and checkpoint encoding. This is format
-    /// conversion, not cryptographic verification of the log entry.
+    /// Checks that the log indices fit the protobuf `int64` range and that the
+    /// checkpoint parses. This is format conversion, not cryptographic
+    /// verification of the log entry.
     pub fn to_bundle_entry(
         &self,
         kind_version: sigstore_types::KindVersion,
@@ -124,11 +108,11 @@ pub struct Verification {
     pub signed_entry_timestamp: Option<SignedTimestamp>,
 }
 
-/// Inclusion proof from Rekor V1 API.
+/// Inclusion proof from the Rekor V1 API.
 ///
-/// Note: This is different from `sigstore_types::InclusionProof` which is the
-/// bundle format with typed fields. This uses raw strings as returned by the
-/// Rekor V1 API (hex-encoded hashes).
+/// This mirrors the V1 response, where hashes are hex-encoded and the
+/// checkpoint is unparsed text. [`LogEntry::to_bundle_entry`] converts it to
+/// the bundle's `sigstore_types::InclusionProof`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RekorInclusionProof {

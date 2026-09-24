@@ -2,8 +2,7 @@
 
 use crate::body::RekorEntryBody;
 use crate::entry::{
-    DsseEntry, HashedRekord, HashedRekordV2, LogEntry, LogEntryResponse, LogInfo, RekorApiVersion,
-    SearchIndex,
+    DsseEntry, HashedRekord, HashedRekordV2, LogEntry, LogEntryResponse, LogInfo, SearchIndex,
 };
 use crate::error::{Error, Result};
 use sigstore_types::{Checkpoint, KindVersion, TransparencyLogEntry};
@@ -63,16 +62,6 @@ impl RekorClient {
             #[cfg(feature = "cache")]
             cache: None,
         }
-    }
-
-    /// Create a client for the public Sigstore Rekor v1 instance.
-    pub fn public() -> Self {
-        Self::new(RekorApiVersion::V1.default_url())
-    }
-
-    /// Create a client for the Sigstore staging Rekor v1 instance.
-    pub fn staging() -> Self {
-        Self::new(RekorApiVersion::V1.default_staging_url())
     }
 
     /// Create a builder for configuring the client
@@ -638,11 +627,6 @@ fn tile_path(index: u64, width: Option<NonZeroU8>) -> String {
         path.push_str(&format!(".p/{width}"));
     }
     path
-}
-
-/// Convenience function to get log info from the public Rekor instance
-pub async fn get_public_log_info() -> Result<LogInfo> {
-    RekorClient::public().get_log_info().await
 }
 
 #[cfg(test)]
