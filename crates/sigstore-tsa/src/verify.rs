@@ -862,12 +862,12 @@ mod tests {
             let raw = chain[index]["rawBytes"].as_str().unwrap();
             DerCertificate::new(STANDARD.decode(raw).unwrap())
         };
-        TsaAuthority {
-            leaf: der(0),
-            intermediates: (1..chain.len() - 1).map(der).collect(),
-            root: der(chain.len() - 1),
+        TsaAuthority::new(
+            der(0),
+            (1..chain.len() - 1).map(der).collect(),
+            der(chain.len() - 1),
             valid_for,
-        }
+        )
     }
 
     /// The fixture token's signed time, obtained through an unrestricted

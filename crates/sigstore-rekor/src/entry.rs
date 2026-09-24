@@ -79,33 +79,26 @@ impl LogEntry {
             bundle::CheckpointData, InclusionPromise, InclusionProof, LogId, LogIndex, LogKeyId,
             TransparencyLogEntry,
         };
-        let mut entry = TransparencyLogEntry {
-            log_index: LogIndex::new(self.log_index)?,
-            log_id: LogId {
-                key_id: LogKeyId::from_bytes(&self.log_id.decode()?),
-            },
+        let mut entry = TransparencyLogEntry::new(
+            LogIndex::new(self.log_index)?,
+            LogId::new(LogKeyId::from_bytes(&self.log_id.decode()?)),
             kind_version,
-            integrated_time: self.integrated_time,
-            canonicalized_body: self.body.clone(),
-            inclusion_promise: None,
-            inclusion_proof: None,
-        };
+            self.body.clone(),
+        );
+        entry.integrated_time = self.integrated_time;
         if let Some(verification) = &self.verification {
-            entry.inclusion_promise =
-                verification
-                    .signed_entry_timestamp
-                    .as_ref()
-                    .map(|set| InclusionPromise {
-                        signed_entry_timestamp: set.clone(),
-                    });
+            entry.inclusion_promise = verification
+                .signed_entry_timestamp
+                .as_ref()
+                .map(|set| InclusionPromise::new(set.clone()));
             if let Some(proof) = &verification.inclusion_proof {
-                entry.inclusion_proof = Some(InclusionProof {
-                    log_index: LogIndex::new(proof.log_index)?,
-                    root_hash: proof.root_hash,
-                    tree_size: proof.tree_size,
-                    hashes: proof.hashes.clone(),
-                    checkpoint: CheckpointData::new(proof.checkpoint.clone())?,
-                });
+                entry.inclusion_proof = Some(InclusionProof::new(
+                    LogIndex::new(proof.log_index)?,
+                    proof.root_hash,
+                    proof.tree_size,
+                    proof.hashes.clone(),
+                    CheckpointData::new(proof.checkpoint.clone())?,
+                ));
             }
         }
         Ok(entry)

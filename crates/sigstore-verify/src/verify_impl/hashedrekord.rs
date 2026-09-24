@@ -39,6 +39,11 @@ pub(crate) fn verify_hashedrekord_entry(
     let hash = match &bundle.content {
         SignatureContent::MessageSignature(_) => artifact.sha256()?,
         SignatureContent::DsseEnvelope(envelope) => sigstore_crypto::sha256(&envelope.pae()),
+        _ => {
+            return Err(Error::Verification(
+                "unsupported bundle signature content".to_string(),
+            ))
+        }
     };
 
     // Validate artifact hash matches what's in Rekor
@@ -111,7 +116,12 @@ fn validate_verifier_match(
             certificates.first().map(|c| &c.raw_bytes)
         }
         VerificationMaterialContent::Certificate(cert) => Some(&cert.raw_bytes),
-        VerificationMaterialContent::PublicKey { .. } => None,
+        VerificationMaterialContent::PublicKey(_) => None,
+        _ => {
+            return Err(Error::Verification(
+                "unsupported bundle verification material".to_string(),
+            ))
+        }
     };
     if bundle_cert.is_none() {
         let managed_key = managed_key.ok_or_else(|| {
@@ -231,6 +241,11 @@ fn validate_signature_match(
                             .to_string(),
                     ));
                 }
+            }
+            _ => {
+                return Err(Error::Verification(
+                    "unsupported bundle signature content".to_string(),
+                ))
             }
         }
     }

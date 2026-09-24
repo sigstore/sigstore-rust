@@ -16,6 +16,7 @@ use crate::{DerCertificate, TimeRange};
 /// the window of an authority that did not sign a token can never authorize
 /// it.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TsaAuthority {
     /// The TSA signing certificate (the first certificate in the chain).
     pub leaf: DerCertificate,
@@ -25,4 +26,21 @@ pub struct TsaAuthority {
     pub root: DerCertificate,
     /// The authority's validity window; `None` means unrestricted.
     pub valid_for: Option<TimeRange>,
+}
+
+impl TsaAuthority {
+    /// Create an authority from its certificate chain and validity window.
+    pub fn new(
+        leaf: DerCertificate,
+        intermediates: Vec<DerCertificate>,
+        root: DerCertificate,
+        valid_for: Option<TimeRange>,
+    ) -> Self {
+        Self {
+            leaf,
+            intermediates,
+            root,
+            valid_for,
+        }
+    }
 }

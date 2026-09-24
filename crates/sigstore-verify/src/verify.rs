@@ -417,7 +417,7 @@ impl Verifier {
             signing_scheme_for_content(cert_info.key_algorithm, &bundle.content)?,
         )?;
         self.verify_prepared(
-            PreparedArtifact::from_artifact(artifact.into(), &requirements),
+            PreparedArtifact::from_artifact(artifact.into(), &requirements)?,
             bundle,
             policy,
             &cert_info,
@@ -492,7 +492,7 @@ impl Verifier {
         // validate the certificate chain, so this step comes first.
         // These include TSA timestamps and (in the case of rekor v1 entries)
         // rekor log integrated time.
-        let signature = crate::verify_impl::helpers::extract_signature(&bundle.content);
+        let signature = crate::verify_impl::helpers::extract_signature(&bundle.content)?;
         let validation_times = crate::verify_impl::helpers::determine_validation_times(
             bundle,
             &signature,
@@ -687,7 +687,7 @@ impl Verifier {
         let scheme = prepare_public_key(bundle, public_key, policy)?;
         let requirements = ArtifactRequirements::new(&bundle.content, scheme)?;
         self.verify_with_key_prepared(
-            PreparedArtifact::from_artifact(artifact.into(), &requirements),
+            PreparedArtifact::from_artifact(artifact.into(), &requirements)?,
             bundle,
             public_key,
             policy,
@@ -795,6 +795,11 @@ impl Verifier {
 
                 // Verify the payload binds the artifact
                 requirements.verify_binding(&artifact)?;
+            }
+            _ => {
+                return Err(Error::Verification(
+                    "unsupported bundle signature content".to_string(),
+                ))
             }
         }
 
@@ -906,6 +911,9 @@ fn signing_scheme_for_content(
             signing_scheme_for_message_signature(key_algorithm, msg_sig)
         }
         SignatureContent::DsseEnvelope(_) => Ok(key_algorithm.default_signing_scheme()),
+        _ => Err(Error::Verification(
+            "unsupported bundle signature content".to_string(),
+        )),
     }
 }
 
@@ -939,7 +947,7 @@ fn prepare_public_key(
 ) -> Result<SigningScheme> {
     if !matches!(
         bundle.verification_material.content,
-        VerificationMaterialContent::PublicKey { .. }
+        VerificationMaterialContent::PublicKey(_)
     ) {
         return Err(Error::Verification(
             "bundle contains a certificate but public-key verification was requested".into(),
@@ -1097,13 +1105,13 @@ mod tests {
 
     #[test]
     fn test_signing_scheme_follows_message_digest_algorithm() {
-        let msg_sig = sigstore_types::bundle::MessageSignature {
-            message_digest: Some(sigstore_types::bundle::MessageDigest {
-                algorithm: HashAlgorithm::Sha2384,
-                digest: sigstore_types::DigestBytes::from_bytes(vec![0; 48]),
-            }),
-            signature: sigstore_types::SignatureBytes::from_bytes(b"sig"),
-        };
+        let msg_sig = sigstore_types::bundle::MessageSignature::new(
+            sigstore_types::SignatureBytes::from_bytes(b"sig"),
+        )
+        .with_message_digest(sigstore_types::bundle::MessageDigest::new(
+            HashAlgorithm::Sha2384,
+            sigstore_types::DigestBytes::from_bytes(vec![0; 48]),
+        ));
 
         assert_eq!(
             signing_scheme_for_message_signature(KeyAlgorithm::EcdsaP256, &msg_sig).unwrap(),
@@ -1112,10 +1120,10 @@ mod tests {
     }
 
     fn unused_signature() -> sigstore_types::DsseSignature {
-        sigstore_types::DsseSignature {
-            sig: sigstore_types::SignatureBytes::from_bytes(b"unused"),
-            keyid: sigstore_types::KeyId::default(),
-        }
+        sigstore_types::DsseSignature::new(
+            sigstore_types::SignatureBytes::from_bytes(b"unused"),
+            sigstore_types::KeyId::default(),
+        )
     }
 
     fn in_toto_envelope(payload: &str) -> sigstore_types::DsseEnvelope {
@@ -1141,7 +1149,7 @@ mod tests {
         let requirements =
             ArtifactRequirements::new(&content, SigningScheme::EcdsaP256Sha256).unwrap();
         for (bytes, matches) in [(b"hello".as_slice(), true), (b"wrong".as_slice(), false)] {
-            let artifact = PreparedArtifact::from_artifact(bytes.into(), &requirements);
+            let artifact = PreparedArtifact::from_artifact(bytes.into(), &requirements).unwrap();
             assert_eq!(requirements.verify_binding(&artifact).is_ok(), matches);
         }
         for payload in [
@@ -1169,7 +1177,8 @@ mod tests {
         let content = SignatureContent::DsseEnvelope(in_toto_envelope(&statement));
         let requirements =
             ArtifactRequirements::new(&content, SigningScheme::EcdsaP256Sha256).unwrap();
-        let artifact = PreparedArtifact::from_artifact(b"hello".as_slice().into(), &requirements);
+        let artifact =
+            PreparedArtifact::from_artifact(b"hello".as_slice().into(), &requirements).unwrap();
         assert!(requirements.verify_binding(&artifact).is_ok());
     }
 
@@ -1182,10 +1191,10 @@ mod tests {
         sigstore_types::DsseEnvelope::new(
             "application/vnd.in-toto+json".to_string(),
             sigstore_types::PayloadBytes::from_bytes(DSSE_TEST_PAYLOAD),
-            sigstore_types::DsseSignature {
-                sig: keypair.sign(data).unwrap(),
-                keyid: sigstore_types::KeyId::default(),
-            },
+            sigstore_types::DsseSignature::new(
+                keypair.sign(data).unwrap(),
+                sigstore_types::KeyId::default(),
+            ),
         )
     }
 

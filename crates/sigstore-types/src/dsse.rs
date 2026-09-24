@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 /// making multi-signature envelopes unrepresentable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "DsseEnvelopeWire", into = "DsseEnvelopeWire")]
+#[non_exhaustive]
 pub struct DsseEnvelope {
     /// Type URI of the payload
     pub payload_type: String,
@@ -28,12 +29,20 @@ pub struct DsseEnvelope {
 /// A signature in a DSSE envelope
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct DsseSignature {
     /// Signature bytes
     pub sig: SignatureBytes,
     /// Key ID (optional hint for key lookup)
     #[serde(default, skip_serializing_if = "KeyId::is_empty")]
     pub keyid: KeyId,
+}
+
+impl DsseSignature {
+    /// Create a DSSE signature. `keyid` may be empty.
+    pub fn new(sig: SignatureBytes, keyid: KeyId) -> Self {
+        Self { sig, keyid }
+    }
 }
 
 /// The DSSE wire format, where `signatures` is a list

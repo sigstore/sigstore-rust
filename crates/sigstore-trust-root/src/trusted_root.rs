@@ -317,12 +317,12 @@ impl TrustedRoot {
                 .iter()
                 .map(|cert| cert.raw_bytes.clone())
                 .collect();
-            authorities.push(TsaAuthority {
-                leaf: leaf.raw_bytes.clone(),
+            authorities.push(TsaAuthority::new(
+                leaf.raw_bytes.clone(),
                 intermediates,
-                root: root.raw_bytes.clone(),
-                valid_for: tsa.valid_for,
-            });
+                root.raw_bytes.clone(),
+                tsa.valid_for,
+            ));
         }
         authorities
     }

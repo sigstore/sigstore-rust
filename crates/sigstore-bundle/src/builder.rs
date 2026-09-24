@@ -3,8 +3,9 @@
 use sigstore_types::{
     bundle::{
         CertificateContent, CheckpointData, InclusionPromise, InclusionProof, KindVersion, LogId,
-        MessageSignature, Rfc3161Timestamp, SignatureContent, TimestampVerificationData,
-        TransparencyLogEntry, VerificationMaterial, VerificationMaterialContent,
+        MessageSignature, PublicKeyIdentifier, Rfc3161Timestamp, SignatureContent,
+        TimestampVerificationData, TransparencyLogEntry, VerificationMaterial,
+        VerificationMaterialContent,
     },
     Bundle, CanonicalizedBody, DerCertificate, DsseEnvelope, LogIndex, LogKeyId, MediaType,
     Result as TypesResult, Sha256Hash, SignatureBytes, SignedTimestamp, TimestampToken,
@@ -71,13 +72,14 @@ impl BundleV03 {
     ) -> Self {
         Self::new(
             VerificationMaterialV03::Certificate(certificate),
-            SignatureContent::MessageSignature(MessageSignature {
-                message_digest: Some(sigstore_types::bundle::MessageDigest {
-                    algorithm: sigstore_types::HashAlgorithm::Sha2256,
-                    digest: artifact_digest.into(),
-                }),
-                signature,
-            }),
+            SignatureContent::MessageSignature(
+                MessageSignature::new(signature).with_message_digest(
+                    sigstore_types::bundle::MessageDigest::new(
+                        sigstore_types::HashAlgorithm::Sha2256,
+                        artifact_digest.into(),
+                    ),
+                ),
+            ),
         )
     }
 
@@ -99,9 +101,8 @@ impl BundleV03 {
 
     /// Add an RFC 3161 timestamp.
     pub fn with_rfc3161_timestamp(mut self, timestamp: TimestampToken) -> Self {
-        self.rfc3161_timestamps.push(Rfc3161Timestamp {
-            signed_timestamp: timestamp,
-        });
+        self.rfc3161_timestamps
+            .push(Rfc3161Timestamp::new(timestamp));
         self
     }
 
@@ -109,24 +110,22 @@ impl BundleV03 {
     pub fn into_bundle(self) -> Bundle {
         let verification_content = match self.verification {
             VerificationMaterialV03::Certificate(cert) => {
-                VerificationMaterialContent::Certificate(CertificateContent { raw_bytes: cert })
+                VerificationMaterialContent::Certificate(CertificateContent::new(cert))
             }
             VerificationMaterialV03::PublicKey { hint } => {
-                VerificationMaterialContent::PublicKey { hint }
+                VerificationMaterialContent::PublicKey(PublicKeyIdentifier::new(hint))
             }
         };
 
-        Bundle {
-            media_type: MediaType::Bundle0_3,
-            verification_material: VerificationMaterial {
-                content: verification_content,
-                tlog_entries: self.tlog_entries,
-                timestamp_verification_data: TimestampVerificationData {
-                    rfc3161_timestamps: self.rfc3161_timestamps,
-                },
-            },
-            content: self.content,
-        }
+        Bundle::new(
+            MediaType::Bundle0_3,
+            VerificationMaterial::new(verification_content)
+                .with_tlog_entries(self.tlog_entries)
+                .with_timestamp_verification_data(TimestampVerificationData::new(
+                    self.rfc3161_timestamps,
+                )),
+            self.content,
+        )
     }
 }
 
@@ -174,9 +173,7 @@ impl TlogEntryBuilder {
 
     /// Set the inclusion promise (Signed Entry Timestamp).
     pub fn inclusion_promise(mut self, signed_entry_timestamp: SignedTimestamp) -> Self {
-        self.inclusion_promise = Some(InclusionPromise {
-            signed_entry_timestamp,
-        });
+        self.inclusion_promise = Some(InclusionPromise::new(signed_entry_timestamp));
         self
     }
 
@@ -196,28 +193,27 @@ impl TlogEntryBuilder {
         hashes: Vec<Sha256Hash>,
         checkpoint: String,
     ) -> TypesResult<Self> {
-        self.inclusion_proof = Some(InclusionProof {
-            log_index: LogIndex::new(log_index)?,
+        self.inclusion_proof = Some(InclusionProof::new(
+            LogIndex::new(log_index)?,
             root_hash,
             tree_size,
             hashes,
-            checkpoint: CheckpointData::new(checkpoint)?,
-        });
+            CheckpointData::new(checkpoint)?,
+        ));
         Ok(self)
     }
 
     /// Build the transparency log entry.
     pub fn build(self) -> TransparencyLogEntry {
-        TransparencyLogEntry {
-            log_index: self.log_index,
-            log_id: LogId {
-                key_id: self.log_id,
-            },
-            kind_version: self.kind_version,
-            integrated_time: self.integrated_time,
-            inclusion_promise: self.inclusion_promise,
-            inclusion_proof: self.inclusion_proof,
-            canonicalized_body: CanonicalizedBody::new(self.canonicalized_body),
-        }
+        let mut entry = TransparencyLogEntry::new(
+            self.log_index,
+            LogId::new(self.log_id),
+            self.kind_version,
+            CanonicalizedBody::new(self.canonicalized_body),
+        );
+        entry.integrated_time = self.integrated_time;
+        entry.inclusion_promise = self.inclusion_promise;
+        entry.inclusion_proof = self.inclusion_proof;
+        entry
     }
 }

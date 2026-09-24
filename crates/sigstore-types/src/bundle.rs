@@ -27,6 +27,7 @@ where
 
 /// Sigstore bundle media types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MediaType {
     /// Bundle format version 0.1
     Bundle0_1,
@@ -112,6 +113,7 @@ pub enum BundleVersion {
 /// The main Sigstore bundle structure
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Bundle {
     /// Media type identifying the bundle version
     pub media_type: MediaType,
@@ -123,6 +125,19 @@ pub struct Bundle {
 }
 
 impl Bundle {
+    /// Create a bundle from its parts.
+    pub fn new(
+        media_type: MediaType,
+        verification_material: VerificationMaterial,
+        content: SignatureContent,
+    ) -> Self {
+        Self {
+            media_type,
+            verification_material,
+            content,
+        }
+    }
+
     /// Parse a bundle from JSON, preserving raw DSSE envelope for hash verification
     pub fn from_json(json: &str) -> Result<Self> {
         serde_json::from_str(json).map_err(Error::Json)
@@ -150,7 +165,7 @@ impl Bundle {
             VerificationMaterialContent::X509CertificateChain { certificates } => {
                 certificates.first().map(|c| &c.raw_bytes)
             }
-            VerificationMaterialContent::PublicKey { .. } => None,
+            VerificationMaterialContent::PublicKey(_) => None,
         }
     }
 
@@ -174,6 +189,7 @@ impl Bundle {
 /// The signature content (either a message signature or DSSE envelope)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum SignatureContent {
     /// A simple message signature
     MessageSignature(MessageSignature),
@@ -184,6 +200,7 @@ pub enum SignatureContent {
 /// A simple message signature
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct MessageSignature {
     /// Message digest (optional, for detached signatures)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -192,9 +209,26 @@ pub struct MessageSignature {
     pub signature: SignatureBytes,
 }
 
+impl MessageSignature {
+    /// Create a message signature without a message digest.
+    pub fn new(signature: SignatureBytes) -> Self {
+        Self {
+            message_digest: None,
+            signature,
+        }
+    }
+
+    /// Attach the digest of the signed message.
+    pub fn with_message_digest(mut self, message_digest: MessageDigest) -> Self {
+        self.message_digest = Some(message_digest);
+        self
+    }
+}
+
 /// Message digest with algorithm
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct MessageDigest {
     /// Hash algorithm
     pub algorithm: HashAlgorithm,
@@ -202,9 +236,17 @@ pub struct MessageDigest {
     pub digest: DigestBytes,
 }
 
+impl MessageDigest {
+    /// Create a message digest.
+    pub fn new(algorithm: HashAlgorithm, digest: DigestBytes) -> Self {
+        Self { algorithm, digest }
+    }
+}
+
 /// Verification material containing certificate/key and log entries
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct VerificationMaterial {
     /// Certificate, certificate chain, or public key
     #[serde(flatten)]
@@ -217,6 +259,32 @@ pub struct VerificationMaterial {
     pub timestamp_verification_data: TimestampVerificationData,
 }
 
+impl VerificationMaterial {
+    /// Create verification material without log entries or timestamps.
+    pub fn new(content: VerificationMaterialContent) -> Self {
+        Self {
+            content,
+            tlog_entries: Vec::new(),
+            timestamp_verification_data: TimestampVerificationData::default(),
+        }
+    }
+
+    /// Set the transparency log entries.
+    pub fn with_tlog_entries(mut self, tlog_entries: Vec<TransparencyLogEntry>) -> Self {
+        self.tlog_entries = tlog_entries;
+        self
+    }
+
+    /// Set the RFC 3161 timestamp verification data.
+    pub fn with_timestamp_verification_data(
+        mut self,
+        timestamp_verification_data: TimestampVerificationData,
+    ) -> Self {
+        self.timestamp_verification_data = timestamp_verification_data;
+        self
+    }
+}
+
 /// The verification material content type
 ///
 /// The field name in JSON determines which variant is used:
@@ -225,6 +293,7 @@ pub struct VerificationMaterial {
 /// - "publicKey" -> PublicKey variant
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum VerificationMaterialContent {
     /// Single certificate (v0.3 format)
     Certificate(CertificateContent),
@@ -233,32 +302,65 @@ pub enum VerificationMaterialContent {
         /// Chain of certificates
         certificates: Vec<X509Certificate>,
     },
-    /// Public key (keyless alternative)
-    PublicKey {
-        /// Public key hint
-        hint: String,
-    },
+    /// Public key identified by a hint; the key itself is supplied out of band
+    PublicKey(PublicKeyIdentifier),
+}
+
+/// Identifies the public key a bundle was signed with.
+///
+/// The hint is not authenticated: verifiers must use a key supplied out of
+/// band and treat the hint only as a lookup aid.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct PublicKeyIdentifier {
+    /// Public key hint
+    #[serde(default)]
+    pub hint: String,
+}
+
+impl PublicKeyIdentifier {
+    /// Create a public key identifier from a hint.
+    pub fn new(hint: impl Into<String>) -> Self {
+        Self { hint: hint.into() }
+    }
 }
 
 /// Certificate content for v0.3 bundles
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CertificateContent {
     /// DER-encoded certificate
     pub raw_bytes: DerCertificate,
 }
 
+impl CertificateContent {
+    /// Wrap a DER-encoded certificate.
+    pub fn new(raw_bytes: DerCertificate) -> Self {
+        Self { raw_bytes }
+    }
+}
+
 /// X.509 certificate in the chain
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct X509Certificate {
     /// DER-encoded certificate
     pub raw_bytes: DerCertificate,
 }
 
+impl X509Certificate {
+    /// Wrap a DER-encoded certificate.
+    pub fn new(raw_bytes: DerCertificate) -> Self {
+        Self { raw_bytes }
+    }
+}
+
 /// A transparency log entry
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct TransparencyLogEntry {
     /// Log index. May be omitted by cosign v3 (defaults to 0 per proto3 semantics).
     #[serde(default)]
@@ -286,16 +388,63 @@ pub struct TransparencyLogEntry {
     pub canonicalized_body: CanonicalizedBody,
 }
 
+impl TransparencyLogEntry {
+    /// Create a log entry without an integrated time, promise or proof.
+    pub fn new(
+        log_index: LogIndex,
+        log_id: LogId,
+        kind_version: KindVersion,
+        canonicalized_body: CanonicalizedBody,
+    ) -> Self {
+        Self {
+            log_index,
+            log_id,
+            kind_version,
+            integrated_time: None,
+            inclusion_promise: None,
+            inclusion_proof: None,
+            canonicalized_body,
+        }
+    }
+
+    /// Set the integrated time.
+    pub fn with_integrated_time(mut self, integrated_time: jiff::Timestamp) -> Self {
+        self.integrated_time = Some(integrated_time);
+        self
+    }
+
+    /// Set the inclusion promise (Signed Entry Timestamp).
+    pub fn with_inclusion_promise(mut self, inclusion_promise: InclusionPromise) -> Self {
+        self.inclusion_promise = Some(inclusion_promise);
+        self
+    }
+
+    /// Set the inclusion proof.
+    pub fn with_inclusion_proof(mut self, inclusion_proof: InclusionProof) -> Self {
+        self.inclusion_proof = Some(inclusion_proof);
+        self
+    }
+}
+
 /// Log identifier
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct LogId {
     /// Key ID (base64 encoded SHA-256 of public key)
     pub key_id: LogKeyId,
 }
 
+impl LogId {
+    /// Create a log identifier from the log's key ID.
+    pub fn new(key_id: LogKeyId) -> Self {
+        Self { key_id }
+    }
+}
+
 /// Supported Rekor entry format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KindVersion {
     HashedRekordV001,
     HashedRekordV002,
@@ -361,14 +510,25 @@ impl<'de> Deserialize<'de> for KindVersion {
 /// Inclusion promise (Signed Entry Timestamp)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct InclusionPromise {
     /// Signed entry timestamp
     pub signed_entry_timestamp: SignedTimestamp,
 }
 
+impl InclusionPromise {
+    /// Create an inclusion promise from a Signed Entry Timestamp.
+    pub fn new(signed_entry_timestamp: SignedTimestamp) -> Self {
+        Self {
+            signed_entry_timestamp,
+        }
+    }
+}
+
 /// Inclusion proof in the Merkle tree
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct InclusionProof {
     /// Index of the entry in the log. May be omitted by cosign v3.
     #[serde(default)]
@@ -384,6 +544,25 @@ pub struct InclusionProof {
     /// Checkpoint (signed tree head) - optional
     #[serde(default, skip_serializing_if = "CheckpointData::is_empty")]
     pub checkpoint: CheckpointData,
+}
+
+impl InclusionProof {
+    /// Create an inclusion proof.
+    pub fn new(
+        log_index: LogIndex,
+        root_hash: Sha256Hash,
+        tree_size: u64,
+        hashes: Vec<Sha256Hash>,
+        checkpoint: CheckpointData,
+    ) -> Self {
+        Self {
+            log_index,
+            root_hash,
+            tree_size,
+            hashes,
+            checkpoint,
+        }
+    }
 }
 
 /// Serde helper for `Vec<Sha256Hash>`
@@ -475,18 +654,34 @@ impl<'de> Deserialize<'de> for CheckpointData {
 /// RFC 3161 timestamp verification data
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct TimestampVerificationData {
     /// RFC 3161 signed timestamps
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rfc3161_timestamps: Vec<Rfc3161Timestamp>,
 }
 
+impl TimestampVerificationData {
+    /// Create timestamp verification data from RFC 3161 timestamps.
+    pub fn new(rfc3161_timestamps: Vec<Rfc3161Timestamp>) -> Self {
+        Self { rfc3161_timestamps }
+    }
+}
+
 /// An RFC 3161 timestamp
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Rfc3161Timestamp {
     /// Signed timestamp data (DER-encoded)
     pub signed_timestamp: TimestampToken,
+}
+
+impl Rfc3161Timestamp {
+    /// Wrap a DER-encoded RFC 3161 timestamp token.
+    pub fn new(signed_timestamp: TimestampToken) -> Self {
+        Self { signed_timestamp }
+    }
 }
 
 /// Default media type for bundles that don't specify one (pre-v0.1 format)
@@ -614,5 +809,24 @@ mod tests {
         } else {
             panic!("expected DSSE envelope");
         }
+    }
+
+    #[test]
+    fn test_public_key_material_json_shape() {
+        let json = r#"{"publicKey":{"hint":"abc"}}"#;
+        let content: VerificationMaterialContent = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            content,
+            VerificationMaterialContent::PublicKey(PublicKeyIdentifier::new("abc"))
+        );
+        assert_eq!(serde_json::to_string(&content).unwrap(), json);
+
+        // The hint is optional in protobuf-specs.
+        let content: VerificationMaterialContent =
+            serde_json::from_str(r#"{"publicKey":{}}"#).unwrap();
+        assert_eq!(
+            content,
+            VerificationMaterialContent::PublicKey(PublicKeyIdentifier::new(""))
+        );
     }
 }

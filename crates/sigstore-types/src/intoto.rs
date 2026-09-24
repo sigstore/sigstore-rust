@@ -20,6 +20,7 @@ fn empty_predicate() -> serde_json::Value {
 /// vulnerability scans, and other supply chain metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Statement {
     /// Type identifier for the statement (typically "<https://in-toto.io/Statement/v1>")
     #[serde(rename = "_type")]
@@ -41,6 +42,7 @@ pub struct Statement {
 /// A subject represents an artifact being attested about, identified by
 /// its name and cryptographic digest(s).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Subject {
     /// Name of the artifact (e.g., file name, package name).
     /// Defaults to empty string when omitted (cosign v3 omits this for container signing).
@@ -54,7 +56,8 @@ pub struct Subject {
 ///
 /// Contains one or more cryptographic hashes of the artifact.
 /// At minimum, sha256 should be provided.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[non_exhaustive]
 pub struct Digest {
     /// SHA-256 hash (hex-encoded)
     #[serde(
@@ -77,6 +80,34 @@ pub struct Digest {
     /// remain available for lossless round trips.
     #[serde(flatten)]
     pub other: std::collections::BTreeMap<String, String>,
+}
+
+impl Subject {
+    /// Create a subject.
+    pub fn new(name: impl Into<String>, digest: Digest) -> Self {
+        Self {
+            name: name.into(),
+            digest,
+        }
+    }
+}
+
+impl Digest {
+    /// A digest map with only a SHA-256 entry.
+    pub fn sha256(hash: Sha256Hash) -> Self {
+        Self {
+            sha256: Some(hash),
+            ..Self::default()
+        }
+    }
+
+    /// A digest map with only a SHA-512 entry.
+    pub fn sha512(hash: Sha512Hash) -> Self {
+        Self {
+            sha512: Some(hash),
+            ..Self::default()
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for Digest {
@@ -109,6 +140,23 @@ impl<'de> Deserialize<'de> for Digest {
 }
 
 impl Statement {
+    /// The in-toto Statement v1 type URI.
+    pub const TYPE_V1: &'static str = "https://in-toto.io/Statement/v1";
+
+    /// Create an in-toto Statement v1.
+    pub fn new(
+        subject: Vec<Subject>,
+        predicate_type: impl Into<String>,
+        predicate: serde_json::Value,
+    ) -> Self {
+        Self {
+            type_: Self::TYPE_V1.to_string(),
+            subject,
+            predicate_type: predicate_type.into(),
+            predicate,
+        }
+    }
+
     /// The digest algorithms used by at least one subject.
     ///
     /// Verifiers use this to hash an artifact only with the algorithms that

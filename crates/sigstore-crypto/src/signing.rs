@@ -178,6 +178,10 @@ impl KeyAlgorithm {
                 sigstore_types::HashAlgorithm::Sha2256 => Ok(SigningScheme::RsaPkcs1Sha256),
                 sigstore_types::HashAlgorithm::Sha2384 => Ok(SigningScheme::RsaPkcs1Sha384),
                 sigstore_types::HashAlgorithm::Sha2512 => Ok(SigningScheme::RsaPkcs1Sha512),
+                _ => Err(Error::UnsupportedAlgorithm(format!(
+                    "RSA does not support hash algorithm {:?}",
+                    hash_algo
+                ))),
             },
         }
     }

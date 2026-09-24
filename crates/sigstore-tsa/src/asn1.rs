@@ -82,12 +82,17 @@ impl AlgorithmIdentifier {
     }
 }
 
-impl From<HashAlgorithm> for AlgorithmIdentifier {
-    fn from(algo: HashAlgorithm) -> Self {
+impl TryFrom<HashAlgorithm> for AlgorithmIdentifier {
+    type Error = crate::Error;
+
+    fn try_from(algo: HashAlgorithm) -> Result<Self, Self::Error> {
         match algo {
-            HashAlgorithm::Sha2256 => Self::sha256(),
-            HashAlgorithm::Sha2384 => Self::sha384(),
-            HashAlgorithm::Sha2512 => Self::sha512(),
+            HashAlgorithm::Sha2256 => Ok(Self::sha256()),
+            HashAlgorithm::Sha2384 => Ok(Self::sha384()),
+            HashAlgorithm::Sha2512 => Ok(Self::sha512()),
+            other => Err(crate::Error::Asn1(format!(
+                "no RFC 3161 algorithm identifier for {other}"
+            ))),
         }
     }
 }

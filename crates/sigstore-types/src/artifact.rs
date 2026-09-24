@@ -62,6 +62,7 @@ impl From<&Sha256Hash> for ArtifactDigest {
 
 /// Material supplied as the subject of signing or verification.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Artifact<'a> {
     /// Complete artifact bytes.
     Blob(&'a [u8]),
