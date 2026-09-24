@@ -205,15 +205,27 @@ impl TlogEntryBuilder {
 
     /// Build the transparency log entry.
     pub fn build(self) -> TransparencyLogEntry {
+        // Destructure so that a new builder field cannot be silently dropped.
+        let Self {
+            log_index,
+            log_id,
+            kind_version,
+            integrated_time,
+            canonicalized_body,
+            inclusion_promise,
+            inclusion_proof,
+        } = self;
         let mut entry = TransparencyLogEntry::new(
-            self.log_index,
-            LogId::new(self.log_id),
-            self.kind_version,
-            CanonicalizedBody::new(self.canonicalized_body),
+            log_index,
+            LogId::new(log_id),
+            kind_version,
+            CanonicalizedBody::new(canonicalized_body),
         );
-        entry.integrated_time = self.integrated_time;
-        entry.inclusion_promise = self.inclusion_promise;
-        entry.inclusion_proof = self.inclusion_proof;
+        // The optional fields are assigned directly: the `with_*` setters take
+        // present values, while the builder holds `Option`s.
+        entry.integrated_time = integrated_time;
+        entry.inclusion_promise = inclusion_promise;
+        entry.inclusion_proof = inclusion_proof;
         entry
     }
 }
