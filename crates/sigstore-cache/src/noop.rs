@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+#[cfg(test)]
+use crate::CacheResource;
 use crate::{CacheAdapter, CacheKey};
 
 /// A no-op cache that doesn't store anything
@@ -12,17 +14,17 @@ use crate::{CacheAdapter, CacheKey};
 /// # Example
 ///
 /// ```
-/// use sigstore_cache::{NoCache, CacheAdapter, CacheKey};
+/// use sigstore_cache::{NoCache, CacheAdapter, CacheKey, CacheResource};
 /// use std::time::Duration;
 ///
 /// # async fn example() -> Result<(), sigstore_cache::Error> {
 /// let cache = NoCache;
 ///
 /// // Set does nothing
-/// cache.set(CacheKey::RekorPublicKey, b"data", Duration::from_secs(3600)).await?;
+/// cache.set(&CacheKey::new(CacheResource::RekorPublicKey, "https://service.example"), b"data", Duration::from_secs(3600)).await?;
 ///
 /// // Get always returns None
-/// assert!(cache.get(CacheKey::RekorPublicKey).await?.is_none());
+/// assert!(cache.get(&CacheKey::new(CacheResource::RekorPublicKey, "https://service.example")).await?.is_none());
 /// # Ok(())
 /// # }
 /// ```
@@ -30,15 +32,15 @@ use crate::{CacheAdapter, CacheKey};
 pub struct NoCache;
 
 impl CacheAdapter for NoCache {
-    fn get(&self, _key: CacheKey) -> crate::CacheGetFuture<'_> {
+    fn get(&self, _key: &CacheKey) -> crate::CacheGetFuture<'_> {
         Box::pin(async { Ok(None) })
     }
 
-    fn set(&self, _key: CacheKey, _value: &[u8], _ttl: Duration) -> crate::CacheOpFuture<'_> {
+    fn set(&self, _key: &CacheKey, _value: &[u8], _ttl: Duration) -> crate::CacheOpFuture<'_> {
         Box::pin(async { Ok(()) })
     }
 
-    fn remove(&self, _key: CacheKey) -> crate::CacheOpFuture<'_> {
+    fn remove(&self, _key: &CacheKey) -> crate::CacheOpFuture<'_> {
         Box::pin(async { Ok(()) })
     }
 
@@ -57,15 +59,32 @@ mod tests {
 
         // Set does nothing
         cache
-            .set(CacheKey::RekorPublicKey, b"data", Duration::from_secs(3600))
+            .set(
+                &CacheKey::new(CacheResource::RekorPublicKey, "https://service.example"),
+                b"data",
+                Duration::from_secs(3600),
+            )
             .await
             .unwrap();
 
         // Get always returns None
-        assert!(cache.get(CacheKey::RekorPublicKey).await.unwrap().is_none());
+        assert!(cache
+            .get(&CacheKey::new(
+                CacheResource::RekorPublicKey,
+                "https://service.example"
+            ))
+            .await
+            .unwrap()
+            .is_none());
 
         // Remove and clear are no-ops
-        cache.remove(CacheKey::RekorPublicKey).await.unwrap();
+        cache
+            .remove(&CacheKey::new(
+                CacheResource::RekorPublicKey,
+                "https://service.example",
+            ))
+            .await
+            .unwrap();
         cache.clear().await.unwrap();
     }
 }

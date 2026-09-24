@@ -8,6 +8,8 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 
+#[cfg(test)]
+use crate::CacheResource;
 use crate::{default_cache_dir, CacheAdapter, CacheKey, Result};
 
 fn url_to_dirname(url: &str) -> String {
@@ -70,15 +72,16 @@ impl FileSystemCache {
         Self::for_instance(SIGSTORE_STAGING_URL)
     }
 
-    fn cache_path(&self, key: CacheKey) -> PathBuf {
-        self.cache_dir.join(format!("{}.entry", key.as_str()))
+    fn cache_path(&self, key: &CacheKey) -> PathBuf {
+        self.cache_dir.join(format!("{}.entry", key.file_stem()))
     }
 }
 
 impl CacheAdapter for FileSystemCache {
-    fn get(&self, key: CacheKey) -> crate::CacheGetFuture<'_> {
+    fn get(&self, key: &CacheKey) -> crate::CacheGetFuture<'_> {
+        let path = self.cache_path(key);
         Box::pin(async move {
-            match fs::read(self.cache_path(key)).await {
+            match fs::read(path).await {
                 Ok(bytes) => {
                     let record: CacheRecord = serde_json::from_slice(&bytes)?;
                     Ok((Timestamp::now() < record.expires_at).then_some(record.data))
@@ -89,8 +92,9 @@ impl CacheAdapter for FileSystemCache {
         })
     }
 
-    fn set(&self, key: CacheKey, value: &[u8], ttl: Duration) -> crate::CacheOpFuture<'_> {
+    fn set(&self, key: &CacheKey, value: &[u8], ttl: Duration) -> crate::CacheOpFuture<'_> {
         let data = value.to_vec();
+        let path = self.cache_path(key);
         Box::pin(async move {
             let ttl = SignedDuration::try_from(ttl).map_err(|e| crate::Error::Io(e.to_string()))?;
             let expires_at = Timestamp::now()
@@ -98,7 +102,6 @@ impl CacheAdapter for FileSystemCache {
                 .map_err(|e| crate::Error::Io(e.to_string()))?;
             let bytes = serde_json::to_vec(&CacheRecord { expires_at, data })?;
             let dir = self.cache_dir.clone();
-            let path = self.cache_path(key);
             tokio::task::spawn_blocking(move || -> Result<()> {
                 std::fs::create_dir_all(&dir)?;
                 let mut temp = tempfile::NamedTempFile::new_in(dir)?;
@@ -129,9 +132,10 @@ impl CacheAdapter for FileSystemCache {
         })
     }
 
-    fn remove(&self, key: CacheKey) -> crate::CacheOpFuture<'_> {
+    fn remove(&self, key: &CacheKey) -> crate::CacheOpFuture<'_> {
+        let path = self.cache_path(key);
         Box::pin(async move {
-            match fs::remove_file(self.cache_path(key)).await {
+            match fs::remove_file(path).await {
                 Ok(()) => Ok(()),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 Err(e) => Err(e.into()),
@@ -172,7 +176,7 @@ mod tests {
     async fn atomic_records_do_not_mix_payloads_and_expiration() {
         let dir = tempfile::tempdir().unwrap();
         let cache = FileSystemCache::new(dir.path()).unwrap();
-        let key = CacheKey::RekorPublicKey;
+        let key = &CacheKey::new(CacheResource::RekorPublicKey, "https://service.example");
         assert!(cache.get(key).await.unwrap().is_none());
         cache
             .set(key, b"fresh", Duration::from_secs(3600))
@@ -230,5 +234,20 @@ mod tests {
                 .unwrap(),
             "instance-.."
         );
+    }
+
+    #[tokio::test]
+    async fn keys_are_scoped_by_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = FileSystemCache::new(dir.path()).unwrap();
+        let a = CacheKey::new(CacheResource::FulcioTrustBundle, "https://fulcio-a.example");
+        let b = CacheKey::new(CacheResource::FulcioTrustBundle, "https://fulcio-b.example");
+        cache
+            .set(&a, b"a", Duration::from_secs(3600))
+            .await
+            .unwrap();
+        assert!(cache.get(&b).await.unwrap().is_none());
+        assert_eq!(cache.get(&a).await.unwrap().unwrap(), b"a");
+        assert_ne!(a.file_stem(), b.file_stem());
     }
 }

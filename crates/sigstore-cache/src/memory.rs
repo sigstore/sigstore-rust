@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 
+#[cfg(test)]
+use crate::CacheResource;
 use crate::{CacheAdapter, CacheKey};
 
 /// A cached entry with expiration time
@@ -33,7 +35,7 @@ impl CacheEntry {
 /// # Example
 ///
 /// ```
-/// use sigstore_cache::{InMemoryCache, CacheAdapter, CacheKey};
+/// use sigstore_cache::{InMemoryCache, CacheAdapter, CacheKey, CacheResource};
 /// use std::time::Duration;
 ///
 /// # async fn example() -> Result<(), sigstore_cache::Error> {
@@ -41,13 +43,13 @@ impl CacheEntry {
 ///
 /// // Cache a value for 1 hour
 /// cache.set(
-///     CacheKey::RekorPublicKey,
+///     &CacheKey::new(CacheResource::RekorPublicKey, "https://service.example"),
 ///     b"public-key-data",
 ///     Duration::from_secs(3600)
 /// ).await?;
 ///
 /// // Retrieve it
-/// if let Some(data) = cache.get(CacheKey::RekorPublicKey).await? {
+/// if let Some(data) = cache.get(&CacheKey::new(CacheResource::RekorPublicKey, "https://service.example")).await? {
 ///     println!("Got {} bytes", data.len());
 /// }
 /// # Ok(())
@@ -94,7 +96,8 @@ impl InMemoryCache {
 }
 
 impl CacheAdapter for InMemoryCache {
-    fn get(&self, key: CacheKey) -> crate::CacheGetFuture<'_> {
+    fn get(&self, key: &CacheKey) -> crate::CacheGetFuture<'_> {
+        let key = key.clone();
         Box::pin(async move {
             // Check expiration and remove the entry under the same lock.
             let mut entries = self.entries.write().await;
@@ -111,7 +114,8 @@ impl CacheAdapter for InMemoryCache {
         })
     }
 
-    fn set(&self, key: CacheKey, value: &[u8], ttl: Duration) -> crate::CacheOpFuture<'_> {
+    fn set(&self, key: &CacheKey, value: &[u8], ttl: Duration) -> crate::CacheOpFuture<'_> {
+        let key = key.clone();
         let value = value.to_vec();
         Box::pin(async move {
             let entry = CacheEntry {
@@ -128,7 +132,8 @@ impl CacheAdapter for InMemoryCache {
         })
     }
 
-    fn remove(&self, key: CacheKey) -> crate::CacheOpFuture<'_> {
+    fn remove(&self, key: &CacheKey) -> crate::CacheOpFuture<'_> {
+        let key = key.clone();
         Box::pin(async move {
             let mut entries = self.entries.write().await;
             entries.remove(&key);
@@ -152,7 +157,7 @@ mod tests {
     #[tokio::test]
     async fn test_memory_cache_roundtrip() {
         let cache = InMemoryCache::new();
-        let key = CacheKey::RekorPublicKey;
+        let key = &CacheKey::new(CacheResource::RekorPublicKey, "https://service.example");
         let value = b"test-data";
 
         // Initially empty
@@ -174,7 +179,10 @@ mod tests {
     #[tokio::test]
     async fn test_memory_cache_expiration() {
         let cache = InMemoryCache::new();
-        let key = CacheKey::FulcioConfiguration;
+        let key = &CacheKey::new(
+            CacheResource::FulcioConfiguration,
+            "https://service.example",
+        );
         let value = b"test-config";
 
         // Set with very short TTL
@@ -198,11 +206,19 @@ mod tests {
         let cache = InMemoryCache::new();
 
         cache
-            .set(CacheKey::RekorPublicKey, b"a", Duration::from_secs(3600))
+            .set(
+                &CacheKey::new(CacheResource::RekorPublicKey, "https://service.example"),
+                b"a",
+                Duration::from_secs(3600),
+            )
             .await
             .unwrap();
         cache
-            .set(CacheKey::FulcioTrustBundle, b"b", Duration::from_secs(3600))
+            .set(
+                &CacheKey::new(CacheResource::FulcioTrustBundle, "https://service.example"),
+                b"b",
+                Duration::from_secs(3600),
+            )
             .await
             .unwrap();
 
@@ -220,7 +236,7 @@ mod tests {
         // Add some entries with different TTLs
         cache
             .set(
-                CacheKey::RekorPublicKey,
+                &CacheKey::new(CacheResource::RekorPublicKey, "https://service.example"),
                 b"long-lived",
                 Duration::from_secs(3600),
             )
@@ -228,7 +244,7 @@ mod tests {
             .unwrap();
         cache
             .set(
-                CacheKey::FulcioTrustBundle,
+                &CacheKey::new(CacheResource::FulcioTrustBundle, "https://service.example"),
                 b"short-lived",
                 Duration::from_millis(10),
             )
@@ -245,11 +261,44 @@ mod tests {
 
         // Only long-lived should remain
         assert_eq!(cache.len().await, 1);
-        assert!(cache.get(CacheKey::RekorPublicKey).await.unwrap().is_some());
         assert!(cache
-            .get(CacheKey::FulcioTrustBundle)
+            .get(&CacheKey::new(
+                CacheResource::RekorPublicKey,
+                "https://service.example"
+            ))
+            .await
+            .unwrap()
+            .is_some());
+        assert!(cache
+            .get(&CacheKey::new(
+                CacheResource::FulcioTrustBundle,
+                "https://service.example"
+            ))
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_keys_are_scoped_by_service() {
+        let cache = InMemoryCache::new();
+        let a = CacheKey::new(CacheResource::RekorPublicKey, "https://rekor-a.example");
+        let b = CacheKey::new(CacheResource::RekorPublicKey, "https://rekor-b.example/");
+        cache
+            .set(&a, b"a", Duration::from_secs(3600))
+            .await
+            .unwrap();
+        assert!(cache.get(&b).await.unwrap().is_none());
+        assert_eq!(
+            cache
+                .get(&CacheKey::new(
+                    CacheResource::RekorPublicKey,
+                    "https://rekor-a.example/"
+                ))
+                .await
+                .unwrap()
+                .unwrap(),
+            b"a"
+        );
     }
 }
