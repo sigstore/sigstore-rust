@@ -8,8 +8,6 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 
-#[cfg(test)]
-use crate::CacheResource;
 use crate::{default_cache_dir, CacheAdapter, CacheKey, Result};
 
 // Mirrors `url_to_dirname` in `sigstore-trust-root`'s TUF cache; keep the two
@@ -175,6 +173,7 @@ impl CacheAdapter for FileSystemCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CacheResource;
 
     #[tokio::test]
     async fn atomic_records_do_not_mix_payloads_and_expiration() {

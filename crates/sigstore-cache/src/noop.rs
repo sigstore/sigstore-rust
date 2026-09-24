@@ -2,8 +2,6 @@
 
 use std::time::Duration;
 
-#[cfg(test)]
-use crate::CacheResource;
 use crate::{CacheAdapter, CacheKey};
 
 /// A no-op cache that doesn't store anything
@@ -52,6 +50,7 @@ impl CacheAdapter for NoCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CacheResource;
 
     #[tokio::test]
     async fn test_noop_cache() {

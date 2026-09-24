@@ -6,8 +6,6 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 
-#[cfg(test)]
-use crate::CacheResource;
 use crate::{CacheAdapter, CacheKey};
 
 /// A cached entry with expiration time
@@ -153,6 +151,7 @@ impl CacheAdapter for InMemoryCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CacheResource;
 
     #[tokio::test]
     async fn test_memory_cache_roundtrip() {
