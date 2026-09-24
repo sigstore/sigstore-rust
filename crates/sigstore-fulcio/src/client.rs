@@ -10,7 +10,7 @@ use std::time::Duration;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(feature = "cache")]
-use sigstore_cache::{CacheAdapter, CacheKey};
+use sigstore_cache::{CacheAdapter, CacheKey, CacheResource};
 #[cfg(feature = "cache")]
 use std::sync::Arc;
 
@@ -53,7 +53,13 @@ impl FulcioClient {
     pub async fn get_configuration(&self) -> Result<Configuration> {
         #[cfg(feature = "cache")]
         if let Some(ref cache) = self.cache {
-            if let Ok(Some(cached)) = cache.get(CacheKey::FulcioConfiguration).await {
+            if let Ok(Some(cached)) = cache
+                .get(&CacheKey::new(
+                    CacheResource::FulcioConfiguration,
+                    &self.url,
+                ))
+                .await
+            {
                 if let Ok(config) = serde_json::from_slice(&cached) {
                     return Ok(config);
                 }
@@ -67,9 +73,9 @@ impl FulcioClient {
             if let Ok(json) = serde_json::to_vec(&config) {
                 let _ = cache
                     .set(
-                        CacheKey::FulcioConfiguration,
+                        &CacheKey::new(CacheResource::FulcioConfiguration, &self.url),
                         &json,
-                        CacheKey::FulcioConfiguration.default_ttl(),
+                        CacheResource::FulcioConfiguration.default_ttl(),
                     )
                     .await;
             }
@@ -172,7 +178,10 @@ impl FulcioClient {
     pub async fn get_trust_bundle(&self) -> Result<TrustBundle> {
         #[cfg(feature = "cache")]
         if let Some(ref cache) = self.cache {
-            if let Ok(Some(cached)) = cache.get(CacheKey::FulcioTrustBundle).await {
+            if let Ok(Some(cached)) = cache
+                .get(&CacheKey::new(CacheResource::FulcioTrustBundle, &self.url))
+                .await
+            {
                 if let Ok(bundle) = serde_json::from_slice(&cached) {
                     return Ok(bundle);
                 }
@@ -186,9 +195,9 @@ impl FulcioClient {
             if let Ok(json) = serde_json::to_vec(&bundle) {
                 let _ = cache
                     .set(
-                        CacheKey::FulcioTrustBundle,
+                        &CacheKey::new(CacheResource::FulcioTrustBundle, &self.url),
                         &json,
-                        CacheKey::FulcioTrustBundle.default_ttl(),
+                        CacheResource::FulcioTrustBundle.default_ttl(),
                     )
                     .await;
             }

@@ -10,7 +10,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use sigstore_cache::{FileSystemCache, CacheAdapter, CacheKey};
+//! use sigstore_cache::{CacheAdapter, CacheKey, CacheResource, FileSystemCache};
 //! use std::time::Duration;
 //!
 //! # async fn example() -> Result<(), sigstore_cache::Error> {
@@ -20,11 +20,14 @@
 //! // Or specify a custom directory
 //! let cache = FileSystemCache::new("/tmp/my-cache")?;
 //!
+//! // Keys are scoped to the service they belong to
+//! let key = CacheKey::new(CacheResource::RekorPublicKey, "https://rekor.sigstore.dev");
+//!
 //! // Store a value with TTL
-//! cache.set(CacheKey::RekorPublicKey, b"public-key-data", Duration::from_secs(86400)).await?;
+//! cache.set(&key, b"public-key-data", Duration::from_secs(86400)).await?;
 //!
 //! // Retrieve the value
-//! if let Some(data) = cache.get(CacheKey::RekorPublicKey).await? {
+//! if let Some(data) = cache.get(&key).await? {
 //!     println!("Got cached data: {} bytes", data.len());
 //! }
 //! # Ok(())
@@ -52,9 +55,10 @@ pub type CacheGetFuture<'a> = Pin<Box<dyn Future<Output = Result<Option<Vec<u8>>
 /// Future type for cache set/remove/clear operations
 pub type CacheOpFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 
-/// Cache keys for different Sigstore resources
+/// The kind of Sigstore resource being cached
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CacheKey {
+#[non_exhaustive]
+pub enum CacheResource {
     /// Rekor transparency log public key
     RekorPublicKey,
     /// Rekor log info (tree size, root hash)
@@ -67,30 +71,76 @@ pub enum CacheKey {
     TrustedRoot,
 }
 
-impl CacheKey {
+impl CacheResource {
     /// Get the string representation used for file names
     pub fn as_str(&self) -> &'static str {
         match self {
-            CacheKey::RekorPublicKey => "rekor_public_key",
-            CacheKey::RekorLogInfo => "rekor_log_info",
-            CacheKey::FulcioTrustBundle => "fulcio_trust_bundle",
-            CacheKey::FulcioConfiguration => "fulcio_configuration",
-            CacheKey::TrustedRoot => "trusted_root",
+            CacheResource::RekorPublicKey => "rekor_public_key",
+            CacheResource::RekorLogInfo => "rekor_log_info",
+            CacheResource::FulcioTrustBundle => "fulcio_trust_bundle",
+            CacheResource::FulcioConfiguration => "fulcio_configuration",
+            CacheResource::TrustedRoot => "trusted_root",
         }
     }
 
-    /// Get the recommended TTL for this cache key
+    /// Get the recommended TTL for this resource
     pub fn default_ttl(&self) -> Duration {
         match self {
             // Keys/certs rotate infrequently
-            CacheKey::RekorPublicKey => Duration::from_secs(24 * 60 * 60), // 24 hours
-            CacheKey::FulcioTrustBundle => Duration::from_secs(24 * 60 * 60), // 24 hours
-            CacheKey::TrustedRoot => Duration::from_secs(24 * 60 * 60),    // 24 hours
+            CacheResource::RekorPublicKey => Duration::from_secs(24 * 60 * 60), // 24 hours
+            CacheResource::FulcioTrustBundle => Duration::from_secs(24 * 60 * 60), // 24 hours
+            CacheResource::TrustedRoot => Duration::from_secs(24 * 60 * 60),    // 24 hours
             // OIDC config is very stable
-            CacheKey::FulcioConfiguration => Duration::from_secs(7 * 24 * 60 * 60), // 7 days
+            CacheResource::FulcioConfiguration => Duration::from_secs(7 * 24 * 60 * 60), // 7 days
             // Log info changes more frequently
-            CacheKey::RekorLogInfo => Duration::from_secs(60 * 60), // 1 hour
+            CacheResource::RekorLogInfo => Duration::from_secs(60 * 60), // 1 hour
         }
+    }
+}
+
+/// Identifies one cached resource of one service.
+///
+/// The service URL is part of the key, so a cache shared by clients of
+/// different Rekor logs or Fulcio instances never returns one service's key
+/// material to a client of another.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CacheKey {
+    resource: CacheResource,
+    service: String,
+}
+
+impl CacheKey {
+    /// Key `resource` for the service at `service_url`.
+    ///
+    /// Trailing slashes are ignored so that equivalent base URLs share entries.
+    pub fn new(resource: CacheResource, service_url: &str) -> Self {
+        Self {
+            resource,
+            service: service_url.trim_end_matches('/').to_string(),
+        }
+    }
+
+    /// The kind of resource.
+    pub fn resource(&self) -> CacheResource {
+        self.resource
+    }
+
+    /// The service URL the resource belongs to.
+    pub fn service(&self) -> &str {
+        &self.service
+    }
+
+    /// The recommended TTL for this key's resource.
+    pub fn default_ttl(&self) -> Duration {
+        self.resource.default_ttl()
+    }
+
+    /// A file-system-safe name that is unique per resource and service.
+    pub fn file_stem(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(self.service.as_bytes());
+        let service: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+        format!("{}-{service}", self.resource.as_str())
     }
 }
 
@@ -105,15 +155,15 @@ pub trait CacheAdapter: Send + Sync {
     /// Returns `Ok(Some(data))` if the key exists and hasn't expired,
     /// `Ok(None)` if the key doesn't exist or has expired,
     /// or `Err(...)` on I/O or other errors.
-    fn get(&self, key: CacheKey) -> CacheGetFuture<'_>;
+    fn get(&self, key: &CacheKey) -> CacheGetFuture<'_>;
 
     /// Set a cached value with a TTL
     ///
     /// The value will be considered expired after `ttl` has elapsed.
-    fn set(&self, key: CacheKey, value: &[u8], ttl: Duration) -> CacheOpFuture<'_>;
+    fn set(&self, key: &CacheKey, value: &[u8], ttl: Duration) -> CacheOpFuture<'_>;
 
     /// Remove a cached value
-    fn remove(&self, key: CacheKey) -> CacheOpFuture<'_>;
+    fn remove(&self, key: &CacheKey) -> CacheOpFuture<'_>;
 
     /// Clear all cached values
     fn clear(&self) -> CacheOpFuture<'_>;
@@ -134,7 +184,7 @@ pub trait CacheAdapterExt: CacheAdapter {
     {
         Box::pin(async move {
             // Try to get from cache first
-            if let Some(cached) = self.get(key).await? {
+            if let Some(cached) = self.get(&key).await? {
                 return Ok(cached);
             }
 
@@ -142,7 +192,7 @@ pub trait CacheAdapterExt: CacheAdapter {
             let value = compute().await?;
 
             // Store in cache (ignore errors - caching is best-effort)
-            let _ = self.set(key, &value, ttl).await;
+            let _ = self.set(&key, &value, ttl).await;
 
             Ok(value)
         })
@@ -158,7 +208,8 @@ pub trait CacheAdapterExt: CacheAdapter {
         F: FnOnce() -> Fut + Send + 'a,
         Fut: Future<Output = Result<Vec<u8>>> + Send + 'a,
     {
-        self.get_or_set(key, key.default_ttl(), compute)
+        let ttl = key.default_ttl();
+        self.get_or_set(key, ttl, compute)
     }
 }
 
@@ -167,15 +218,15 @@ impl<T: CacheAdapter + ?Sized> CacheAdapterExt for T {}
 
 // Also implement CacheAdapter for Arc<T> where T: CacheAdapter
 impl<T: CacheAdapter + ?Sized> CacheAdapter for Arc<T> {
-    fn get(&self, key: CacheKey) -> CacheGetFuture<'_> {
+    fn get(&self, key: &CacheKey) -> CacheGetFuture<'_> {
         (**self).get(key)
     }
 
-    fn set(&self, key: CacheKey, value: &[u8], ttl: Duration) -> CacheOpFuture<'_> {
+    fn set(&self, key: &CacheKey, value: &[u8], ttl: Duration) -> CacheOpFuture<'_> {
         (**self).set(key, value, ttl)
     }
 
-    fn remove(&self, key: CacheKey) -> CacheOpFuture<'_> {
+    fn remove(&self, key: &CacheKey) -> CacheOpFuture<'_> {
         (**self).remove(key)
     }
 
@@ -186,15 +237,15 @@ impl<T: CacheAdapter + ?Sized> CacheAdapter for Arc<T> {
 
 // Implement CacheAdapter for Box<dyn CacheAdapter>
 impl CacheAdapter for Box<dyn CacheAdapter> {
-    fn get(&self, key: CacheKey) -> CacheGetFuture<'_> {
+    fn get(&self, key: &CacheKey) -> CacheGetFuture<'_> {
         (**self).get(key)
     }
 
-    fn set(&self, key: CacheKey, value: &[u8], ttl: Duration) -> CacheOpFuture<'_> {
+    fn set(&self, key: &CacheKey, value: &[u8], ttl: Duration) -> CacheOpFuture<'_> {
         (**self).set(key, value, ttl)
     }
 
-    fn remove(&self, key: CacheKey) -> CacheOpFuture<'_> {
+    fn remove(&self, key: &CacheKey) -> CacheOpFuture<'_> {
         (**self).remove(key)
     }
 
@@ -221,14 +272,17 @@ mod tests {
 
     #[test]
     fn test_cache_key_as_str() {
-        assert_eq!(CacheKey::RekorPublicKey.as_str(), "rekor_public_key");
-        assert_eq!(CacheKey::FulcioTrustBundle.as_str(), "fulcio_trust_bundle");
+        assert_eq!(CacheResource::RekorPublicKey.as_str(), "rekor_public_key");
+        assert_eq!(
+            CacheResource::FulcioTrustBundle.as_str(),
+            "fulcio_trust_bundle"
+        );
     }
 
     #[test]
     fn test_cache_key_default_ttl() {
         // Just verify they return reasonable values
-        assert!(CacheKey::RekorPublicKey.default_ttl().as_secs() > 0);
-        assert!(CacheKey::FulcioConfiguration.default_ttl().as_secs() > 0);
+        assert!(CacheResource::RekorPublicKey.default_ttl().as_secs() > 0);
+        assert!(CacheResource::FulcioConfiguration.default_ttl().as_secs() > 0);
     }
 }

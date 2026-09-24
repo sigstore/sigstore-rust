@@ -29,7 +29,7 @@ pub struct RekorV2EntryBundle {
 }
 
 #[cfg(feature = "cache")]
-use sigstore_cache::{CacheAdapter, CacheKey};
+use sigstore_cache::{CacheAdapter, CacheKey, CacheResource};
 #[cfg(feature = "cache")]
 use std::sync::Arc;
 
@@ -76,7 +76,10 @@ impl RekorClient {
     pub async fn get_log_info(&self) -> Result<LogInfo> {
         #[cfg(feature = "cache")]
         if let Some(ref cache) = self.cache {
-            if let Ok(Some(cached)) = cache.get(CacheKey::RekorLogInfo).await {
+            if let Ok(Some(cached)) = cache
+                .get(&CacheKey::new(CacheResource::RekorLogInfo, &self.url))
+                .await
+            {
                 if let Ok(info) = serde_json::from_slice(&cached) {
                     return Ok(info);
                 }
@@ -90,9 +93,9 @@ impl RekorClient {
             if let Ok(json) = serde_json::to_vec(&info) {
                 let _ = cache
                     .set(
-                        CacheKey::RekorLogInfo,
+                        &CacheKey::new(CacheResource::RekorLogInfo, &self.url),
                         &json,
-                        CacheKey::RekorLogInfo.default_ttl(),
+                        CacheResource::RekorLogInfo.default_ttl(),
                     )
                     .await;
             }
@@ -295,7 +298,10 @@ impl RekorClient {
     pub async fn get_public_key(&self) -> Result<String> {
         #[cfg(feature = "cache")]
         if let Some(ref cache) = self.cache {
-            if let Ok(Some(cached)) = cache.get(CacheKey::RekorPublicKey).await {
+            if let Ok(Some(cached)) = cache
+                .get(&CacheKey::new(CacheResource::RekorPublicKey, &self.url))
+                .await
+            {
                 if let Ok(key) = String::from_utf8(cached) {
                     return Ok(key);
                 }
@@ -308,9 +314,9 @@ impl RekorClient {
         if let Some(ref cache) = self.cache {
             let _ = cache
                 .set(
-                    CacheKey::RekorPublicKey,
+                    &CacheKey::new(CacheResource::RekorPublicKey, &self.url),
                     key.as_bytes(),
-                    CacheKey::RekorPublicKey.default_ttl(),
+                    CacheResource::RekorPublicKey.default_ttl(),
                 )
                 .await;
         }

@@ -25,5 +25,8 @@ tempfile.workspace = true
 # Time
 jiff.workspace = true
 
+# Cache file names
+sha2.workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
