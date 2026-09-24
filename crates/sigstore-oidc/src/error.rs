@@ -4,6 +4,7 @@ use thiserror::Error;
 
 /// Errors that can occur in OIDC operations
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// HTTP request error
     #[error("HTTP error: {0}")]

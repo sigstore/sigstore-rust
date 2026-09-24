@@ -11,10 +11,10 @@
 //! or when the `browser` feature is not enabled.
 
 use crate::error::{Error, Result};
-use crate::token::IdentityToken;
+use crate::token::{IdentityToken, SecretString};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::Rng;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::io::Write;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -63,32 +63,19 @@ impl OAuthConfig {
     }
 }
 
-/// Token response from the OAuth server
-#[derive(Clone, Serialize, Deserialize)]
-pub struct TokenResponse {
-    /// Access token
-    pub access_token: String,
-    /// Token type (usually "Bearer")
-    pub token_type: String,
-    /// Expiration in seconds
-    #[serde(default)]
-    pub expires_in: Option<u64>,
+/// The part of the OAuth token response this client uses.
+///
+/// Only the ID token is kept; the access token is never deserialized.
+#[derive(Debug, Deserialize)]
+struct TokenResponse {
     /// ID token (this is what we want for Sigstore)
     #[serde(default)]
-    pub id_token: Option<String>,
-}
-
-impl std::fmt::Debug for TokenResponse {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TokenResponse")
-            .field("token_type", &self.token_type)
-            .field("expires_in", &self.expires_in)
-            .finish_non_exhaustive()
-    }
+    id_token: Option<SecretString>,
 }
 
 /// The authentication mode being used
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AuthMode {
     /// Browser was opened, redirect server is waiting for callback
     BrowserRedirect,
@@ -98,9 +85,23 @@ pub enum AuthMode {
 
 /// Options for authentication
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct AuthOptions {
     /// Force OOB mode even when browser opening might succeed
     pub force_oob: bool,
+}
+
+impl AuthOptions {
+    /// Default options: try the browser and fall back to out-of-band.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Force out-of-band mode even when opening a browser might succeed.
+    pub fn with_force_oob(mut self, force_oob: bool) -> Self {
+        self.force_oob = force_oob;
+        self
+    }
 }
 
 /// Callback trait for customizing the authentication UX
@@ -115,13 +116,13 @@ pub trait AuthCallback: crate::templates::HtmlTemplates {
     ///
     /// This should read user input (e.g., from stdin) and return the code.
     /// Only called when mode is `OutOfBand`.
-    fn prompt_for_code(&self) -> std::io::Result<String>;
+    fn prompt_for_code(&self) -> std::io::Result<SecretString>;
 
     /// Called when waiting for the redirect callback (BrowserRedirect mode only)
-    fn waiting_for_redirect(&self);
+    fn waiting_for_redirect(&self) {}
 
     /// Called when authentication completes successfully
-    fn auth_complete(&self);
+    fn auth_complete(&self) {}
 }
 
 /// Default callback that prints to stdout and uses Sigstore-branded templates
@@ -155,13 +156,13 @@ impl AuthCallback for DefaultAuthCallback {
         println!();
     }
 
-    fn prompt_for_code(&self) -> std::io::Result<String> {
+    fn prompt_for_code(&self) -> std::io::Result<SecretString> {
         use std::io;
         print!("Enter verification code: ");
         io::stdout().flush()?;
-        let mut code = String::new();
+        let mut code = zeroize::Zeroizing::new(String::new());
         io::stdin().read_line(&mut code)?;
-        Ok(code.trim().to_string())
+        Ok(SecretString::new(code.trim()))
     }
 
     fn waiting_for_redirect(&self) {
@@ -350,7 +351,7 @@ impl OAuthClient {
 
         // Exchange code for token
         let token = self
-            .exchange_code(&code, verifier, OOB_REDIRECT_URI)
+            .exchange_code(code.expose_secret(), verifier, OOB_REDIRECT_URI)
             .await?;
 
         callback.auth_complete();
@@ -513,7 +514,7 @@ impl OAuthClient {
             .id_token
             .ok_or_else(|| Error::OAuth("no id_token in response".to_string()))?;
 
-        IdentityToken::from_jwt(&id_token)
+        IdentityToken::from_jwt(id_token.expose_secret())
     }
 }
 
@@ -612,14 +613,13 @@ mod tests {
 
     #[test]
     fn token_response_debug_is_redacted() {
-        let token = TokenResponse {
-            access_token: "access-secret".into(),
-            token_type: "Bearer".into(),
-            expires_in: None,
-            id_token: Some("id-secret".into()),
-        };
+        let token: TokenResponse = serde_json::from_str(
+            r#"{"access_token":"access-secret","token_type":"Bearer","id_token":"id-secret"}"#,
+        )
+        .unwrap();
         let debug = format!("{token:?}");
         assert!(!debug.contains("access-secret") && !debug.contains("id-secret"));
+        assert_eq!(token.id_token.unwrap().expose_secret(), "id-secret");
     }
 
     #[test]

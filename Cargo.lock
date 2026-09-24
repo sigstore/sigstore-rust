@@ -2071,6 +2071,7 @@ version = "0.13.0"
 dependencies = [
  "ambient-id",
  "base64",
+ "jiff",
  "open",
  "rand 0.9.4",
  "reqwest",
@@ -2080,6 +2081,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "url",
+ "zeroize",
 ]
 
 [[package]]

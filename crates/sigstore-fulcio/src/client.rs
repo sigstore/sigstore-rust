@@ -131,7 +131,7 @@ impl FulcioClient {
 
         let request = CreateSigningCertificateRequest {
             credentials: Credentials {
-                oidc_identity_token: identity_token.raw().to_string(),
+                oidc_identity_token: identity_token.expose_secret().to_string(),
             },
             public_key_request: PublicKeyRequest {
                 public_key: PublicKeyData {

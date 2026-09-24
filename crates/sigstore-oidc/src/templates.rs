@@ -21,13 +21,13 @@ static DEFAULT_SUCCESS_HTML: OnceLock<String> = OnceLock::new();
 static DEFAULT_ERROR_HTML: OnceLock<String> = OnceLock::new();
 
 /// Returns the default success page HTML with Sigstore branding (logo embedded)
-pub fn default_success_html() -> &'static str {
+pub(crate) fn default_success_html() -> &'static str {
     DEFAULT_SUCCESS_HTML
         .get_or_init(|| SUCCESS_HTML_TEMPLATE.replace(LOGO_PLACEHOLDER, SIGSTORE_LOGO_SVG))
 }
 
 /// Returns the default error page HTML with Sigstore branding (logo embedded)
-pub fn default_error_html() -> &'static str {
+pub(crate) fn default_error_html() -> &'static str {
     DEFAULT_ERROR_HTML
         .get_or_init(|| ERROR_HTML_TEMPLATE.replace(LOGO_PLACEHOLDER, SIGSTORE_LOGO_SVG))
 }
