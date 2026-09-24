@@ -217,12 +217,21 @@ pub struct OAuthClient {
 }
 
 impl OAuthClient {
-    /// Create a new OAuth client with the given configuration
-    pub fn new(config: OAuthConfig) -> Self {
-        Self {
-            config,
-            client: reqwest::Client::new(),
-        }
+    /// Create an OAuth client with a default HTTP client (30-second request
+    /// timeout, `sigstore-rust/<version>` user agent).
+    pub fn new(config: OAuthConfig) -> Result<Self> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .user_agent(concat!("sigstore-rust/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|e| Error::Http(format!("failed to build HTTP client: {e}")))?;
+        Ok(Self::with_http_client(config, client))
+    }
+
+    /// Create an OAuth client that uses a caller-configured HTTP client
+    /// (timeouts, proxies, TLS roots, user agent).
+    pub fn with_http_client(config: OAuthConfig, client: reqwest::Client) -> Self {
+        Self { config, client }
     }
 
     /// Generate a PKCE verifier and challenge
@@ -515,7 +524,6 @@ impl OAuthClient {
         let response = self
             .client
             .post(self.config.token_url())
-            .timeout(Duration::from_secs(30))
             .form(&params)
             .send()
             .await
@@ -573,7 +581,7 @@ impl OAuthClient {
 /// instance's signing config (see [`OAuthConfig::dex`]). To customize the
 /// callback, endpoints or options, use [`OAuthClient`] directly.
 pub async fn get_identity_token(oidc_url: &str) -> Result<IdentityToken> {
-    OAuthClient::new(OAuthConfig::dex(oidc_url))
+    OAuthClient::new(OAuthConfig::dex(oidc_url))?
         .auth(DefaultAuthCallback)
         .await
 }
@@ -584,7 +592,8 @@ mod tests {
 
     #[tokio::test]
     async fn callback_is_bounded_cancellable_and_checks_state() {
-        let client = OAuthClient::new(OAuthConfig::dex("https://oauth2.sigstore.dev/auth"));
+        let client =
+            OAuthClient::new(OAuthConfig::dex("https://oauth2.sigstore.dev/auth")).unwrap();
         let callback = DefaultAuthCallback;
         for (request, valid) in [
             (

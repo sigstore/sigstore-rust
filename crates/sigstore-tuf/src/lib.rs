@@ -95,3 +95,6 @@ pub use client::Updater;
 
 #[cfg(feature = "fetch")]
 pub use client::HttpRepository;
+/// The HTTP client crate used by [`HttpRepository::with_http_client`].
+#[cfg(feature = "fetch")]
+pub use reqwest;

@@ -22,7 +22,12 @@ async fn request_timeout_covers_stalled_headers_and_body() {
             drop(stream);
         });
         let client = TimestampClient::builder(url)
-            .timeout(Duration::from_millis(100))
+            .with_http_client(
+                sigstore_tsa::reqwest::Client::builder()
+                    .timeout(Duration::from_millis(100))
+                    .build()
+                    .unwrap(),
+            )
             .build()
             .unwrap();
         let signature = SignatureBytes::from_bytes(b"signature");

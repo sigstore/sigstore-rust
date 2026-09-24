@@ -592,6 +592,17 @@ mod http {
             })
         }
 
+        /// Use a caller-configured HTTP client (timeouts, proxies, TLS roots,
+        /// user agent) instead of the default one.
+        ///
+        /// Configure timeouts on it: without them a malicious mirror can hang
+        /// a refresh indefinitely (the slow-retrieval attack, TUF spec
+        /// §1.5.10).
+        pub fn with_http_client(mut self, client: reqwest::Client) -> Self {
+            self.client = client;
+            self
+        }
+
         /// Override where target files are fetched from.
         pub fn with_targets_base(mut self, targets_base_url: &str) -> Result<Self> {
             self.targets_base = normalize_base(targets_base_url)?;
