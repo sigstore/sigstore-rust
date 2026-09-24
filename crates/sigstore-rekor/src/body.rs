@@ -4,9 +4,10 @@
 //! content for different Rekor entry types and versions.
 
 use crate::entry::RekorV2KeyDetails;
+use crate::hex_encoded::HexHash;
 use serde::{Deserialize, Serialize};
 use sigstore_types::{
-    DerCertificate, DerPublicKey, DigestBytes, HashAlgorithm, HexHash, PemContent, SignatureBytes,
+    DerCertificate, DerPublicKey, DigestBytes, HashAlgorithm, PemContent, SignatureBytes,
 };
 
 /// Parsed Rekor entry body

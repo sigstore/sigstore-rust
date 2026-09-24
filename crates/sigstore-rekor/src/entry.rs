@@ -1,9 +1,10 @@
 //! Rekor log entry types
 
+use crate::hex_encoded::HexLogId;
 use serde::{Deserialize, Serialize};
 use sigstore_types::{
-    CanonicalizedBody, DerCertificate, DerPublicKey, EntryUuid, HashAlgorithm, HexLogId,
-    PemContent, Sha256Hash, SignatureBytes, SignedTimestamp,
+    CanonicalizedBody, DerCertificate, DerPublicKey, EntryUuid, HashAlgorithm, PemContent,
+    Sha256Hash, SignatureBytes, SignedTimestamp,
 };
 use std::collections::HashMap;
 
@@ -60,12 +61,12 @@ impl LogEntry {
         kind_version: sigstore_types::KindVersion,
     ) -> sigstore_types::Result<sigstore_types::TransparencyLogEntry> {
         use sigstore_types::{
-            bundle::CheckpointData, InclusionPromise, InclusionProof, LogId, LogIndex, LogKeyId,
+            bundle::CheckpointData, InclusionPromise, InclusionProof, LogId, LogIndex,
             TransparencyLogEntry,
         };
         let mut entry = TransparencyLogEntry::new(
             LogIndex::new(self.log_index)?,
-            LogId::new(LogKeyId::from_bytes(&self.log_id.decode()?)),
+            LogId::new(self.log_id.to_log_key_id()?),
             kind_version,
             self.body.clone(),
         );

@@ -980,122 +980,6 @@ impl PartialEq<DigestBytes> for Vec<u8> {
     }
 }
 
-// ============================================================================
-// Hex-Encoded Log ID (for Rekor V1 API compatibility)
-// ============================================================================
-
-/// Hex-encoded transparency log ID
-///
-/// The Rekor V1 API returns log IDs as hex-encoded strings.
-/// This type handles the hex encoding and can convert to base64 for bundles.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct HexLogId(String);
-
-impl HexLogId {
-    pub fn new(s: String) -> Self {
-        HexLogId(s)
-    }
-
-    /// Create from raw bytes (will be hex-encoded)
-    pub fn from_bytes(bytes: &[u8]) -> Self {
-        HexLogId(hex::encode(bytes))
-    }
-
-    /// Decode to raw bytes
-    pub fn decode(&self) -> Result<Vec<u8>> {
-        hex::decode(&self.0).map_err(|e| Error::InvalidEncoding(format!("invalid hex: {}", e)))
-    }
-
-    /// Convert to base64 encoding (for bundle format)
-    pub fn to_base64(&self) -> Result<String> {
-        let bytes = self.decode()?;
-        Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn into_string(self) -> String {
-        self.0
-    }
-}
-
-impl From<String> for HexLogId {
-    fn from(s: String) -> Self {
-        HexLogId::new(s)
-    }
-}
-
-impl AsRef<str> for HexLogId {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for HexLogId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-// ============================================================================
-// Hex-Encoded Hash (for Rekor V1 API)
-// ============================================================================
-
-/// Hex-encoded hash value
-///
-/// Used in Rekor V1 API responses where hashes are hex-encoded.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct HexHash(String);
-
-impl HexHash {
-    pub fn new(s: String) -> Self {
-        HexHash(s)
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Self {
-        HexHash(hex::encode(bytes))
-    }
-
-    pub fn decode(&self) -> Result<Vec<u8>> {
-        hex::decode(&self.0).map_err(|e| Error::InvalidEncoding(format!("invalid hex: {}", e)))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn into_string(self) -> String {
-        self.0
-    }
-
-    /// Convert to Sha256Hash (validates length)
-    pub fn to_sha256(&self) -> Result<Sha256Hash> {
-        Sha256Hash::from_hex(&self.0)
-    }
-}
-
-impl From<String> for HexHash {
-    fn from(s: String) -> Self {
-        HexHash::new(s)
-    }
-}
-
-impl AsRef<str> for HexHash {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for HexHash {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1149,15 +1033,6 @@ mod tests {
         let json_hex = format!("\"{}\"", hash_hex);
         let from_hex: Sha256Hash = serde_json::from_str(&json_hex).unwrap();
         assert_eq!(hash, from_hex);
-    }
-
-    #[test]
-    fn test_hex_log_id() {
-        let bytes = vec![1, 2, 3, 4];
-        let log_id = HexLogId::from_bytes(&bytes);
-        assert_eq!(log_id.as_str(), "01020304");
-        assert_eq!(log_id.decode().unwrap(), bytes);
-        assert_eq!(log_id.to_base64().unwrap(), "AQIDBA==");
     }
 
     #[test]

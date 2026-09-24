@@ -24,9 +24,9 @@ pub use bundle::{
 pub use checkpoint::{Checkpoint, CheckpointSignature};
 pub use dsse::{pae, DsseEnvelope, DsseSignature};
 pub use encoding::{
-    CanonicalizedBody, DerCertificate, DerPublicKey, DigestBytes, EntryUuid, HexHash, HexLogId,
-    KeyHint, KeyId, LogIndex, LogKeyId, PayloadBytes, PemContent, Sha256Hash, Sha512Hash,
-    SignatureBytes, SignedTimestamp, TimestampToken,
+    CanonicalizedBody, DerCertificate, DerPublicKey, DigestBytes, EntryUuid, KeyHint, KeyId,
+    LogIndex, LogKeyId, PayloadBytes, PemContent, Sha256Hash, Sha512Hash, SignatureBytes,
+    SignedTimestamp, TimestampToken,
 };
 pub use error::{Error, Result};
 pub use hash::HashAlgorithm;
