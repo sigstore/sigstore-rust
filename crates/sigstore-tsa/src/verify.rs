@@ -6,7 +6,7 @@
 //! - Message imprint validation
 //! - TSA Extended Key Usage validation
 
-use crate::asn1::{self, PkiStatus, TimeStampResp, TstInfo};
+use crate::asn1::{self, PkiStatus, TimeStampResp, TstInfo, OID_SHA256, OID_SHA384, OID_SHA512};
 use crate::error::{Error, Result};
 use cms::signed_data::{SignedData, SignerIdentifier};
 use const_oid::ObjectIdentifier;
@@ -23,9 +23,16 @@ use webpki::{anchor_from_trusted_cert, EndEntityCert, KeyUsage, ALL_VERIFICATION
 const ID_KP_TIME_STAMPING: ObjectIdentifier = const_oid::db::rfc5280::ID_KP_TIME_STAMPING;
 const ID_SIGNED_DATA: ObjectIdentifier = const_oid::db::rfc5911::ID_SIGNED_DATA;
 const OID_MESSAGE_DIGEST: ObjectIdentifier = const_oid::db::rfc6268::ID_MESSAGE_DIGEST;
-const OID_SHA256: ObjectIdentifier = const_oid::db::rfc5912::ID_SHA_256;
-const OID_SHA384: ObjectIdentifier = const_oid::db::rfc5912::ID_SHA_384;
-const OID_SHA512: ObjectIdentifier = const_oid::db::rfc5912::ID_SHA_512;
+
+/// The digest algorithm for a hash algorithm OID used in RFC 3161 structures.
+fn digest_for_oid(oid: &ObjectIdentifier) -> Option<&'static aws_lc_rs::digest::Algorithm> {
+    match *oid {
+        OID_SHA256 => Some(&aws_lc_rs::digest::SHA256),
+        OID_SHA384 => Some(&aws_lc_rs::digest::SHA384),
+        OID_SHA512 => Some(&aws_lc_rs::digest::SHA512),
+        _ => None,
+    }
+}
 
 /// Verification options for RFC 3161 timestamps.
 ///
@@ -281,24 +288,14 @@ pub fn verify_timestamp_for_authority(
 
 /// Verify the message imprint matches the signature bytes
 fn verify_message_imprint(tst_info: &TstInfo, signature_bytes: &[u8]) -> Result<()> {
-    use aws_lc_rs::digest::{digest, SHA256, SHA384, SHA512};
-
     let message_imprint = &tst_info.message_imprint;
     let hash_alg_oid = &message_imprint.hash_algorithm.algorithm;
 
     // Hash the signature bytes using the algorithm specified in the message imprint
-    let computed_hash = if hash_alg_oid == &OID_SHA256 {
-        digest(&SHA256, signature_bytes)
-    } else if hash_alg_oid == &OID_SHA384 {
-        digest(&SHA384, signature_bytes)
-    } else if hash_alg_oid == &OID_SHA512 {
-        digest(&SHA512, signature_bytes)
-    } else {
-        return Err(Error::ParseError(format!(
-            "unsupported hash algorithm: {}",
-            hash_alg_oid
-        )));
-    };
+    let algorithm = digest_for_oid(hash_alg_oid).ok_or_else(|| {
+        Error::ParseError(format!("unsupported hash algorithm: {}", hash_alg_oid))
+    })?;
+    let computed_hash = aws_lc_rs::digest::digest(algorithm, signature_bytes);
 
     let expected_hash = message_imprint.hashed_message.as_bytes();
 
@@ -445,7 +442,6 @@ fn verify_message_digest_attribute(
     tst_info_der: &[u8],
     digest_alg_oid: &ObjectIdentifier,
 ) -> Result<()> {
-    use aws_lc_rs::digest::{digest, SHA256, SHA384, SHA512};
     use x509_cert::der::asn1::OctetStringRef;
     use x509_cert::der::{Decode, Encode};
 
@@ -488,18 +484,13 @@ fn verify_message_digest_attribute(
     let message_digest = message_digest_octets.as_bytes();
 
     // Hash the TSTInfo content using the algorithm declared by the signer.
-    let content_hash = if digest_alg_oid == &OID_SHA256 {
-        digest(&SHA256, tst_info_der)
-    } else if digest_alg_oid == &OID_SHA384 {
-        digest(&SHA384, tst_info_der)
-    } else if digest_alg_oid == &OID_SHA512 {
-        digest(&SHA512, tst_info_der)
-    } else {
-        return Err(Error::ParseError(format!(
+    let algorithm = digest_for_oid(digest_alg_oid).ok_or_else(|| {
+        Error::ParseError(format!(
             "unsupported signer digest algorithm: {}",
             digest_alg_oid
-        )));
-    };
+        ))
+    })?;
+    let content_hash = aws_lc_rs::digest::digest(algorithm, tst_info_der);
 
     // Compare the hashes
     if content_hash.as_ref() != message_digest {

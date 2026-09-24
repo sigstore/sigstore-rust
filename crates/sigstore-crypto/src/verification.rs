@@ -14,8 +14,14 @@ use der::Decode;
 use sigstore_types::{DerPublicKey, SignatureBytes};
 use spki::SubjectPublicKeyInfoRef;
 
-/// id-Ed25519: 1.3.101.112
+/// id-Ed25519: 1.3.101.112 (RFC 8410)
 const ID_ED25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
+/// id-ml-dsa-44: 2.16.840.1.101.3.4.3.17 (FIPS 204)
+const ID_ML_DSA_44: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.17");
+/// id-ml-dsa-65: 2.16.840.1.101.3.4.3.18 (FIPS 204)
+const ID_ML_DSA_65: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.18");
+/// id-ml-dsa-87: 2.16.840.1.101.3.4.3.19 (FIPS 204)
+const ID_ML_DSA_87: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.19");
 
 impl KeyAlgorithm {
     /// Resolve an SPKI algorithm with checked ASN.1 parameters.
@@ -51,23 +57,28 @@ fn key_algorithm(spki: &SubjectPublicKeyInfoRef<'_>) -> Result<KeyAlgorithm> {
                 .map_err(|e| Error::InvalidKey(format!("invalid RSA public key: {e}")))?;
             Ok(KeyAlgorithm::Rsa)
         }
-        _ if algorithm.parameters.is_some() => Err(Error::InvalidKey(
-            "unexpected public key algorithm parameters".into(),
-        )),
-        ID_ED25519 => Ok(KeyAlgorithm::Ed25519),
-        oid if oid == ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.17") => {
-            Ok(KeyAlgorithm::MlDsa44)
-        }
-        oid if oid == ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.18") => {
-            Ok(KeyAlgorithm::MlDsa65)
-        }
-        oid if oid == ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.19") => {
-            Ok(KeyAlgorithm::MlDsa87)
-        }
+        // RFC 8410 and FIPS 204 require the parameters to be absent.
+        ID_ED25519 => without_parameters(algorithm, KeyAlgorithm::Ed25519),
+        ID_ML_DSA_44 => without_parameters(algorithm, KeyAlgorithm::MlDsa44),
+        ID_ML_DSA_65 => without_parameters(algorithm, KeyAlgorithm::MlDsa65),
+        ID_ML_DSA_87 => without_parameters(algorithm, KeyAlgorithm::MlDsa87),
         oid => Err(Error::InvalidKey(format!(
             "unsupported key algorithm OID: {oid}"
         ))),
     }
+}
+
+/// Accept `key_algorithm` only if the SPKI algorithm carries no parameters.
+fn without_parameters(
+    algorithm: &spki::AlgorithmIdentifierRef<'_>,
+    key_algorithm: KeyAlgorithm,
+) -> Result<KeyAlgorithm> {
+    if algorithm.parameters.is_some() {
+        return Err(Error::InvalidKey(format!(
+            "{key_algorithm:?} public keys must not have algorithm parameters"
+        )));
+    }
+    Ok(key_algorithm)
 }
 
 #[derive(der::Sequence)]
@@ -519,18 +530,9 @@ mod tests {
             (ID_EC_PUBLIC_KEY, KeyAlgorithm::EcdsaP256),
             (RSA_ENCRYPTION, KeyAlgorithm::Rsa),
             (ID_ED25519, KeyAlgorithm::Ed25519),
-            (
-                ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.17"),
-                KeyAlgorithm::MlDsa44,
-            ),
-            (
-                ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.18"),
-                KeyAlgorithm::MlDsa65,
-            ),
-            (
-                ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.19"),
-                KeyAlgorithm::MlDsa87,
-            ),
+            (ID_ML_DSA_44, KeyAlgorithm::MlDsa44),
+            (ID_ML_DSA_65, KeyAlgorithm::MlDsa65),
+            (ID_ML_DSA_87, KeyAlgorithm::MlDsa87),
         ] {
             let key = spki_der(oid, Some(SECP_256_R_1), key_bytes);
             let mut spki = SubjectPublicKeyInfoRef::try_from(key.as_bytes()).unwrap();
