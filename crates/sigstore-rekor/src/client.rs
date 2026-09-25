@@ -488,11 +488,7 @@ fn validate_v2_entry(entry: &TransparencyLogEntry, request: &HashedRekordV2) -> 
             entry.kind_version.version()
         )));
     }
-    let body = RekorEntryBody::from_base64_json(
-        &entry.canonicalized_body.to_base64(),
-        entry.kind_version.kind(),
-        entry.kind_version.version(),
-    )?;
+    let body = RekorEntryBody::parse(&entry.canonicalized_body, entry.kind_version)?;
     let RekorEntryBody::HashedRekordV002(body) = body else {
         return Err(Error::InvalidResponse(
             "Rekor v2 response body is not hashedrekord/0.0.2".to_string(),

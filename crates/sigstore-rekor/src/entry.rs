@@ -3,8 +3,8 @@
 use crate::hex_encoded::HexLogId;
 use serde::{Deserialize, Serialize};
 use sigstore_types::{
-    CanonicalizedBody, DerCertificate, DerPublicKey, EntryUuid, HashAlgorithm, PemContent,
-    Sha256Hash, SignatureBytes, SignedTimestamp,
+    CanonicalizedBody, DerCertificate, DerPublicKey, EntryUuid, HashAlgorithm, LogIndex,
+    PemContent, Sha256Hash, SignatureBytes, SignedTimestamp,
 };
 use std::collections::HashMap;
 
@@ -13,7 +13,8 @@ use std::collections::HashMap;
 /// The version determines the entry formats and the API, not the log URL:
 /// v1 and v2 logs are separate services, and a Sigstore instance publishes
 /// the URLs of its logs in its signing config.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum RekorApiVersion {
     /// V1 API - uses hashedrekord 0.0.1 and dsse 0.0.1
     #[default]
@@ -23,9 +24,29 @@ pub enum RekorApiVersion {
     V2,
 }
 
+impl RekorApiVersion {
+    /// The major API version number, as used in signing configs.
+    pub fn major(self) -> u32 {
+        match self {
+            RekorApiVersion::V1 => 1,
+            RekorApiVersion::V2 => 2,
+        }
+    }
+
+    /// The API version for a major version number, if supported.
+    pub fn from_major(major: u32) -> Option<Self> {
+        match major {
+            1 => Some(RekorApiVersion::V1),
+            2 => Some(RekorApiVersion::V2),
+            _ => None,
+        }
+    }
+}
+
 /// A log entry from Rekor
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct LogEntry {
     /// UUID of the entry (the key in the response map)
     #[serde(skip)]
@@ -43,8 +64,8 @@ pub struct LogEntry {
     /// Log ID (hex-encoded SHA-256 of the log's public key)
     #[serde(rename = "logID")]
     pub log_id: HexLogId,
-    /// Log index
-    pub log_index: u64,
+    /// Log index (rejected while parsing if it does not fit a protobuf `int64`)
+    pub log_index: LogIndex,
     /// Verification data
     #[serde(default)]
     pub verification: Option<Verification>,
@@ -53,19 +74,18 @@ pub struct LogEntry {
 impl LogEntry {
     /// Convert a Rekor response into bundle verification material.
     ///
-    /// Checks that the log indices fit the protobuf `int64` range and that the
-    /// checkpoint parses. This is format conversion, not cryptographic
+    /// Checks that the checkpoint parses; log indices are already range-checked
+    /// by their type. This is format conversion, not cryptographic
     /// verification of the log entry.
     pub fn to_bundle_entry(
         &self,
         kind_version: sigstore_types::KindVersion,
     ) -> sigstore_types::Result<sigstore_types::TransparencyLogEntry> {
         use sigstore_types::{
-            bundle::CheckpointData, InclusionPromise, InclusionProof, LogId, LogIndex,
-            TransparencyLogEntry,
+            bundle::CheckpointData, InclusionPromise, InclusionProof, LogId, TransparencyLogEntry,
         };
         let mut entry = TransparencyLogEntry::new(
-            LogIndex::new(self.log_index)?,
+            self.log_index,
             LogId::new(self.log_id.to_log_key_id()?),
             kind_version,
             self.body.clone(),
@@ -78,7 +98,7 @@ impl LogEntry {
                 .map(|set| InclusionPromise::new(set.clone()));
             if let Some(proof) = &verification.inclusion_proof {
                 entry.inclusion_proof = Some(InclusionProof::new(
-                    LogIndex::new(proof.log_index)?,
+                    proof.log_index,
                     proof.root_hash,
                     proof.tree_size,
                     proof.hashes.clone(),
@@ -93,6 +113,7 @@ impl LogEntry {
 /// Verification data for a log entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Verification {
     /// Inclusion proof
     #[serde(default)]
@@ -109,6 +130,7 @@ pub struct Verification {
 /// the bundle's `sigstore_types::InclusionProof`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct RekorInclusionProof {
     /// Checkpoint (signed tree head)
     pub checkpoint: String,
@@ -116,7 +138,7 @@ pub struct RekorInclusionProof {
     #[serde(with = "hex_sha256_vec")]
     pub hashes: Vec<Sha256Hash>,
     /// Log index
-    pub log_index: u64,
+    pub log_index: LogIndex,
     /// Root hash (hex-encoded in V1 API)
     #[serde(with = "hex_sha256")]
     pub root_hash: Sha256Hash,
@@ -127,6 +149,7 @@ pub struct RekorInclusionProof {
 /// Log info response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct LogInfo {
     /// Root hash of the tree
     #[serde(with = "hex_sha256")]
@@ -134,7 +157,8 @@ pub struct LogInfo {
     /// Signed tree head (checkpoint)
     pub signed_tree_head: String,
     /// Tree ID
-    pub tree_i_d: String,
+    #[serde(rename = "treeID")]
+    pub tree_id: String,
     /// Tree size
     pub tree_size: u64,
     /// Inactive shards
@@ -145,6 +169,7 @@ pub struct LogInfo {
 /// Inactive shard info
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct InactiveShard {
     /// Root hash
     #[serde(with = "hex_sha256")]
@@ -152,7 +177,8 @@ pub struct InactiveShard {
     /// Signed tree head
     pub signed_tree_head: String,
     /// Tree ID
-    pub tree_i_d: String,
+    #[serde(rename = "treeID")]
+    pub tree_id: String,
     /// Tree size
     pub tree_size: u64,
 }
@@ -204,7 +230,7 @@ mod hex_sha256_vec {
 }
 
 /// Response from creating a log entry (map of UUID to LogEntry)
-pub type LogEntryResponse = HashMap<String, LogEntry>;
+pub(crate) type LogEntryResponse = HashMap<String, LogEntry>;
 
 /// Search index query
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -442,7 +468,8 @@ pub struct HashedRekordSignatureV2 {
 /// The current request API accepts a SHA-256 digest, so it exposes only the
 /// matching algorithm. Supporting additional algorithms requires carrying
 /// their SHA-384 or SHA-512 digests instead of merely changing this value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum RekorV2KeyDetails {
     #[serde(rename = "PKIX_ECDSA_P256_SHA_256")]
     PkixEcdsaP256Sha256,
@@ -535,11 +562,11 @@ mod tests {
 
     #[test]
     fn checked_bundle_conversion_preserves_fields() {
-        let mut entry: LogEntry = serde_json::from_str(r#"{"body":"e30=","integratedTime":0,"logID":"0000000000000000000000000000000000000000000000000000000000000000","logIndex":18446744073709551615}"#).unwrap();
-        assert!(entry
-            .to_bundle_entry(sigstore_types::KindVersion::HashedRekordV001)
-            .is_err());
-        entry.log_index = 123;
+        let json = r#"{"body":"e30=","integratedTime":0,"logID":"0000000000000000000000000000000000000000000000000000000000000000","logIndex":18446744073709551615}"#;
+        // Indices outside the protobuf int64 range are rejected while parsing.
+        assert!(serde_json::from_str::<LogEntry>(json).is_err());
+        let mut entry: LogEntry =
+            serde_json::from_str(&json.replace("18446744073709551615", "123")).unwrap();
         let converted = entry
             .to_bundle_entry(sigstore_types::KindVersion::HashedRekordV001)
             .unwrap();
@@ -549,13 +576,14 @@ mod tests {
         entry.verification = Some(Verification {
             signed_entry_timestamp: None,
             inclusion_proof: Some(RekorInclusionProof {
-                log_index: u64::MAX,
-                checkpoint: String::new(),
+                log_index: sigstore_types::LogIndex::new(0).unwrap(),
+                checkpoint: "not a checkpoint".to_string(),
                 hashes: vec![],
                 root_hash: Sha256Hash::new([0; 32]),
                 tree_size: 1,
             }),
         });
+        // A malformed checkpoint fails the conversion.
         assert!(entry
             .to_bundle_entry(sigstore_types::KindVersion::HashedRekordV001)
             .is_err());

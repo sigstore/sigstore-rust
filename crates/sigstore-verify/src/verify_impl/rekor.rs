@@ -86,12 +86,8 @@ fn verify_dsse_v001(
     bundle: &Bundle,
     managed_key: Option<&DerPublicKey>,
 ) -> Result<()> {
-    let body = RekorEntryBody::from_base64_json(
-        &entry.canonicalized_body.to_base64(),
-        entry.kind_version.kind(),
-        entry.kind_version.version(),
-    )
-    .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
+    let body = RekorEntryBody::parse(&entry.canonicalized_body, entry.kind_version)
+        .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
 
     let (payload_hash, rekor_signatures) = match &body {
         RekorEntryBody::DsseV001(dsse_body) => {
@@ -184,12 +180,8 @@ fn verify_intoto_v002(
     bundle: &Bundle,
     managed_key: Option<&DerPublicKey>,
 ) -> Result<()> {
-    let body = RekorEntryBody::from_base64_json(
-        &entry.canonicalized_body.to_base64(),
-        entry.kind_version.kind(),
-        entry.kind_version.version(),
-    )
-    .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
+    let body = RekorEntryBody::parse(&entry.canonicalized_body, entry.kind_version)
+        .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
 
     let (rekor_envelope, payload_hash) = match &body {
         RekorEntryBody::IntotoV002(intoto_body) => (

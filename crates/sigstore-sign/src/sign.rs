@@ -153,10 +153,7 @@ impl SigningConfig {
         tuf_config: &TufSigningConfig,
         force_rekor_version: Option<RekorApiVersion>,
     ) -> Result<Self> {
-        let force_major = force_rekor_version.map(|v| match v {
-            RekorApiVersion::V1 => 1,
-            RekorApiVersion::V2 => 2,
-        });
+        let force_major = force_rekor_version.map(RekorApiVersion::major);
 
         // This signer submits to one Rekor and one TSA. Reject requirements it
         // cannot satisfy before discarding the TUF service-selection metadata.
@@ -178,11 +175,13 @@ impl SigningConfig {
 
         let (rekor_url, rekor_api_version) =
             if let Some(rekor) = tuf_config.get_rekor_url(force_major) {
-                let version = if rekor.major_api_version == 2 {
-                    RekorApiVersion::V2
-                } else {
-                    RekorApiVersion::V1
-                };
+                let version =
+                    RekorApiVersion::from_major(rekor.major_api_version).ok_or_else(|| {
+                        Error::Config(format!(
+                            "unsupported Rekor API version {}",
+                            rekor.major_api_version
+                        ))
+                    })?;
                 (rekor.url.clone(), version)
             } else if let Some(version) = force_rekor_version {
                 return Err(Error::Config(format!(
@@ -529,6 +528,9 @@ impl Signer {
                     .await
                     .map_err(|e| Error::Signing(format!("Failed to create Rekor entry: {e}")))
             }
+            other => Err(Error::Config(format!(
+                "unsupported Rekor API version {other:?}"
+            ))),
         }
     }
 
@@ -677,6 +679,9 @@ impl Signer {
                     Error::Signing(format!("Failed to create Rekor entry for DSSE: {e}"))
                 })
             }
+            other => Err(Error::Config(format!(
+                "unsupported Rekor API version {other:?}"
+            ))),
         }
     }
 
