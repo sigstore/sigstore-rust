@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-verify-v0.13.0...sigstore-verify-v0.14.0) - 2026-09-25
+
+### Added
+
+- *(crypto)* [**breaking**] parse the Fulcio CI claims and expose the verified certificate ([#250](https://github.com/sigstore/sigstore-rust/pull/250))
+
+### Other
+
+- *(types)* [**breaking**] 1.0 naming and conversion conventions ([#247](https://github.com/sigstore/sigstore-rust/pull/247))
+- *(tsa)* [**breaking**] keep the RFC 3161 ASN.1 model private ([#245](https://github.com/sigstore/sigstore-rust/pull/245))
+- *(bundle)* [**breaking**] typed builder, options and validation errors ([#244](https://github.com/sigstore/sigstore-rust/pull/244))
+- *(types)* [**breaking**] make wire types and enums extensible ([#236](https://github.com/sigstore/sigstore-rust/pull/236))
+
 ## [0.13.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-verify-v0.12.0...sigstore-verify-v0.13.0) - 2026-09-23
 
 ### Fixed

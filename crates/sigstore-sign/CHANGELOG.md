@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-sign-v0.13.0...sigstore-sign-v0.14.0) - 2026-09-25
+
+### Fixed
+
+- *(sign)* reject ALL and UNDEFINED service requirements it cannot meet ([#235](https://github.com/sigstore/sigstore-rust/pull/235))
+
+### Other
+
+- *(fulcio)* [**breaking**] typed responses, private requests and a client builder ([#248](https://github.com/sigstore/sigstore-rust/pull/248))
+- *(types)* [**breaking**] 1.0 naming and conversion conventions ([#247](https://github.com/sigstore/sigstore-rust/pull/247))
+- *(oidc)* [**breaking**] explicit identity provider configuration ([#243](https://github.com/sigstore/sigstore-rust/pull/243))
+- *(tsa)* [**breaking**] keep the RFC 3161 ASN.1 model private ([#245](https://github.com/sigstore/sigstore-rust/pull/245))
+- *(types)* [**breaking**] make wire types and enums extensible ([#236](https://github.com/sigstore/sigstore-rust/pull/236))
+- *(rekor)* [**breaking**] remove built-in log URLs and fix stale docs ([#240](https://github.com/sigstore/sigstore-rust/pull/240))
+
 ## [0.13.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-sign-v0.12.0...sigstore-sign-v0.13.0) - 2026-09-23
 
 ### Fixed
