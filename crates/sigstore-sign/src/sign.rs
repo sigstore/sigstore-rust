@@ -161,43 +161,47 @@ impl SigningConfig {
             (
                 "Rekor",
                 &tuf_config.rekor_tlog_config,
-                tuf_config.get_rekor_urls(force_major),
+                tuf_config.eligible_rekor_urls(force_major),
             ),
-            ("TSA", &tuf_config.tsa_config, tuf_config.get_tsa_urls()),
+            (
+                "TSA",
+                &tuf_config.tsa_config,
+                tuf_config.eligible_tsa_urls(),
+            ),
         ] {
             check_single_service_requirement(service, config, &eligible)?;
         }
 
         let fulcio_url = tuf_config
-            .get_fulcio_url()
+            .fulcio_url()
             .map(|e| e.url.clone())
             .ok_or_else(|| Error::Config("Missing Fulcio URL in TUF config".to_string()))?;
 
-        let (rekor_url, rekor_api_version) =
-            if let Some(rekor) = tuf_config.get_rekor_url(force_major) {
-                let version =
-                    RekorApiVersion::from_major(rekor.major_api_version).ok_or_else(|| {
-                        Error::Config(format!(
-                            "unsupported Rekor API version {}",
-                            rekor.major_api_version
-                        ))
-                    })?;
-                (rekor.url.clone(), version)
-            } else if let Some(version) = force_rekor_version {
-                return Err(Error::Config(format!(
-                    "No Rekor {version:?} endpoint in TUF config"
-                )));
-            } else {
-                return Err(Error::Config("Missing Rekor URL in TUF config".to_string()));
-            };
+        let (rekor_url, rekor_api_version) = if let Some(rekor) = tuf_config.rekor_url(force_major)
+        {
+            let version =
+                RekorApiVersion::from_major(rekor.major_api_version).ok_or_else(|| {
+                    Error::Config(format!(
+                        "unsupported Rekor API version {}",
+                        rekor.major_api_version
+                    ))
+                })?;
+            (rekor.url.clone(), version)
+        } else if let Some(version) = force_rekor_version {
+            return Err(Error::Config(format!(
+                "No Rekor {version:?} endpoint in TUF config"
+            )));
+        } else {
+            return Err(Error::Config("Missing Rekor URL in TUF config".to_string()));
+        };
 
         let tsa_url = Some(
             tuf_config
-                .get_tsa_url()
+                .tsa_url()
                 .map(|e| e.url.clone())
                 .ok_or_else(|| Error::Config("Missing eligible TSA URL in TUF config".into()))?,
         );
-        let oidc_url = tuf_config.get_oidc_url().map(|e| e.url.clone());
+        let oidc_url = tuf_config.oidc_url().map(|e| e.url.clone());
 
         Ok(Self {
             fulcio_url,

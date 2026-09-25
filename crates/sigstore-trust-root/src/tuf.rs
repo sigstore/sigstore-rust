@@ -518,7 +518,7 @@ impl SigningConfig {
     ///
     /// # async fn example() -> Result<(), sigstore_trust_root::Error> {
     /// let config = SigningConfig::production().await?;
-    /// if let Some(rekor) = config.get_rekor_url(None) {
+    /// if let Some(rekor) = config.rekor_url(None) {
     ///     println!("Rekor URL: {} (v{})", rekor.url, rekor.major_api_version);
     /// }
     /// # Ok(())

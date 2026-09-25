@@ -38,7 +38,7 @@
 //! let config = SigningConfig::production().await?;
 //!
 //! // Get the best Rekor endpoint (highest available version)
-//! if let Some(rekor) = config.get_rekor_url(None) {
+//! if let Some(rekor) = config.rekor_url(None) {
 //!     println!("Rekor URL: {} (v{})", rekor.url, rekor.major_api_version);
 //! }
 //! # Ok(())
