@@ -32,7 +32,7 @@ place the environment appears — the SAN identity is the workflow ref.
 To regenerate it from the published attestation:
 
 ```console
-curl -sL https://prefix.dev/skill-forge/noarch/agent-skill-conda-forge-0.0.21-h4616a5c_0.conda.v0.sigs \
+curl -sL https://prefix.dev/skill-forge/noarch/agent-skill-conda-forge-0.0.21-h4616a5c_0.conda.sigs.f2ca226e600751167a29953233ff121c4dcf6e391da9ce0ec8fb621379fe73a5 \
   | jq -r '.[0].verificationMaterial.certificate.rawBytes' \
   | base64 -d \
   | openssl x509 -inform der -out fulcio_github_actions_environment_cert.pem
