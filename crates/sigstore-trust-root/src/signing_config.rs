@@ -61,6 +61,7 @@ pub const SIGNING_CONFIG_MEDIA_TYPE: &str = "application/vnd.dev.sigstore.signin
 /// A service endpoint configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ServiceEndpoint {
     /// URL of the service
     pub url: String,
@@ -104,6 +105,7 @@ pub enum ServiceSelector {
 
 /// Service configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub struct ServiceConfiguration {
     /// How to select services
     #[serde(default)]
@@ -116,6 +118,7 @@ pub struct ServiceConfiguration {
 /// Signing configuration for a Sigstore instance
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SigningConfig {
     /// Media type of this configuration
     pub media_type: String,
@@ -175,10 +178,8 @@ impl SigningConfig {
     }
 
     /// Parse signing config from a file
-    pub fn from_file(path: &str) -> Result<Self> {
-        let json = std::fs::read_to_string(path)
-            .map_err(|e| Error::MissingField(format!("Failed to read file {}: {}", path, e)))?;
-        Self::from_json(&json)
+    pub fn from_file(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        Self::from_json(&std::fs::read_to_string(path)?)
     }
 
     /// Get valid Rekor endpoints, optionally filtered by version

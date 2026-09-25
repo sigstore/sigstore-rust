@@ -444,7 +444,7 @@ mod tests {
         let same_named_intermediates = trusted_root
             .fulcio_certs()
             .iter()
-            .filter_map(|der| Certificate::from_der(der).ok())
+            .filter_map(|der| Certificate::from_der(der.as_bytes()).ok())
             .filter(|c| {
                 c.tbs_certificate
                     .subject

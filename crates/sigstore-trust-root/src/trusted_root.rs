@@ -2,7 +2,6 @@
 
 use crate::{Error, Result};
 use jiff::Timestamp;
-use rustls_pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
 use sigstore_crypto::{Keyring, SigningScheme, VerificationKey};
 use sigstore_types::{
@@ -13,6 +12,7 @@ use sigstore_types::{
 /// A trusted root bundle containing all trust anchors
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct TrustedRoot {
     /// Media type of the trusted root
     pub media_type: String,
@@ -37,6 +37,7 @@ pub struct TrustedRoot {
 /// A transparency log entry (Rekor)
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct TransparencyLog {
     /// Base URL of the transparency log
     pub base_url: String,
@@ -54,6 +55,7 @@ pub struct TransparencyLog {
 /// A certificate authority entry (Fulcio)
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CertificateAuthority {
     /// Subject information
     #[serde(default)]
@@ -67,12 +69,13 @@ pub struct CertificateAuthority {
 
     /// Validity period
     #[serde(default)]
-    pub valid_for: Option<ValidityPeriod>,
+    pub valid_for: Option<TimeRange>,
 }
 
 /// A Certificate Transparency log entry
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CertificateTransparencyLog {
     /// Base URL of the CT log
     pub base_url: String,
@@ -90,6 +93,7 @@ pub struct CertificateTransparencyLog {
 /// A timestamp authority entry
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct TimestampAuthority {
     /// Subject information
     #[serde(default)]
@@ -104,22 +108,50 @@ pub struct TimestampAuthority {
 
     /// Validity period
     #[serde(default)]
-    pub valid_for: Option<ValidityPeriod>,
+    pub valid_for: Option<TimeRange>,
+}
+
+/// The protobuf-specs `PublicKeyDetails` name of a key's algorithm and
+/// encoding, such as `PKIX_ECDSA_P256_SHA_256` or `PKIX_ED25519`.
+///
+/// Kept as the specification's string, so trust roots listing algorithms this
+/// crate does not know still parse.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct PublicKeyDetails(String);
+
+impl PublicKeyDetails {
+    /// Wrap a `PublicKeyDetails` name.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+
+    /// The `PublicKeyDetails` name.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for PublicKeyDetails {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// Public key information
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PublicKey {
     /// Raw bytes of the public key (DER-encoded)
     pub raw_bytes: DerPublicKey,
 
     /// Key details/type
-    pub key_details: String,
+    pub key_details: PublicKeyDetails,
 
     /// Validity period for this key
     #[serde(default)]
-    pub valid_for: Option<ValidityPeriod>,
+    pub valid_for: Option<TimeRange>,
 }
 
 /// Subject information for a certificate.
@@ -128,6 +160,7 @@ pub struct PublicKey {
 /// an in-toto Statement subject (artifact name + digest).
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CertificateSubject {
     /// Organization name
     #[serde(default)]
@@ -141,6 +174,7 @@ pub struct CertificateSubject {
 /// Certificate chain
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CertChain {
     /// Certificates in the chain
     pub certificates: Vec<CertificateEntry>,
@@ -149,17 +183,11 @@ pub struct CertChain {
 /// A certificate entry
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CertificateEntry {
     /// Raw bytes of the certificate (DER-encoded)
     pub raw_bytes: DerCertificate,
 }
-
-/// Validity period for a key or certificate.
-///
-/// The trusted root's `validFor` fields are instances of the protobuf-specs
-/// `TimeRange` message, so this is an alias for [`TimeRange`] — the same type
-/// the signing config uses for its service validity periods.
-pub type ValidityPeriod = TimeRange;
 
 /// Whether an instance with the given `valid_for` may be used as verification
 /// material at `now`.
@@ -167,7 +195,7 @@ pub type ValidityPeriod = TimeRange;
 /// Instances without a `valid_for` constraint are always usable. Instances
 /// whose window has not started yet are excluded; expired instances are kept
 /// because historical entries/certificates were created while they were valid.
-fn usable_for_verification(valid_for: Option<&ValidityPeriod>, now: Timestamp) -> bool {
+fn usable_for_verification(valid_for: Option<&TimeRange>, now: Timestamp) -> bool {
     valid_for.is_none_or(|period| period.has_started_by(now))
 }
 
@@ -183,9 +211,7 @@ impl TrustedRoot {
 
     /// Load a trusted root from a file
     pub fn from_file(path: impl AsRef<std::path::Path>) -> Result<Self> {
-        let json =
-            std::fs::read_to_string(path).map_err(|e| Error::Json(serde_json::Error::io(e)))?;
-        Self::from_json(&json)
+        Self::from_json(&std::fs::read_to_string(path)?)
     }
 
     /// Get all Fulcio certificate authority certificates
@@ -193,7 +219,7 @@ impl TrustedRoot {
     /// Certificate authorities whose `valid_for` window has not started yet
     /// are excluded. Expired certificate authorities are included because
     /// they are needed to verify certificates issued while they were valid.
-    pub fn fulcio_certs(&self) -> Vec<CertificateDer<'static>> {
+    pub fn fulcio_certs(&self) -> Vec<DerCertificate> {
         let now = Timestamp::now();
         let mut certs = Vec::new();
         for ca in &self.certificate_authorities {
@@ -201,7 +227,7 @@ impl TrustedRoot {
                 continue;
             }
             for cert_entry in &ca.cert_chain.certificates {
-                certs.push(CertificateDer::from(cert_entry.raw_bytes.as_bytes()).into_owned());
+                certs.push(cert_entry.raw_bytes.clone());
             }
         }
         certs
@@ -344,6 +370,7 @@ pub const SIGSTORE_GITHUB_TRUSTED_ROOT: &str = include_str!("trusted_root_github
 
 /// Well-known Sigstore trust instances.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SigstoreInstance {
     /// Sigstore's public-good production instance.
     PublicGood,
@@ -715,13 +742,13 @@ mod tests {
 
     #[test]
     fn test_validity_period_is_a_time_range() {
-        // `ValidityPeriod` is the protobuf-specs `TimeRange`; the containment
+        // `TimeRange` is the protobuf-specs `TimeRange`; the containment
         // semantics themselves are covered by `sigstore_types::TimeRange`.
         let root = trusted_root_with_tlog_validity(&[(
             "key",
             r#"{"start": "2020-01-01T00:00:00Z", "end": "2021-01-01T00:00:00Z"}"#,
         )]);
-        let period: ValidityPeriod = root.tlogs[0].public_key.valid_for.unwrap();
+        let period: TimeRange = root.tlogs[0].public_key.valid_for.unwrap();
 
         assert_eq!(
             period,
