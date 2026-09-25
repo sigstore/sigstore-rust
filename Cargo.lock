@@ -2079,6 +2079,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sigstore-crypto",
+ "sigstore-types",
  "thiserror",
  "tokio",
  "url",

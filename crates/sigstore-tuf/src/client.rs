@@ -552,6 +552,7 @@ fn verify_target_bytes(bytes: &[u8], target: &TargetFile, path: &str) -> Result<
 
 #[cfg(feature = "fetch")]
 mod http {
+    use sigstore_types::USER_AGENT;
     use url::Url;
 
     use crate::error::{Error, Result};
@@ -583,6 +584,7 @@ mod http {
                 .connect_timeout(std::time::Duration::from_secs(30))
                 .read_timeout(std::time::Duration::from_secs(60))
                 .timeout(std::time::Duration::from_secs(120))
+                .user_agent(USER_AGENT)
                 .build()
                 .map_err(|e| Error::Transport(format!("failed to build HTTP client: {e}")))?;
             Ok(Self {

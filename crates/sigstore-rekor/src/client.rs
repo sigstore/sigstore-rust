@@ -5,7 +5,7 @@ use crate::entry::{
     DsseEntry, HashedRekord, HashedRekordV2, LogEntry, LogEntryResponse, LogInfo, SearchIndex,
 };
 use crate::error::{Error, Result};
-use sigstore_types::{Checkpoint, KindVersion, TransparencyLogEntry};
+use sigstore_types::{Checkpoint, KindVersion, TransparencyLogEntry, USER_AGENT};
 use std::num::NonZeroU8;
 use std::time::Duration;
 
@@ -36,6 +36,7 @@ use std::sync::Arc;
 fn build_http_client(timeout: Duration) -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(timeout)
+        .user_agent(USER_AGENT)
         .build()
         .expect("HTTP client configuration is valid")
 }

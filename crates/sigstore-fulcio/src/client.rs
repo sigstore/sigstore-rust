@@ -4,11 +4,10 @@ use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use sigstore_crypto::KeyPair;
 use sigstore_oidc::IdentityToken;
-use sigstore_types::{DerCertificate, SignatureBytes};
+use sigstore_types::{DerCertificate, SignatureBytes, USER_AGENT};
 use std::time::Duration;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
-const DEFAULT_USER_AGENT: &str = concat!("sigstore-rust/", env!("CARGO_PKG_VERSION"));
 
 #[cfg(feature = "cache")]
 use sigstore_cache::{CacheAdapter, CacheKey, CacheResource};
@@ -323,7 +322,7 @@ impl FulcioClientBuilder {
             Some(client) => client,
             None => reqwest::Client::builder()
                 .timeout(DEFAULT_TIMEOUT)
-                .user_agent(DEFAULT_USER_AGENT)
+                .user_agent(USER_AGENT)
                 .build()
                 .map_err(|e| Error::Http(format!("failed to build HTTP client: {e}")))?,
         };

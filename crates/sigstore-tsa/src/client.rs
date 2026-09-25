@@ -2,11 +2,10 @@
 
 use crate::asn1::{AlgorithmIdentifier, Asn1MessageImprint, TimeStampReq};
 use crate::error::{Error, Result};
-use sigstore_types::{ArtifactDigest, SignatureBytes, TimestampToken};
+use sigstore_types::{ArtifactDigest, SignatureBytes, TimestampToken, USER_AGENT};
 use std::time::Duration;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
-const DEFAULT_USER_AGENT: &str = concat!("sigstore-rust/", env!("CARGO_PKG_VERSION"));
 
 /// A client for interacting with a Time-Stamp Authority
 #[derive(Debug, Clone)]
@@ -42,7 +41,7 @@ impl TimestampClientBuilder {
             Some(client) => client,
             None => reqwest::Client::builder()
                 .timeout(DEFAULT_TIMEOUT)
-                .user_agent(DEFAULT_USER_AGENT)
+                .user_agent(USER_AGENT)
                 .build()
                 .map_err(|e| Error::Http(format!("failed to build HTTP client: {e}")))?,
         };

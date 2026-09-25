@@ -33,3 +33,6 @@ pub use hash::HashAlgorithm;
 pub use intoto::{Digest, Statement, Subject};
 pub use time_range::TimeRange;
 pub use tsa_authority::TsaAuthority;
+
+/// Default User-Agent header used by `sigstore-rust` HTTP clients.
+pub const USER_AGENT: &str = concat!("sigstore-rust/", env!("CARGO_PKG_VERSION"));

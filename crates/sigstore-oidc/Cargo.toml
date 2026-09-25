@@ -15,6 +15,7 @@ native-tls = ["reqwest/native-tls", "ambient-id/native-tls"]
 browser = ["dep:open"]
 
 [dependencies]
+sigstore-types = { workspace = true }
 sigstore-crypto = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
