@@ -126,6 +126,7 @@ pub struct TufConfig {
     disable_cache: bool,
     offline: bool,
     bootstrap: TufBootstrap,
+    http_client: Option<sigstore_tuf::reqwest::Client>,
 }
 
 impl Default for TufConfig {
@@ -170,6 +171,7 @@ impl TufConfig {
             disable_cache: false,
             offline: false,
             bootstrap,
+            http_client: None,
         }
     }
 
@@ -205,6 +207,16 @@ impl TufConfig {
     /// Set the cache directory
     pub fn with_cache_dir(mut self, path: PathBuf) -> Self {
         self.cache_dir = Some(path);
+        self
+    }
+
+    /// Fetch through a caller-configured HTTP client (timeouts, proxies, TLS
+    /// roots, user agent) instead of the default one.
+    ///
+    /// Configure timeouts on it: without them a malicious mirror can hang a
+    /// refresh indefinitely (the slow-retrieval attack).
+    pub fn with_http_client(mut self, client: sigstore_tuf::reqwest::Client) -> Self {
+        self.http_client = Some(client);
         self
     }
 
@@ -325,7 +337,11 @@ impl TufClient {
     /// written through to the per-URL cache directory so a later `offline()`
     /// run can serve them.
     async fn build_updater(&self, validation_time: jiff::Timestamp) -> Result<Updater> {
-        let repo = HttpRepository::new(&self.config.url).map_err(|e| Error::Tuf(e.to_string()))?;
+        let mut repo =
+            HttpRepository::new(&self.config.url).map_err(|e| Error::Tuf(e.to_string()))?;
+        if let Some(client) = &self.config.http_client {
+            repo = repo.with_http_client(client.clone());
+        }
         let root_bytes = self.get_root_json()?;
         let mut updater = Updater::new(repo, &root_bytes).map_err(|e| Error::Tuf(e.to_string()))?;
 

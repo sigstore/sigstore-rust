@@ -97,6 +97,9 @@ pub use trusted_root::{
     SIGSTORE_PRODUCTION_TRUSTED_ROOT, SIGSTORE_STAGING_TRUSTED_ROOT,
 };
 
+/// The HTTP client crate used by [`TufConfig::with_http_client`].
+#[cfg(feature = "tuf")]
+pub use sigstore_tuf::reqwest;
 #[cfg(feature = "tuf")]
 pub use tuf::{
     fetch_trust_material, fetch_trust_material_at, TufBootstrap, TufConfig, SIGNING_CONFIG_TARGET,
