@@ -40,7 +40,8 @@ pub use sigstore_tsa as tsa;
 pub use sigstore_types as types;
 
 pub use error::{Error, Result};
+pub use sigstore_crypto::SubjectAltName;
 pub use verify::{
-    verify, verify_with_key, CertificatePolicy, PublicKeyVerificationPolicy, VerificationPolicy,
-    VerificationResult, Verifier,
+    verify, verify_with_key, CertificatePolicy, IdentityMatcher, PublicKeyVerificationPolicy,
+    VerificationPolicy, VerificationResult, Verifier,
 };

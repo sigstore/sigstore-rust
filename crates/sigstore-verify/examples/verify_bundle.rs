@@ -294,7 +294,7 @@ async fn main() {
                     }
                 };
                 if let Some(id) = result.identity() {
-                    if !re.is_match(id) {
+                    if !re.is_match(id.as_str()) {
                         eprintln!("\nVerification: FAILED");
                         eprintln!("  Identity '{}' does not match regexp '{}'", id, re_str);
                         process::exit(1);
@@ -338,7 +338,7 @@ fn requires_blob(bundle: &Bundle) -> Result<bool, Error> {
     let cert = bundle
         .signing_certificate()
         .ok_or_else(|| Error::Verification("bundle has no signing certificate".into()))?;
-    Ok(!sigstore_crypto::parse_certificate_info(cert.as_bytes())?
+    Ok(!sigstore_crypto::parse_certificate_info(cert)?
         .key_algorithm
         .default_signing_scheme()
         .supports_prehashed())

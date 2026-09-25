@@ -6,7 +6,7 @@ use crate::artifact::{ArtifactRequirements, PreparedArtifact};
 use crate::error::{Error, Result};
 use sigstore_bundle::validate_bundle_with_options;
 use sigstore_bundle::ValidationOptions;
-use sigstore_crypto::{parse_certificate_info, KeyAlgorithm, SigningScheme};
+use sigstore_crypto::{parse_certificate_info, KeyAlgorithm, SigningScheme, SubjectAltName};
 use sigstore_trust_root::TrustedRoot;
 
 use sigstore_types::bundle::VerificationMaterialContent;
@@ -19,6 +19,7 @@ use sigstore_types::{Artifact, Bundle, KindVersion, SignatureContent};
 /// `verify_sct` flag inside the [`CertificatePolicy::Verify`] variant makes the
 /// invalid "verify SCT but not the chain" combination unrepresentable.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CertificatePolicy {
     /// Skip certificate chain verification (and, necessarily, SCT verification).
     ///
@@ -27,6 +28,7 @@ pub enum CertificatePolicy {
     Skip,
     /// Verify the certificate chains to the trusted root, is valid at the time
     /// of signing, and has the CODE_SIGNING EKU.
+    #[non_exhaustive]
     Verify {
         /// Also verify the certificate's embedded Signed Certificate Timestamp.
         verify_sct: bool,
@@ -36,8 +38,7 @@ pub enum CertificatePolicy {
 /// Policy for verifying signatures made with a caller-supplied public key.
 #[derive(Debug, Clone)]
 pub struct PublicKeyVerificationPolicy {
-    /// Verify transparency log inclusion.
-    pub verify_tlog: bool,
+    verify_tlog: bool,
 }
 
 impl Default for PublicKeyVerificationPolicy {
@@ -55,6 +56,84 @@ impl PublicKeyVerificationPolicy {
         self.verify_tlog = false;
         self
     }
+
+    /// Whether transparency log inclusion is verified.
+    pub fn verify_tlog(&self) -> bool {
+        self.verify_tlog
+    }
+}
+
+/// How a [`VerificationPolicy`] matches the certificate's SAN identity.
+///
+/// Strings convert to [`IdentityMatcher::Exact`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum IdentityMatcher {
+    /// The SAN value equals this string, whatever its kind.
+    Exact(String),
+    /// The SAN is an email address equal to this one.
+    Email(String),
+    /// The SAN is a URI equal to this one.
+    Uri(String),
+}
+
+impl IdentityMatcher {
+    /// Whether `identity` satisfies this matcher.
+    pub fn matches(&self, identity: &SubjectAltName) -> bool {
+        match (self, identity) {
+            (Self::Exact(expected), actual) => actual.as_str() == expected,
+            (Self::Email(expected), SubjectAltName::Email(actual)) => actual == expected,
+            (Self::Uri(expected), SubjectAltName::Uri(actual)) => actual == expected,
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Display for IdentityMatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Exact(value) => f.write_str(value),
+            Self::Email(value) => write!(f, "email {value}"),
+            Self::Uri(value) => write!(f, "URI {value}"),
+        }
+    }
+}
+
+impl From<String> for IdentityMatcher {
+    fn from(identity: String) -> Self {
+        Self::Exact(identity)
+    }
+}
+
+impl From<&str> for IdentityMatcher {
+    fn from(identity: &str) -> Self {
+        Self::Exact(identity.to_string())
+    }
+}
+
+impl From<&String> for IdentityMatcher {
+    fn from(identity: &String) -> Self {
+        Self::Exact(identity.clone())
+    }
+}
+
+/// Match exactly this identity, including its kind.
+impl From<SubjectAltName> for IdentityMatcher {
+    fn from(identity: SubjectAltName) -> Self {
+        match identity {
+            SubjectAltName::Email(email) => Self::Email(email),
+            SubjectAltName::Uri(uri) => Self::Uri(uri),
+            // `SubjectAltName` is `#[non_exhaustive]`; unknown kinds match by value.
+            other => Self::Exact(other.as_str().to_string()),
+        }
+    }
+}
+
+/// Match exactly this identity, including its kind.
+impl From<&SubjectAltName> for IdentityMatcher {
+    fn from(identity: &SubjectAltName) -> Self {
+        identity.clone().into()
+    }
 }
 
 /// Policy for verifying certificate-based signatures.
@@ -69,27 +148,18 @@ impl PublicKeyVerificationPolicy {
 /// ```
 #[derive(Debug, Clone)]
 pub struct VerificationPolicy {
-    /// Expected identity (email or URI)
-    pub identity: Option<String>,
-    /// Expected issuer
-    pub issuer: Option<String>,
-    /// Verify transparency log inclusion
-    ///
-    /// WARNING: Disabling this is unsafe for production use against the
-    /// Sigstore public-good instance: it accepts bundles whose signature
-    /// event was never logged. Signed timestamps (TSA timestamps and Rekor
-    /// SETs) are authenticated regardless of this flag, as is each log
-    /// entry's consistency with the rest of the bundle, but inclusion
-    /// proofs and checkpoints are skipped when it is disabled.
-    /// See [`VerificationPolicy::skip_tlog_unsafe`].
-    pub verify_tlog: bool,
-    /// How the signing certificate (and its SCT) is verified
-    pub certificate: CertificatePolicy,
+    identity: Option<IdentityMatcher>,
+    issuer: Option<String>,
+    verify_tlog: bool,
+    certificate: CertificatePolicy,
 }
 
 impl VerificationPolicy {
-    /// Require both an exact certificate identity and its OIDC issuer.
-    pub fn new(identity: impl Into<String>, issuer: impl Into<String>) -> Self {
+    /// Require both a certificate identity and its OIDC issuer.
+    ///
+    /// A string identity matches the SAN value exactly; pass an
+    /// [`IdentityMatcher`] to also require its kind.
+    pub fn new(identity: impl Into<IdentityMatcher>, issuer: impl Into<String>) -> Self {
         Self::any_identity()
             .require_identity(identity)
             .require_issuer(issuer)
@@ -108,24 +178,8 @@ impl VerificationPolicy {
         }
     }
 
-    /// Create a policy that requires a specific identity
-    pub fn with_identity(identity: impl Into<String>) -> Self {
-        Self {
-            identity: Some(identity.into()),
-            ..Self::any_identity()
-        }
-    }
-
-    /// Create a policy that requires a specific issuer
-    pub fn with_issuer(issuer: impl Into<String>) -> Self {
-        Self {
-            issuer: Some(issuer.into()),
-            ..Self::any_identity()
-        }
-    }
-
     /// Require a specific identity
-    pub fn require_identity(mut self, identity: impl Into<String>) -> Self {
+    pub fn require_identity(mut self, identity: impl Into<IdentityMatcher>) -> Self {
         self.identity = Some(identity.into());
         self
     }
@@ -184,6 +238,27 @@ impl VerificationPolicy {
         }
         self
     }
+
+    /// The required identity, if any.
+    pub fn identity(&self) -> Option<&IdentityMatcher> {
+        self.identity.as_ref()
+    }
+
+    /// The required OIDC issuer, if any.
+    pub fn issuer(&self) -> Option<&str> {
+        self.issuer.as_deref()
+    }
+
+    /// Whether transparency log inclusion is verified; see
+    /// [`Self::skip_tlog_unsafe`].
+    pub fn verify_tlog(&self) -> bool {
+        self.verify_tlog
+    }
+
+    /// How the signing certificate (and its SCT) is verified.
+    pub fn certificate(&self) -> &CertificatePolicy {
+        &self.certificate
+    }
 }
 
 /// Result of verification
@@ -201,7 +276,7 @@ impl VerificationPolicy {
 /// ```
 #[derive(Debug)]
 pub struct VerificationResult {
-    identity: Option<String>,
+    identity: Option<SubjectAltName>,
     issuer: Option<String>,
     certificate: Option<sigstore_crypto::CertificateInfo>,
     integrated_time: Option<jiff::Timestamp>,
@@ -229,8 +304,8 @@ impl VerificationResult {
     }
 
     /// Certificate SAN claim, if present; see [`Self::certificate_verified`].
-    pub fn identity(&self) -> Option<&str> {
-        self.identity.as_deref()
+    pub fn identity(&self) -> Option<&SubjectAltName> {
+        self.identity.as_ref()
     }
     /// Certificate OIDC issuer claim, if present.
     pub fn issuer(&self) -> Option<&str> {
@@ -359,8 +434,8 @@ impl Verifier {
             }
             for cert in &chain.certificates {
                 let der = rustls_pki_types::CertificateDer::from(cert.raw_bytes.as_bytes());
-                let anchor =
-                    webpki::anchor_from_trusted_cert(&der).map_err(Error::TrustedCertificate)?;
+                let anchor = webpki::anchor_from_trusted_cert(&der)
+                    .map_err(|e| Error::TrustedCertificate(Box::new(e)))?;
                 if is_fulcio {
                     fulcio_anchors.push((anchor.to_owned(), window));
                 }
@@ -565,39 +640,25 @@ impl Verifier {
         // (3): Verify against the given `VerificationPolicy`.
 
         // Verify against policy constraints
-        if let Some(ref expected_identity) = policy.identity {
-            match &result.identity {
-                Some(actual_identity) if actual_identity == expected_identity => {}
-                Some(actual_identity) => {
-                    return Err(Error::Verification(format!(
-                        "identity mismatch: expected {}, got {}",
-                        expected_identity, actual_identity
-                    )));
-                }
-                None => {
-                    return Err(Error::Verification(format!(
-                        "certificate is missing identity (SAN), but policy requires: {}",
-                        expected_identity
-                    )));
-                }
+        if let Some(expected) = &policy.identity {
+            if !result
+                .identity
+                .as_ref()
+                .is_some_and(|actual| expected.matches(actual))
+            {
+                return Err(Error::IdentityMismatch {
+                    expected: expected.clone(),
+                    actual: result.identity.clone(),
+                });
             }
         }
 
-        if let Some(ref expected_issuer) = policy.issuer {
-            match &result.issuer {
-                Some(actual_issuer) if actual_issuer == expected_issuer => {}
-                Some(actual_issuer) => {
-                    return Err(Error::Verification(format!(
-                        "issuer mismatch: expected {}, got {}",
-                        expected_issuer, actual_issuer
-                    )));
-                }
-                None => {
-                    return Err(Error::Verification(format!(
-                        "certificate is missing issuer (Fulcio OID extension), but policy requires: {}",
-                        expected_issuer
-                    )));
-                }
+        if let Some(expected) = &policy.issuer {
+            if result.issuer.as_ref() != Some(expected) {
+                return Err(Error::IssuerMismatch {
+                    expected: expected.clone(),
+                    actual: result.issuer.clone(),
+                });
             }
         }
 
@@ -952,7 +1013,7 @@ fn prepare_certificate(
     let cert = bundle
         .signing_certificate()
         .ok_or_else(|| Error::Verification("bundle has no signing certificate".into()))?;
-    parse_certificate_info(cert.as_bytes())
+    parse_certificate_info(cert)
         .map_err(|e| Error::Verification(format!("failed to parse certificate: {e}")))
 }
 
@@ -1094,12 +1155,24 @@ mod tests {
             .require_issuer("https://accounts.google.com")
             .skip_tlog_unsafe();
 
-        assert_eq!(policy.identity, Some("test@example.com".to_string()));
         assert_eq!(
-            policy.issuer,
-            Some("https://accounts.google.com".to_string())
+            policy.identity(),
+            Some(&IdentityMatcher::Exact("test@example.com".to_string()))
         );
-        assert!(!policy.verify_tlog);
+        assert_eq!(policy.issuer(), Some("https://accounts.google.com"));
+        assert!(!policy.verify_tlog());
+    }
+
+    #[test]
+    fn test_identity_matcher_kinds() {
+        let email = SubjectAltName::Email("a@example.com".to_string());
+        let uri = SubjectAltName::Uri("a@example.com".to_string());
+        let exact = IdentityMatcher::from("a@example.com");
+        assert!(exact.matches(&email) && exact.matches(&uri));
+        let typed = IdentityMatcher::Email("a@example.com".to_string());
+        assert!(typed.matches(&email));
+        assert!(!typed.matches(&uri));
+        assert!(!IdentityMatcher::Uri("b".to_string()).matches(&uri));
     }
 
     #[test]

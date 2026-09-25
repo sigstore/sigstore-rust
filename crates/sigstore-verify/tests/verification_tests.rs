@@ -3,7 +3,9 @@
 //! These tests validate the complete verification flow using real bundles.
 
 use sigstore_trust_root::{SigstoreInstance, TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
-use sigstore_types::{ArtifactDigest, DigestBytes, HashAlgorithm, LogIndex, MediaType, Sha256Hash};
+use sigstore_types::{
+    ArtifactDigest, DerCertificate, DigestBytes, HashAlgorithm, LogIndex, MediaType, Sha256Hash,
+};
 use sigstore_verify::bundle::{validate_bundle, validate_bundle_with_options, ValidationOptions};
 use sigstore_verify::types::Bundle;
 use sigstore_verify::{verify, PublicKeyVerificationPolicy, VerificationPolicy, Verifier};
@@ -322,27 +324,27 @@ fn test_policy_builder() {
     let policy = VerificationPolicy::new("test@example.com", "https://accounts.google.com")
         .skip_tlog_unsafe();
 
-    assert_eq!(policy.identity, Some("test@example.com".to_string()));
     assert_eq!(
-        policy.issuer,
-        Some("https://accounts.google.com".to_string())
+        policy.identity(),
+        Some(&sigstore_verify::IdentityMatcher::Exact(
+            "test@example.com".to_string()
+        ))
     );
-    assert!(!policy.verify_tlog);
+    assert_eq!(policy.issuer(), Some("https://accounts.google.com"));
+    assert!(!policy.verify_tlog());
 }
 
 #[test]
-fn test_policy_with_identity() {
-    let policy = VerificationPolicy::with_identity("user@example.com");
-    assert_eq!(policy.identity, Some("user@example.com".to_string()));
-    assert!(policy.verify_tlog); // Default is true
-}
+fn test_policy_requires_identity_or_issuer_alone() {
+    let policy = VerificationPolicy::any_identity().require_identity("user@example.com");
+    assert!(policy.identity().is_some() && policy.issuer().is_none());
+    assert!(policy.verify_tlog()); // Default is true
 
-#[test]
-fn test_policy_with_issuer() {
-    let policy = VerificationPolicy::with_issuer("https://token.actions.githubusercontent.com");
+    let policy = VerificationPolicy::any_identity()
+        .require_issuer("https://token.actions.githubusercontent.com");
     assert_eq!(
-        policy.issuer,
-        Some("https://token.actions.githubusercontent.com".to_string())
+        policy.issuer(),
+        Some("https://token.actions.githubusercontent.com")
     );
 }
 
@@ -953,7 +955,7 @@ fn test_verify_conda_package_attestation() {
 
     let verification = result.unwrap();
     assert_eq!(
-        verification.identity(),
+        verification.identity().map(|id| id.as_str()),
         Some("https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main")
     );
     assert_eq!(
@@ -1132,7 +1134,7 @@ fn test_fulcio_issuer_extension_versions() {
         (vec![], None),
     ] {
         cert.tbs_certificate.extensions = Some(extensions);
-        let info = parse_certificate_info(&cert.to_der().unwrap()).unwrap();
+        let info = parse_certificate_info(&DerCertificate::new(cert.to_der().unwrap())).unwrap();
         assert_eq!(info.issuer.as_deref(), expected);
     }
 
@@ -1140,12 +1142,14 @@ fn test_fulcio_issuer_extension_versions() {
     // Raw UTF-8 is accepted only for the legacy OID, not for v2.
     malformed.extn_value = legacy.extn_value.clone();
     cert.tbs_certificate.extensions = Some(vec![legacy, malformed]);
-    assert!(parse_certificate_info(&cert.to_der().unwrap()).is_err());
+    assert!(parse_certificate_info(&DerCertificate::new(cert.to_der().unwrap())).is_err());
     cert.tbs_certificate.extensions = None;
-    assert!(parse_certificate_info(&cert.to_der().unwrap())
-        .unwrap()
-        .issuer
-        .is_none());
+    assert!(
+        parse_certificate_info(&DerCertificate::new(cert.to_der().unwrap()))
+            .unwrap()
+            .issuer
+            .is_none()
+    );
 }
 
 /// Test that we can parse a bundle produced by cosign v3.x
