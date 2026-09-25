@@ -1,9 +1,10 @@
 //! Rekor log entry types
 
+use crate::hex_encoded::HexLogId;
 use serde::{Deserialize, Serialize};
 use sigstore_types::{
-    CanonicalizedBody, DerCertificate, DerPublicKey, EntryUuid, HashAlgorithm, HexLogId,
-    PemContent, Sha256Hash, SignatureBytes, SignedTimestamp,
+    CanonicalizedBody, DerCertificate, DerPublicKey, EntryUuid, HashAlgorithm, PemContent,
+    Sha256Hash, SignatureBytes, SignedTimestamp,
 };
 use std::collections::HashMap;
 
@@ -60,12 +61,12 @@ impl LogEntry {
         kind_version: sigstore_types::KindVersion,
     ) -> sigstore_types::Result<sigstore_types::TransparencyLogEntry> {
         use sigstore_types::{
-            bundle::CheckpointData, InclusionPromise, InclusionProof, LogId, LogIndex, LogKeyId,
+            bundle::CheckpointData, InclusionPromise, InclusionProof, LogId, LogIndex,
             TransparencyLogEntry,
         };
         let mut entry = TransparencyLogEntry::new(
             LogIndex::new(self.log_index)?,
-            LogId::new(LogKeyId::from_bytes(&self.log_id.decode()?)),
+            LogId::new(self.log_id.to_log_key_id()?),
             kind_version,
             self.body.clone(),
         );
@@ -324,11 +325,35 @@ pub struct HashedRekordData {
     pub hash: HashedRekordHash,
 }
 
+/// Serde helper for lowercase hash algorithm serialization (for Rekor API)
+///
+/// Use this with `#[serde(with = "rekor_hash_algorithm")]` on `HashAlgorithm`
+/// fields that need to serialize as "sha256" instead of "SHA2_256".
+mod rekor_hash_algorithm {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use sigstore_types::HashAlgorithm;
+
+    pub fn serialize<S>(algo: &HashAlgorithm, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(algo.as_rekor_str())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<HashAlgorithm, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse::<HashAlgorithm>().map_err(serde::de::Error::custom)
+    }
+}
+
 /// Hash in HashedRekord
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HashedRekordHash {
     /// Hash algorithm (serializes as lowercase for Rekor API)
-    #[serde(with = "sigstore_types::hash::hash_algorithm_lowercase")]
+    #[serde(with = "rekor_hash_algorithm")]
     pub algorithm: HashAlgorithm,
     /// Hash value (hex encoded)
     pub value: String,
@@ -518,7 +543,7 @@ mod tests {
         let converted = entry
             .to_bundle_entry(sigstore_types::KindVersion::HashedRekordV001)
             .unwrap();
-        assert_eq!(converted.log_index.value(), 123);
+        assert_eq!(converted.log_index.get(), 123);
         assert_eq!(converted.canonicalized_body, entry.body);
         assert_eq!(converted.integrated_time, entry.integrated_time);
         entry.verification = Some(Verification {
@@ -527,7 +552,7 @@ mod tests {
                 log_index: u64::MAX,
                 checkpoint: String::new(),
                 hashes: vec![],
-                root_hash: Sha256Hash::from_bytes([0; 32]),
+                root_hash: Sha256Hash::new([0; 32]),
                 tree_size: 1,
             }),
         });
@@ -539,7 +564,7 @@ mod tests {
     #[test]
     fn test_hashed_rekord_creation() {
         let entry = HashedRekord::new(
-            &Sha256Hash::from_bytes([0u8; 32]),
+            &Sha256Hash::new([0u8; 32]),
             &SignatureBytes::from_bytes(b"signature"),
             &DerCertificate::new(vec![0x30, 0x00]), // Minimal DER sequence
         );
@@ -559,7 +584,7 @@ mod tests {
 
     #[test]
     fn v2_serializes_typed_certificate_and_public_key_verifiers() {
-        let digest = Sha256Hash::from_bytes([0; 32]);
+        let digest = Sha256Hash::new([0; 32]);
         let signature = SignatureBytes::from_bytes(b"signature");
         let certificate = HashedRekordV2::new_with_certificate(
             &digest,
@@ -589,7 +614,7 @@ mod tests {
     #[test]
     fn test_hashed_rekord_serializes_lowercase_algorithm() {
         let entry = HashedRekord::new(
-            &Sha256Hash::from_bytes([0u8; 32]),
+            &Sha256Hash::new([0u8; 32]),
             &SignatureBytes::from_bytes(b"signature"),
             &DerCertificate::new(vec![0x30, 0x00]), // Minimal DER sequence
         );

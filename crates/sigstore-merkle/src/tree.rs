@@ -53,8 +53,8 @@ mod tests {
 
     #[test]
     fn test_hash_children() {
-        let left = Sha256Hash::from_bytes([0u8; 32]);
-        let right = Sha256Hash::from_bytes([1u8; 32]);
+        let left = Sha256Hash::new([0u8; 32]);
+        let right = Sha256Hash::new([1u8; 32]);
         let hash = hash_children(&left, &right);
 
         assert_eq!(hash.as_bytes().len(), 32);

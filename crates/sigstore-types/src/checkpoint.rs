@@ -133,7 +133,7 @@ impl Checkpoint {
         let root_hash_bytes = STANDARD
             .decode(root_hash_b64)
             .map_err(|_| Error::InvalidCheckpoint("invalid root hash base64".to_string()))?;
-        let root_hash = Sha256Hash::try_from_slice(&root_hash_bytes)
+        let root_hash = Sha256Hash::try_from(root_hash_bytes.as_slice())
             .map_err(|e| Error::InvalidCheckpoint(format!("invalid root hash: {}", e)))?;
 
         // Remaining lines are other content (metadata)
@@ -179,7 +179,7 @@ impl Checkpoint {
                 ));
             }
 
-            let key_id = KeyHint::try_from_slice(&decoded[..4])?;
+            let key_id = KeyHint::try_from(&decoded[..4])?;
             let signature = SignatureBytes::new(decoded[4..].to_vec());
 
             signatures.push(CheckpointSignature {

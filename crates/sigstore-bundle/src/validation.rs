@@ -118,7 +118,7 @@ pub fn validate_bundle(bundle: &Bundle) -> Result<()> {
 /// Those checks require trusted key material and are performed by the
 /// verification path in the `sigstore-verify` crate.
 pub fn validate_bundle_with_options(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
-    match bundle.version() {
+    match bundle.media_type() {
         MediaType::Bundle0_1 => validate_v0_1(bundle, options),
         MediaType::Bundle0_2 => validate_v0_2(bundle, options),
         MediaType::Bundle0_3 => validate_v0_3(bundle, options),
@@ -227,7 +227,7 @@ fn validate_inclusion_proof_structure(bundle: &Bundle) -> Result<()> {
 
             let is_v2 = entry.kind_version == KindVersion::HashedRekordV002;
             if is_v2 {
-                let leaf_index = entry.log_index.value();
+                let leaf_index = entry.log_index.get();
                 if leaf_index >= checkpoint.tree_size() {
                     return Err(Error::LogIndexOutOfRange {
                         log_index: leaf_index,
@@ -235,7 +235,7 @@ fn validate_inclusion_proof_structure(bundle: &Bundle) -> Result<()> {
                     });
                 }
             } else {
-                let leaf_index = proof.log_index.value();
+                let leaf_index = proof.log_index.get();
                 let tree_size = proof.tree_size;
                 if leaf_index >= tree_size {
                     return Err(Error::LogIndexOutOfRange {

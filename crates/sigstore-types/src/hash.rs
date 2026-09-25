@@ -7,7 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// This enum supports multiple serialization formats for compatibility:
 /// - Sigstore bundle format: "SHA2_256", "SHA2_384", "SHA2_512"
 /// - Rekor API format: "sha256", "sha384", "sha512"
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum HashAlgorithm {
     /// SHA2-256
@@ -28,34 +28,27 @@ impl HashAlgorithm {
         }
     }
 
-    /// Get the OID for this algorithm as a string
-    ///
-    /// Returns a string representation to avoid adding const-oid as a dependency.
-    /// Consumers can parse this with `ObjectIdentifier::new_unwrap()` if needed.
-    pub fn oid(&self) -> &'static str {
-        match self {
-            HashAlgorithm::Sha2256 => "2.16.840.1.101.3.4.2.1",
-            HashAlgorithm::Sha2384 => "2.16.840.1.101.3.4.2.2",
-            HashAlgorithm::Sha2512 => "2.16.840.1.101.3.4.2.3",
-        }
-    }
-
-    /// Get the lowercase name (for Rekor API compatibility)
-    pub fn as_lowercase(&self) -> &'static str {
+    /// The name used by the Rekor API (`sha256`, `sha384`, `sha512`)
+    pub fn as_rekor_str(&self) -> &'static str {
         match self {
             HashAlgorithm::Sha2256 => "sha256",
             HashAlgorithm::Sha2384 => "sha384",
             HashAlgorithm::Sha2512 => "sha512",
         }
     }
+}
 
-    /// Parse from string, supporting multiple formats
-    pub fn from_str_flexible(s: &str) -> Option<Self> {
+impl std::str::FromStr for HashAlgorithm {
+    type Err = crate::Error;
+
+    /// Parse the protobuf-specs (`SHA2_256`), Rekor (`sha256`) or
+    /// hyphenated (`sha-256`) spelling, case-insensitively.
+    fn from_str(s: &str) -> crate::Result<Self> {
         match s.to_lowercase().as_str() {
-            "sha256" | "sha2_256" | "sha-256" => Some(HashAlgorithm::Sha2256),
-            "sha384" | "sha2_384" | "sha-384" => Some(HashAlgorithm::Sha2384),
-            "sha512" | "sha2_512" | "sha-512" => Some(HashAlgorithm::Sha2512),
-            _ => None,
+            "sha256" | "sha2_256" | "sha-256" => Ok(HashAlgorithm::Sha2256),
+            "sha384" | "sha2_384" | "sha-384" => Ok(HashAlgorithm::Sha2384),
+            "sha512" | "sha2_512" | "sha-512" => Ok(HashAlgorithm::Sha2512),
+            _ => Err(crate::Error::InvalidHashAlgorithm(s.to_string())),
         }
     }
 }
@@ -86,35 +79,6 @@ impl<'de> Deserialize<'de> for HashAlgorithm {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        HashAlgorithm::from_str_flexible(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("unknown hash algorithm: {}", s)))
-    }
-}
-
-// Re-export base64_bytes from encoding module for backwards compatibility
-pub use crate::encoding::base64_bytes;
-
-/// Serde helper for lowercase hash algorithm serialization (for Rekor API)
-///
-/// Use this with `#[serde(with = "hash_algorithm_lowercase")]` on `HashAlgorithm`
-/// fields that need to serialize as "sha256" instead of "SHA2_256".
-pub mod hash_algorithm_lowercase {
-    use super::HashAlgorithm;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(algo: &HashAlgorithm, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(algo.as_lowercase())
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<HashAlgorithm, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        HashAlgorithm::from_str_flexible(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("unknown hash algorithm: {}", s)))
+        s.parse::<HashAlgorithm>().map_err(serde::de::Error::custom)
     }
 }

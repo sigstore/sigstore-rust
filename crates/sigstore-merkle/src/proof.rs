@@ -306,12 +306,12 @@ mod tests {
 
     #[test]
     fn test_chain_border_right() {
-        let seed = Sha256Hash::from_bytes([0u8; 32]);
+        let seed = Sha256Hash::new([0u8; 32]);
         let empty: &[Sha256Hash] = &[];
         let result = chain_border_right(&seed, empty);
         assert_eq!(result, seed);
 
-        let proof = [Sha256Hash::from_bytes([1u8; 32])];
+        let proof = [Sha256Hash::new([1u8; 32])];
         let result = chain_border_right(&seed, &proof);
         assert_ne!(result, seed);
     }

@@ -212,7 +212,7 @@ mod tests {
     #[test]
     fn validity_and_hint_lookups() {
         let (_, key_id, vk) = generated_key();
-        let hint = KeyHint::try_from_slice(&key_id.as_bytes()[..4]).unwrap();
+        let hint = KeyHint::try_from(&key_id.as_bytes()[..4]).unwrap();
         let start: Timestamp = "2020-01-01T00:00:00Z".parse().unwrap();
         let end: Timestamp = "2021-01-01T00:00:00Z".parse().unwrap();
         let mut keyring = Keyring::new();

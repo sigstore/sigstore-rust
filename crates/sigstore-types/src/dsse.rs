@@ -84,7 +84,12 @@ impl From<DsseEnvelope> for DsseEnvelopeWire {
 
 impl DsseEnvelope {
     /// Create a new DSSE envelope
-    pub fn new(payload_type: String, payload: PayloadBytes, signature: DsseSignature) -> Self {
+    pub fn new(
+        payload_type: impl Into<String>,
+        payload: PayloadBytes,
+        signature: DsseSignature,
+    ) -> Self {
+        let payload_type = payload_type.into();
         Self {
             payload_type,
             payload,
@@ -98,11 +103,6 @@ impl DsseEnvelope {
     /// `DSSEv1 <payload_type_len> <payload_type> <payload_len> <payload>`
     pub fn pae(&self) -> Vec<u8> {
         pae(&self.payload_type, self.payload.as_bytes())
-    }
-
-    /// Decode the payload bytes
-    pub fn decode_payload(&self) -> Vec<u8> {
-        self.payload.as_bytes().to_vec()
     }
 }
 

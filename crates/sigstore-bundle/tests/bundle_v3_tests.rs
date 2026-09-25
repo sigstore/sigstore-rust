@@ -65,7 +65,7 @@ fn test_parse_v3_bundle() {
     let bundle = Bundle::from_json(BUNDLE_V3_JSON).unwrap();
 
     // Check media type
-    assert_eq!(bundle.version(), MediaType::Bundle0_3);
+    assert_eq!(bundle.media_type(), MediaType::Bundle0_3);
 
     // Check we have a certificate
     assert!(bundle.signing_certificate().is_some());
@@ -222,7 +222,7 @@ fn test_inclusion_proof_verification() {
     let root_hash = &proof.root_hash;
 
     // Verify the inclusion proof
-    let leaf_index = proof.log_index.value();
+    let leaf_index = proof.log_index.get();
     let tree_size = proof.tree_size;
 
     let result = verify_inclusion_proof(&leaf_hash, leaf_index, tree_size, proof_hashes, root_hash);

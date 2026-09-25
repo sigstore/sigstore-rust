@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(statement.subject[0].name, "example.txt");
         assert_eq!(
             statement.subject[0].digest.sha256,
-            Some(Sha256Hash::from_bytes([0; 32]))
+            Some(Sha256Hash::new([0; 32]))
         );
     }
 
@@ -276,11 +276,11 @@ mod tests {
 
     #[test]
     fn test_matches_typed_digests() {
-        let sha256_1 = Sha256Hash::from_bytes([1; 32]);
-        let sha256_2 = Sha256Hash::from_bytes([2; 32]);
-        let sha256_3 = Sha256Hash::from_bytes([3; 32]);
-        let sha512_1 = Sha512Hash::from_bytes([1; 64]);
-        let sha512_2 = Sha512Hash::from_bytes([2; 64]);
+        let sha256_1 = Sha256Hash::new([1; 32]);
+        let sha256_2 = Sha256Hash::new([2; 32]);
+        let sha256_3 = Sha256Hash::new([3; 32]);
+        let sha512_1 = Sha512Hash::new([1; 64]);
+        let sha512_2 = Sha512Hash::new([2; 64]);
         let statement = Statement {
             type_: "https://in-toto.io/Statement/v1".to_string(),
             subject: vec![
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(statement.subject[0].name, "");
         assert_eq!(
             statement.subject[0].digest.sha256,
-            Some(Sha256Hash::from_bytes([0; 32]))
+            Some(Sha256Hash::new([0; 32]))
         );
     }
 

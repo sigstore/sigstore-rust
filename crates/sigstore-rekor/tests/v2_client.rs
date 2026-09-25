@@ -81,7 +81,7 @@ fn entry_with_body_field(path: &[&str], value: serde_json::Value) -> String {
 
 fn request() -> HashedRekordV2 {
     HashedRekordV2::new_with_certificate(
-        &Sha256Hash::from_bytes([1; 32]),
+        &Sha256Hash::new([1; 32]),
         &SignatureBytes::from_bytes(b"signature"),
         &DerCertificate::new(vec![0x30, 0x00]),
         RekorV2KeyDetails::PkixEcdsaP256Sha256,
@@ -95,7 +95,7 @@ async fn create_entry_returns_the_protobuf_entry_without_lossy_conversion() {
 
     let entry = client.create_entry(request()).await.unwrap();
 
-    assert_eq!(entry.log_index.value(), 7);
+    assert_eq!(entry.log_index.get(), 7);
     assert_eq!(
         entry.log_id.key_id.to_base64(),
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -174,7 +174,7 @@ async fn create_entry_rejects_mismatched_algorithm_semantics() {
 async fn create_entry_rejects_a_response_for_a_different_submission() {
     let (url, _received) = serve_once("201 Created", "application/json", VALID_ENTRY.as_bytes());
     let different = HashedRekordV2::new_with_certificate(
-        &Sha256Hash::from_bytes([2; 32]),
+        &Sha256Hash::new([2; 32]),
         &SignatureBytes::from_bytes(b"other signature"),
         &DerCertificate::new(vec![0x30, 0x00]),
         RekorV2KeyDetails::PkixEcdsaP256Sha256,
@@ -202,8 +202,8 @@ async fn create_entry_ignores_unauthenticated_duplicate_proof_fields() {
         .create_entry(request())
         .await
         .unwrap();
-    assert_eq!(entry.log_index.value(), 7);
-    assert_eq!(entry.inclusion_proof.unwrap().log_index.value(), 0);
+    assert_eq!(entry.log_index.get(), 7);
+    assert_eq!(entry.inclusion_proof.unwrap().log_index.get(), 0);
 }
 
 #[tokio::test]

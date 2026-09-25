@@ -318,7 +318,7 @@ mod tests {
     fn verify_consistency(bundle: &Bundle) -> Result<()> {
         let digest = [0u8; 32];
         let artifact = PreparedArtifact::from_artifact(
-            Artifact::from(Sha256Hash::from_bytes(digest)),
+            Artifact::from(Sha256Hash::new(digest)),
             &crate::artifact::ArtifactRequirements::new(
                 &bundle.content,
                 sigstore_crypto::SigningScheme::EcdsaP256Sha256,
@@ -351,7 +351,7 @@ mod tests {
             ));
         let digest = [0u8; 32];
         let artifact = PreparedArtifact::from_artifact(
-            Artifact::from(Sha256Hash::from_bytes(digest)),
+            Artifact::from(Sha256Hash::new(digest)),
             &crate::artifact::ArtifactRequirements::new(
                 &bundle.content,
                 sigstore_crypto::SigningScheme::EcdsaP256Sha256,

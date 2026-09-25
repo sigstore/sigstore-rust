@@ -313,7 +313,7 @@ impl Verifier {
             );
         for (is_rekor, id, public_key) in logs {
             validate_trust_window(public_key.valid_for)?;
-            let id = Sha256Hash::try_from_slice(id.key_id.as_bytes())?;
+            let id = Sha256Hash::try_from(id.key_id.as_bytes())?;
             if !ids.insert((is_rekor, id)) {
                 return Err(Error::Verification(format!(
                     "duplicate trusted log ID: {}",
@@ -1126,7 +1126,7 @@ mod tests {
         )
         .with_message_digest(sigstore_types::bundle::MessageDigest::new(
             HashAlgorithm::Sha2384,
-            sigstore_types::DigestBytes::from_bytes(vec![0; 48]),
+            sigstore_types::DigestBytes::new(vec![0; 48]),
         ));
 
         assert_eq!(
@@ -1144,7 +1144,7 @@ mod tests {
 
     fn in_toto_envelope(payload: &str) -> sigstore_types::DsseEnvelope {
         sigstore_types::DsseEnvelope::new(
-            "application/vnd.in-toto+json".to_string(),
+            "application/vnd.in-toto+json",
             sigstore_types::PayloadBytes::from_bytes(payload.as_bytes()),
             unused_signature(),
         )
@@ -1205,7 +1205,7 @@ mod tests {
         data: &[u8],
     ) -> sigstore_types::DsseEnvelope {
         sigstore_types::DsseEnvelope::new(
-            "application/vnd.in-toto+json".to_string(),
+            "application/vnd.in-toto+json",
             sigstore_types::PayloadBytes::from_bytes(DSSE_TEST_PAYLOAD),
             sigstore_types::DsseSignature::new(
                 keypair.sign(data).unwrap(),

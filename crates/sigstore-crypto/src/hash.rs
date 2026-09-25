@@ -17,7 +17,7 @@ pub fn sha256(data: &[u8]) -> Sha256Hash {
     let digest = digest::digest(&SHA256, data);
     let mut result = [0u8; 32];
     result.copy_from_slice(digest.as_ref());
-    Sha256Hash::from_bytes(result)
+    Sha256Hash::new(result)
 }
 
 /// Hash data using SHA-384, returning raw bytes
@@ -31,7 +31,7 @@ pub fn sha512(data: &[u8]) -> Sha512Hash {
     let digest = digest::digest(&SHA512, data);
     let mut result = [0u8; 64];
     result.copy_from_slice(digest.as_ref());
-    Sha512Hash::from_bytes(result)
+    Sha512Hash::new(result)
 }
 
 /// Incremental hasher for a typed artifact digest.
@@ -115,7 +115,7 @@ impl Sha256Hasher {
         let digest = self.finish_digest();
         let mut result = [0u8; 32];
         result.copy_from_slice(digest.as_ref());
-        Sha256Hash::from_bytes(result)
+        Sha256Hash::new(result)
     }
 
     /// Finalize and return the raw aws-lc-rs digest.

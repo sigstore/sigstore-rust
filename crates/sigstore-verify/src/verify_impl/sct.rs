@@ -121,7 +121,7 @@ impl DigitallySigned {
     /// The log ID this SCT claims to come from: RFC 6962 §3.2's key ID, i.e.
     /// the SHA-256 hash of the log's public key.
     pub fn log_id(&self) -> Sha256Hash {
-        Sha256Hash::from_bytes(self.log_id)
+        Sha256Hash::new(self.log_id)
     }
 }
 

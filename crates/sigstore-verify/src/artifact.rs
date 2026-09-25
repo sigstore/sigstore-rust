@@ -197,12 +197,12 @@ impl<'a> PreparedArtifact<'a> {
     }
 
     pub(crate) fn sha256(&self) -> Result<Sha256Hash> {
-        Sha256Hash::try_from_slice(self.digest(HashAlgorithm::Sha2256)?.as_bytes())
+        Sha256Hash::try_from(self.digest(HashAlgorithm::Sha2256)?.as_bytes())
             .map_err(|e| Error::Verification(e.to_string()))
     }
 
     pub(crate) fn sha512(&self) -> Result<Sha512Hash> {
-        Sha512Hash::try_from_slice(self.digest(HashAlgorithm::Sha2512)?.as_bytes())
+        Sha512Hash::try_from(self.digest(HashAlgorithm::Sha2512)?.as_bytes())
             .map_err(|e| Error::Verification(e.to_string()))
     }
 }
@@ -229,7 +229,7 @@ mod tests {
         assert_eq!(reader.position(), 0);
 
         let hash = sigstore_crypto::sha512(b"hello").to_hex();
-        let content = SignatureContent::DsseEnvelope(DsseEnvelope::new("application/vnd.in-toto+json".into(), PayloadBytes::new(format!(r#"{{"_type":"https://in-toto.io/Statement/v1","subject":[{{"digest":{{"sha512":"{hash}"}}}}],"predicateType":"p","predicate":{{}}}}"#).into_bytes()), DsseSignature::new(SignatureBytes::from_bytes(b"unused"), Default::default())));
+        let content = SignatureContent::DsseEnvelope(DsseEnvelope::new("application/vnd.in-toto+json", PayloadBytes::new(format!(r#"{{"_type":"https://in-toto.io/Statement/v1","subject":[{{"digest":{{"sha512":"{hash}"}}}}],"predicateType":"p","predicate":{{}}}}"#).into_bytes()), DsseSignature::new(SignatureBytes::from_bytes(b"unused"), Default::default())));
         let requirements = ArtifactRequirements::new(&content, SigningScheme::Ed25519).unwrap();
         assert_eq!(requirements.algorithms, vec![HashAlgorithm::Sha2512]);
         let artifact = PreparedArtifact::from_reader(&b"hello"[..], &requirements).unwrap();

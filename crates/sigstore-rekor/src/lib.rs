@@ -39,6 +39,7 @@ pub mod body;
 pub mod client;
 pub mod entry;
 pub mod error;
+pub mod hex_encoded;
 
 pub use body::RekorEntryBody;
 #[cfg(feature = "client")]
@@ -48,3 +49,4 @@ pub use entry::{
     SearchIndex,
 };
 pub use error::{Error, Result};
+pub use hex_encoded::{HexHash, HexLogId};

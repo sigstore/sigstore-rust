@@ -2112,6 +2112,7 @@ name = "sigstore-rekor"
 version = "0.13.0"
 dependencies = [
  "base64",
+ "hex",
  "jiff",
  "reqwest",
  "serde",

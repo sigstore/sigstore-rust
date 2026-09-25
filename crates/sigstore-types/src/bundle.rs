@@ -48,10 +48,8 @@ impl MediaType {
     }
 }
 
-impl std::ops::Deref for MediaType {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
+impl AsRef<str> for MediaType {
+    fn as_ref(&self) -> &str {
         self.as_str()
     }
 }
@@ -94,20 +92,6 @@ impl FromStr for MediaType {
             _ => Err(Error::InvalidMediaType(s.to_string())),
         }
     }
-}
-
-/// Bundle version enum for serde
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum BundleVersion {
-    /// Version 0.1
-    #[serde(rename = "0.1")]
-    V0_1,
-    /// Version 0.2
-    #[serde(rename = "0.2")]
-    V0_2,
-    /// Version 0.3
-    #[serde(rename = "0.3")]
-    V0_3,
 }
 
 /// The main Sigstore bundle structure
@@ -153,8 +137,8 @@ impl Bundle {
         serde_json::to_string_pretty(self).map_err(Error::Json)
     }
 
-    /// Get the bundle version from the media type
-    pub fn version(&self) -> MediaType {
+    /// The bundle's media type, which identifies its format version
+    pub fn media_type(&self) -> MediaType {
         self.media_type
     }
 
@@ -751,7 +735,7 @@ mod tests {
             "canonicalizedBody": "e30="
         }"#;
         let entry: TransparencyLogEntry = serde_json::from_str(json).unwrap();
-        assert_eq!(entry.log_index.value(), 0);
+        assert_eq!(entry.log_index.get(), 0);
         assert_eq!(entry.integrated_time.unwrap().as_second(), 1700000000);
     }
 
@@ -764,7 +748,7 @@ mod tests {
             "checkpoint": {"envelope": "test\n1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n\n— test AAAAAAAA\n"}
         }"#;
         let proof: InclusionProof = serde_json::from_str(json).unwrap();
-        assert_eq!(proof.log_index.value(), 0);
+        assert_eq!(proof.log_index.get(), 0);
         assert_eq!(proof.tree_size, 1);
         assert!(proof.hashes.is_empty());
     }
@@ -789,22 +773,22 @@ mod tests {
 
         // Verify tlog entry parsed with default logIndex
         let entry = &bundle.verification_material.tlog_entries[0];
-        assert_eq!(entry.log_index.value(), 0);
+        assert_eq!(entry.log_index.get(), 0);
 
         // Verify inclusion proof parsed without logIndex and hashes
         let proof = entry.inclusion_proof.as_ref().unwrap();
-        assert_eq!(proof.log_index.value(), 0);
+        assert_eq!(proof.log_index.get(), 0);
         assert!(proof.hashes.is_empty());
 
         // Verify DSSE envelope with subject missing name
         if let super::SignatureContent::DsseEnvelope(env) = &bundle.content {
-            let payload = env.decode_payload();
+            let payload = env.payload.as_bytes().to_vec();
             let statement: super::super::intoto::Statement =
                 serde_json::from_slice(&payload).expect("should parse in-toto statement");
             assert_eq!(statement.subject[0].name, "");
             assert_eq!(
                 statement.subject[0].digest.sha256,
-                Some(Sha256Hash::from_bytes([0; 32]))
+                Some(Sha256Hash::new([0; 32]))
             );
         } else {
             panic!("expected DSSE envelope");

@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn sha256_conversion_is_typed() {
-        let hash = Sha256Hash::from_bytes([7; 32]);
+        let hash = Sha256Hash::new([7; 32]);
         let artifact = Artifact::from(hash);
         let digest = artifact.digest().unwrap();
         assert_eq!(digest.algorithm(), HashAlgorithm::Sha2256);

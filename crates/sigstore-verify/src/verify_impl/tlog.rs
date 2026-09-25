@@ -139,10 +139,10 @@ fn verify_merkle_inclusion(entry: &TransparencyLogEntry, proof: &InclusionProof)
         let checkpoint = proof.checkpoint.checkpoint().ok_or_else(|| {
             Error::Verification("Rekor v2 inclusion proof has no checkpoint".to_string())
         })?;
-        let leaf_index = entry.log_index.value();
+        let leaf_index = entry.log_index.get();
         (leaf_index, checkpoint.tree_size(), *checkpoint.root_hash())
     } else {
-        let leaf_index = proof.log_index.value();
+        let leaf_index = proof.log_index.get();
         let tree_size = proof.tree_size;
         (leaf_index, tree_size, proof.root_hash)
     };
@@ -234,7 +234,7 @@ pub fn verify_set(entry: &TransparencyLogEntry, rekor_keys: &Keyring) -> Result<
     // time, require the log key's validity window to cover it: an entry must
     // have been integrated while the log key was valid.
     let decoded_key_id = entry.log_id.key_id.as_bytes();
-    let key_id = Sha256Hash::try_from_slice(decoded_key_id)
+    let key_id = Sha256Hash::try_from(decoded_key_id)
         .map_err(|e| Error::Verification(format!("invalid Rekor log ID: {e}")))?;
     let keyring = rekor_keys;
     let log_key = if let Some(integrated_ts) = entry.integrated_time {

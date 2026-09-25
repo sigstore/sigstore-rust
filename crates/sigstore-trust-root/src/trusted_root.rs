@@ -172,7 +172,7 @@ fn usable_for_verification(valid_for: Option<&ValidityPeriod>, now: Timestamp) -
 }
 
 fn key_id(log_id: &LogKeyId) -> Result<Sha256Hash> {
-    Ok(Sha256Hash::try_from_slice(log_id.as_bytes())?)
+    Ok(Sha256Hash::try_from(log_id.as_bytes())?)
 }
 
 impl TrustedRoot {
@@ -414,7 +414,7 @@ mod tests {
         let root = TrustedRoot::from_json(SAMPLE_TRUSTED_ROOT).unwrap();
         let keys = root.rekor_keys().unwrap();
         assert_eq!(keys.len(), 1);
-        assert!(keys.get_key(&Sha256Hash::from_bytes([0; 32])).is_some());
+        assert!(keys.get_key(&Sha256Hash::new([0; 32])).is_some());
     }
 
     #[test]

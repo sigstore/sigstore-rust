@@ -262,7 +262,7 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 .into());
             }
 
-            let artifact_digest = Sha256Hash::try_from_slice(&digest_bytes)
+            let artifact_digest = Sha256Hash::try_from(digest_bytes.as_slice())
                 .map_err(|e| format!("Invalid digest: {}", e))?;
 
             verify_with_key(
@@ -316,7 +316,7 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Convert digest bytes to Sha256Hash for verification
-        let artifact_digest = Sha256Hash::try_from_slice(&digest_bytes)
+        let artifact_digest = Sha256Hash::try_from(digest_bytes.as_slice())
             .map_err(|e| format!("Invalid digest: {}", e))?;
 
         // Verify the signature with trusted root using the digest directly
