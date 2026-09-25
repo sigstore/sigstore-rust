@@ -1,10 +1,32 @@
 //! Error types for sigstore-verify
 
+use sigstore_crypto::SubjectAltName;
 use thiserror::Error;
+
+use crate::IdentityMatcher;
 
 /// Errors that can occur during verification
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
+    /// The certificate identity does not satisfy the policy
+    #[error("identity mismatch: expected {expected}, got {}", display_opt(actual))]
+    IdentityMismatch {
+        /// What the policy requires
+        expected: IdentityMatcher,
+        /// The certificate's SAN identity, if it has one
+        actual: Option<SubjectAltName>,
+    },
+
+    /// The certificate's OIDC issuer does not satisfy the policy
+    #[error("issuer mismatch: expected {expected}, got {}", display_opt(actual))]
+    IssuerMismatch {
+        /// The issuer the policy requires
+        expected: String,
+        /// The certificate's issuer claim, if it has one
+        actual: Option<String>,
+    },
+
     /// Verification error
     #[error("Verification error: {0}")]
     Verification(String),
@@ -27,11 +49,17 @@ pub enum Error {
 
     /// A configured authority certificate could not be parsed.
     #[error("invalid trusted certificate: {0}")]
-    TrustedCertificate(#[source] webpki::Error),
+    TrustedCertificate(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     /// Failed to read artifact input.
     #[error("failed to read artifact: {0}")]
     ArtifactRead(#[source] std::io::Error),
+}
+
+fn display_opt(value: &Option<impl std::fmt::Display>) -> String {
+    value
+        .as_ref()
+        .map_or_else(|| "none".to_string(), ToString::to_string)
 }
 
 /// Result type for verification operations

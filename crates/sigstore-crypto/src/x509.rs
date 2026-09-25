@@ -5,7 +5,7 @@
 
 use crate::error::{Error, Result};
 use crate::KeyAlgorithm;
-use sigstore_types::DerPublicKey;
+use sigstore_types::{DerCertificate, DerPublicKey};
 use x509_cert::der::{Decode, Encode};
 use x509_cert::Certificate;
 
@@ -20,12 +20,40 @@ const FULCIO_ISSUER_V2_OID: ObjectIdentifier =
 /// The arc all Fulcio extensions live under.
 const FULCIO_ARC: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.57264.1");
 
+/// The identity a certificate's Subject Alternative Name asserts.
+///
+/// Fulcio issues certificates with an email address (for human identities)
+/// or a URI (for workloads such as CI jobs).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SubjectAltName {
+    /// An `rfc822Name` (email address)
+    Email(String),
+    /// A `uniformResourceIdentifier`
+    Uri(String),
+}
+
+impl SubjectAltName {
+    /// The identity value, regardless of its kind.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Email(value) | Self::Uri(value) => value,
+        }
+    }
+}
+
+impl std::fmt::Display for SubjectAltName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Information extracted from a certificate
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct CertificateInfo {
-    /// Identity from SAN extension (email or URI)
-    pub identity: Option<String>,
+    /// Identity from the SAN extension (the first email or URI)
+    pub identity: Option<SubjectAltName>,
     /// Issuer from certificate (OIDC issuer URL from Fulcio extension)
     pub issuer: Option<String>,
     /// Not valid before
@@ -184,8 +212,8 @@ impl DeprecatedGitHubClaims {
 }
 
 /// Parse certificate information from DER-encoded certificate
-pub fn parse_certificate_info(cert_der: &[u8]) -> Result<CertificateInfo> {
-    let cert = Certificate::from_der(cert_der)
+pub fn parse_certificate_info(cert_der: &DerCertificate) -> Result<CertificateInfo> {
+    let cert = Certificate::from_der(cert_der.as_bytes())
         .map_err(|e| Error::InvalidCertificate(format!("failed to parse certificate: {}", e)))?;
 
     // Extract validity times
@@ -229,13 +257,13 @@ pub fn parse_certificate_info(cert_der: &[u8]) -> Result<CertificateInfo> {
 ///
 /// This extracts the email address or URI from the SAN extension using
 /// x509-cert's proper ASN.1 parsing (handles all length encodings correctly).
-pub fn extract_san_identity(cert: &Certificate) -> Result<Option<String>> {
+pub(crate) fn extract_san_identity(cert: &Certificate) -> Result<Option<SubjectAltName>> {
     use x509_cert::ext::pkix::name::GeneralName;
-    use x509_cert::ext::pkix::SubjectAltName;
+    use x509_cert::ext::pkix::SubjectAltName as SanExtension;
 
     // Try to get the SAN extension using the typed getter
     // Returns Option<(critical: bool, extension: T)>
-    let san_opt: Option<(bool, SubjectAltName)> = cert
+    let san_opt: Option<(bool, SanExtension)> = cert
         .tbs_certificate
         .get()
         .map_err(|e| Error::InvalidCertificate(format!("failed to get SAN extension: {}", e)))?;
@@ -248,10 +276,10 @@ pub fn extract_san_identity(cert: &Certificate) -> Result<Option<String>> {
     for name in san.0.iter() {
         match name {
             GeneralName::Rfc822Name(email) => {
-                return Ok(Some(email.to_string()));
+                return Ok(Some(SubjectAltName::Email(email.to_string())));
             }
             GeneralName::UniformResourceIdentifier(uri) => {
-                return Ok(Some(uri.to_string()));
+                return Ok(Some(SubjectAltName::Uri(uri.to_string())));
             }
             _ => continue,
         }
@@ -265,7 +293,7 @@ pub fn extract_san_identity(cert: &Certificate) -> Result<Option<String>> {
 /// Prefer the DER UTF8String in OID 1.3.6.1.4.1.57264.1.8. Fall back to the
 /// legacy OID 1.3.6.1.4.1.57264.1.1 only when the current extension is absent;
 /// a malformed current extension is an error, regardless of the legacy value.
-pub fn extract_fulcio_issuer(cert: &Certificate) -> Result<Option<String>> {
+pub(crate) fn extract_fulcio_issuer(cert: &Certificate) -> Result<Option<String>> {
     let extensions = match &cert.tbs_certificate.extensions {
         Some(exts) => exts,
         None => return Ok(None),
@@ -314,7 +342,7 @@ pub fn extract_fulcio_issuer(cert: &Certificate) -> Result<Option<String>> {
 /// signature is valid, so a value that cannot be read costs nothing beyond the
 /// claim itself; the OIDC issuer, which policies do match on, is read by
 /// [`extract_fulcio_issuer`] and is an error when malformed.
-pub fn extract_fulcio_ci_claims(cert: &Certificate) -> FulcioCiClaims {
+pub(crate) fn extract_fulcio_ci_claims(cert: &Certificate) -> FulcioCiClaims {
     let mut claims = FulcioCiClaims::default();
     let Some(extensions) = cert.tbs_certificate.extensions.as_ref() else {
         return claims;
@@ -429,7 +457,7 @@ mod tests {
 
     fn parse(pem: &str) -> CertificateInfo {
         let der = DerCertificate::from_pem(pem).expect("the fixture is a PEM certificate");
-        parse_certificate_info(der.as_bytes()).expect("the fixture is a valid certificate")
+        parse_certificate_info(&der).expect("the fixture is a valid certificate")
     }
 
     /// Every claim the GitHub Actions fixture carries, as a snapshot so that a
@@ -442,8 +470,11 @@ mod tests {
         let info = parse(GITHUB_ACTIONS_CERT);
 
         assert_eq!(
-            info.identity.as_deref(),
-            Some("https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main")
+            info.identity,
+            Some(SubjectAltName::Uri(
+                "https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main"
+                    .to_string()
+            ))
         );
         assert_eq!(
             info.issuer.as_deref(),
@@ -470,7 +501,7 @@ mod tests {
         let info = parse(ENVIRONMENT_CERT);
 
         assert_eq!(
-            info.identity.as_deref(),
+            info.identity.as_ref().map(SubjectAltName::as_str),
             Some("https://github.com/pavelzw/skill-forge/.github/workflows/package.yml@refs/heads/main")
         );
         insta::assert_debug_snapshot!(info.ci_claims);
