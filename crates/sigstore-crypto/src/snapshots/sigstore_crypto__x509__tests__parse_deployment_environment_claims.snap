@@ -1,0 +1,71 @@
+---
+source: crates/sigstore-crypto/src/x509.rs
+expression: info.ci_claims
+---
+FulcioCiClaims {
+    build_signer_uri: Some(
+        "https://github.com/pavelzw/skill-forge/.github/workflows/package.yml@refs/heads/main",
+    ),
+    build_signer_digest: Some(
+        "8a96d273f7245383c451499fb65375ec408ca042",
+    ),
+    runner_environment: Some(
+        "github-hosted",
+    ),
+    source_repository_uri: Some(
+        "https://github.com/pavelzw/skill-forge",
+    ),
+    source_repository_digest: Some(
+        "8a96d273f7245383c451499fb65375ec408ca042",
+    ),
+    source_repository_ref: Some(
+        "refs/heads/main",
+    ),
+    source_repository_identifier: Some(
+        "1151760276",
+    ),
+    source_repository_owner_uri: Some(
+        "https://github.com/pavelzw",
+    ),
+    source_repository_owner_identifier: Some(
+        "29506042",
+    ),
+    build_config_uri: Some(
+        "https://github.com/pavelzw/skill-forge/.github/workflows/package.yml@refs/heads/main",
+    ),
+    build_config_digest: Some(
+        "8a96d273f7245383c451499fb65375ec408ca042",
+    ),
+    build_trigger: Some(
+        "push",
+    ),
+    run_invocation_uri: Some(
+        "https://github.com/pavelzw/skill-forge/actions/runs/36007002754/attempts/1",
+    ),
+    source_repository_visibility_at_signing: Some(
+        "public",
+    ),
+    deployment_environment: Some(
+        "upload",
+    ),
+    token_subject: Some(
+        "repo:pavelzw/skill-forge:environment:upload",
+    ),
+    deprecated_github: DeprecatedGitHubClaims {
+        workflow_trigger: Some(
+            "push",
+        ),
+        workflow_sha: Some(
+            "8a96d273f7245383c451499fb65375ec408ca042",
+        ),
+        workflow_name: Some(
+            "Package",
+        ),
+        workflow_repository: Some(
+            "pavelzw/skill-forge",
+        ),
+        workflow_ref: Some(
+            "refs/heads/main",
+        ),
+    },
+}

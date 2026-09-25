@@ -2,3 +2,8 @@
 
 *.pyc
 __pycache__/
+
+# Written by `cargo insta` next to a snapshot it could not match, until the
+# change is reviewed with `cargo insta review`
+*.snap.new
+*.pending-snap

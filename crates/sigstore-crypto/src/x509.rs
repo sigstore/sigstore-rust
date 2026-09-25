@@ -432,106 +432,69 @@ mod tests {
         parse_certificate_info(der.as_bytes()).expect("the fixture is a valid certificate")
     }
 
+    /// Every claim the GitHub Actions fixture carries, as a snapshot so that a
+    /// claim added to [`FulcioCiClaims`] later shows up here instead of going
+    /// untested until someone remembers to assert it. The individual claims a
+    /// reader has to reason about are asserted by name in the tests below; the
+    /// identity and the issuer are, because a policy matches on them.
     #[test]
     fn test_parse_github_actions_claims() {
         let info = parse(GITHUB_ACTIONS_CERT);
-        let workflow =
-            "https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main";
-        let commit = "193b5bd7d3985809503963ae400594ea16df31cf";
 
-        assert_eq!(info.identity.as_deref(), Some(workflow));
+        assert_eq!(
+            info.identity.as_deref(),
+            Some("https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main")
+        );
         assert_eq!(
             info.issuer.as_deref(),
             Some("https://token.actions.githubusercontent.com")
         );
 
-        let claims = &info.ci_claims;
-        assert!(!claims.is_empty());
-        assert_eq!(claims.build_signer_uri.as_deref(), Some(workflow));
-        assert_eq!(claims.build_signer_digest.as_deref(), Some(commit));
-        assert_eq!(claims.runner_environment.as_deref(), Some("github-hosted"));
+        assert!(!info.ci_claims.is_empty());
+        // The job declared no environment and the certificate predates `.1.24`,
+        // so `deployment_environment` and `token_subject` are absent below.
+        insta::assert_debug_snapshot!(info.ci_claims);
+    }
+
+    /// A job that runs in a deployment environment adds `.1.23`, and `.1.24`
+    /// records the `sub` the certificate was requested with. This fixture is the
+    /// one that covers the arc in full, `.1.2` to `.1.24`, so it is snapshotted
+    /// as well.
+    ///
+    /// The assertion below is the point of the fixture: the SAN identity is the
+    /// workflow ref and says nothing about the environment the job ran in, which
+    /// for GitHub Actions makes the two claims in the snapshot the only place
+    /// `upload` appears at all.
+    #[test]
+    fn test_parse_deployment_environment_claims() {
+        let info = parse(ENVIRONMENT_CERT);
+
+        assert_eq!(
+            info.identity.as_deref(),
+            Some("https://github.com/pavelzw/skill-forge/.github/workflows/package.yml@refs/heads/main")
+        );
+        insta::assert_debug_snapshot!(info.ci_claims);
+    }
+
+    /// The deprecated `.1.2` to `.1.6`, which the fixture carries alongside the
+    /// extensions that superseded them, are read from their own extensions and
+    /// not confused with those: `.1.5` holds `owner/repository` where `.1.12`
+    /// holds the full URL, and the deprecated extensions are bare strings where
+    /// the arc from `.1.8` is DER. Reading both back verbatim shows neither the
+    /// values nor the encodings are mixed up.
+    #[test]
+    fn test_parse_deprecated_github_claims() {
+        let claims = parse(GITHUB_ACTIONS_CERT).ci_claims;
+
+        assert!(!claims.deprecated_github.is_empty());
+        assert_eq!(
+            claims.deprecated_github.workflow_repository.as_deref(),
+            Some("prefix-dev/sigstore-example")
+        );
         assert_eq!(
             claims.source_repository_uri.as_deref(),
             Some("https://github.com/prefix-dev/sigstore-example")
         );
-        assert_eq!(claims.source_repository_digest.as_deref(), Some(commit));
-        assert_eq!(
-            claims.source_repository_ref.as_deref(),
-            Some("refs/heads/main")
-        );
-        assert_eq!(
-            claims.source_repository_identifier.as_deref(),
-            Some("1048392115")
-        );
-        assert_eq!(
-            claims.source_repository_owner_uri.as_deref(),
-            Some("https://github.com/prefix-dev")
-        );
-        assert_eq!(
-            claims.source_repository_owner_identifier.as_deref(),
-            Some("111356225")
-        );
-        assert_eq!(claims.build_config_uri.as_deref(), Some(workflow));
-        assert_eq!(claims.build_config_digest.as_deref(), Some(commit));
-        assert_eq!(claims.build_trigger.as_deref(), Some("push"));
-        assert_eq!(
-            claims.run_invocation_uri.as_deref(),
-            Some("https://github.com/prefix-dev/sigstore-example/actions/runs/17377272645/attempts/1")
-        );
-        assert_eq!(
-            claims.source_repository_visibility_at_signing.as_deref(),
-            Some("public")
-        );
-
-        // The job declared no environment, and the certificate predates `.1.24`.
-        assert_eq!(claims.deployment_environment, None);
-        assert_eq!(claims.token_subject, None);
-    }
-
-    /// A job that runs in a deployment environment adds `.1.23`, and `.1.24`
-    /// records the `sub` the certificate was requested with, which for GitHub
-    /// Actions is the only place the environment appears verbatim — the SAN
-    /// identity is the workflow ref and says nothing about it.
-    #[test]
-    fn test_parse_deployment_environment_claims() {
-        let claims = parse(ENVIRONMENT_CERT).ci_claims;
-
-        assert_eq!(claims.deployment_environment.as_deref(), Some("upload"));
-        assert_eq!(
-            claims.token_subject.as_deref(),
-            Some("repo:pavelzw/skill-forge:environment:upload")
-        );
-        // The claims shared with the fixture above are parsed the same way, so
-        // one of them is enough to show this certificate is read as a whole.
-        assert_eq!(
-            claims.source_repository_uri.as_deref(),
-            Some("https://github.com/pavelzw/skill-forge")
-        );
-    }
-
-    /// The deprecated `.1.2` to `.1.6`, which the fixture carries alongside the
-    /// arc above. They hold a bare string rather than a DER one, so reading them
-    /// back verbatim also shows the two encodings are not confused.
-    #[test]
-    fn test_parse_deprecated_github_claims() {
-        let deprecated = parse(GITHUB_ACTIONS_CERT).ci_claims.deprecated_github;
-
-        assert!(!deprecated.is_empty());
-        assert_eq!(deprecated.workflow_trigger.as_deref(), Some("push"));
-        assert_eq!(
-            deprecated.workflow_sha.as_deref(),
-            Some("193b5bd7d3985809503963ae400594ea16df31cf")
-        );
-        assert_eq!(
-            deprecated.workflow_name.as_deref(),
-            Some("Package and sign")
-        );
-        // The short form of the repository, where `.1.12` holds the full URL.
-        assert_eq!(
-            deprecated.workflow_repository.as_deref(),
-            Some("prefix-dev/sigstore-example")
-        );
-        assert_eq!(deprecated.workflow_ref.as_deref(), Some("refs/heads/main"));
     }
 
     /// A certificate issued before Fulcio grew the provider-neutral arc carries

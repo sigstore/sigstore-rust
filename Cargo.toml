@@ -76,6 +76,7 @@ zeroize = "1"
 hex = "0.4"
 rstest = { version = "0.26", default-features = false }
 regex = "1.12"
+insta = "1.48"
 
 # Logging
 tracing = { version = "0.1" }
