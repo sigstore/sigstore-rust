@@ -9,8 +9,9 @@ The signing certificate of
 `crates/sigstore-verify/test_data/bundles/conda-attestation.sigstore.json`,
 issued by Fulcio to a GitHub Actions workflow in the `prefix-dev/sigstore-example`
 repository. It populates the CI claim arc `1.3.6.1.4.1.57264.1` up to `.1.22`,
-including the deprecated extensions `.1.2` to `.1.6`, so it exercises both the
-claims that are parsed and the ones that are skipped.
+including the deprecated extensions `.1.2` to `.1.6`, so it exercises both
+encodings of the arc: the bare strings of the deprecated extensions and the DER
+strings of the ones that superseded them.
 
 To regenerate it from the bundle:
 
