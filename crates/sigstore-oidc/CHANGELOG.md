@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-oidc-v0.13.0...sigstore-oidc-v0.14.0) - 2026-09-25
+
+### Added
+
+- unify and set default User-Agent across all HTTP clients ([#256](https://github.com/sigstore/sigstore-rust/pull/256))
+
+### Other
+
+- *(tsa,oidc,tuf)* [**breaking**] accept caller-configured reqwest clients ([#249](https://github.com/sigstore/sigstore-rust/pull/249))
+- *(oidc)* [**breaking**] explicit identity provider configuration ([#243](https://github.com/sigstore/sigstore-rust/pull/243))
+- *(oidc)* [**breaking**] keep secrets out of the public API and make types extensible ([#239](https://github.com/sigstore/sigstore-rust/pull/239))
+
 ## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-oidc-v0.11.0...sigstore-oidc-v0.12.0) - 2026-09-23
 
 ### Fixed

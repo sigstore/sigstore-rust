@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-cache-v0.13.0...sigstore-cache-v0.14.0) - 2026-09-25
+
+### Fixed
+
+- *(cache)* [**breaking**] scope cache keys by service URL ([#241](https://github.com/sigstore/sigstore-rust/pull/241))
+
+### Other
+
+- *(release)* version sigstore-tuf and sigstore-cache independently ([#254](https://github.com/sigstore/sigstore-rust/pull/254))
+
 ## [0.12.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-cache-v0.11.0...sigstore-cache-v0.12.0) - 2026-09-23
 
 ### Fixed

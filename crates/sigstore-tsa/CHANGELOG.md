@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-tsa-v0.13.0...sigstore-tsa-v0.14.0) - 2026-09-25
+
+### Added
+
+- unify and set default User-Agent across all HTTP clients ([#256](https://github.com/sigstore/sigstore-rust/pull/256))
+
+### Other
+
+- *(tsa,oidc,tuf)* [**breaking**] accept caller-configured reqwest clients ([#249](https://github.com/sigstore/sigstore-rust/pull/249))
+- *(tsa)* [**breaking**] keep the RFC 3161 ASN.1 model private ([#245](https://github.com/sigstore/sigstore-rust/pull/245))
+- *(types)* [**breaking**] make wire types and enums extensible ([#236](https://github.com/sigstore/sigstore-rust/pull/236))
+- *(crypto)* single OID match in key_algorithm ([#238](https://github.com/sigstore/sigstore-rust/pull/238))
+
 ## [0.13.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-tsa-v0.12.0...sigstore-tsa-v0.13.0) - 2026-09-23
 
 ### Fixed
