@@ -394,6 +394,25 @@ impl SigstoreInstance {
     pub fn embedded_trusted_root(self) -> Result<TrustedRoot> {
         TrustedRoot::from_json(self.embedded_trusted_root_json())
     }
+
+    /// Return the embedded `signing_config.json` snapshot, if this instance
+    /// publishes one (GitHub's instance does not).
+    pub fn embedded_signing_config_json(self) -> Option<&'static str> {
+        match self {
+            Self::PublicGood => Some(crate::SIGSTORE_PRODUCTION_SIGNING_CONFIG),
+            Self::Staging => Some(crate::SIGSTORE_STAGING_SIGNING_CONFIG),
+            Self::GitHub => None,
+        }
+    }
+
+    /// Load this instance's embedded signing config snapshot, if it has one.
+    ///
+    /// Snapshots go stale; prefer fetching the signing config through TUF.
+    pub fn embedded_signing_config(self) -> Result<Option<crate::SigningConfig>> {
+        self.embedded_signing_config_json()
+            .map(crate::SigningConfig::from_json)
+            .transpose()
+    }
 }
 
 impl TrustedRoot {
@@ -760,5 +779,21 @@ mod tests {
         assert!(period.contains("2020-06-01T00:00:00Z".parse().unwrap()));
         assert!(!period.contains("2019-06-01T00:00:00Z".parse().unwrap()));
         assert!(period.has_started_by("2022-06-01T00:00:00Z".parse().unwrap()));
+    }
+
+    #[test]
+    fn instances_expose_their_embedded_material() {
+        for instance in [
+            SigstoreInstance::PublicGood,
+            SigstoreInstance::Staging,
+            SigstoreInstance::GitHub,
+        ] {
+            instance.embedded_trusted_root().unwrap();
+            let signing_config = instance.embedded_signing_config().unwrap();
+            assert_eq!(
+                signing_config.is_some(),
+                instance != SigstoreInstance::GitHub
+            );
+        }
     }
 }

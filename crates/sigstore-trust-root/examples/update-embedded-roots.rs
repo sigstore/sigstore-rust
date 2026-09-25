@@ -31,18 +31,14 @@ use std::path::Path;
 use sigstore_tuf::cache::FileStore;
 use sigstore_tuf::client::{HttpRepository, Updater};
 
-use sigstore_trust_root::{
-    DEFAULT_TUF_URL, GITHUB_TUF_ROOT, GITHUB_TUF_URL, PRODUCTION_TUF_ROOT, SIGNING_CONFIG_TARGET,
-    STAGING_TUF_ROOT, STAGING_TUF_URL, TRUSTED_ROOT_TARGET,
-};
+use sigstore_trust_root::{SigstoreInstance, SIGNING_CONFIG_TARGET, TRUSTED_ROOT_TARGET};
 
 /// One Sigstore TUF instance whose embedded data we keep up to date.
 struct Instance {
     name: &'static str,
-    /// Base URL of the TUF repository.
-    url: &'static str,
-    /// Currently embedded `root.json`, used as the trust anchor.
-    embedded_root: &'static [u8],
+    /// The instance, whose TUF URL and currently embedded `root.json` (the
+    /// trust anchor) are used.
+    instance: SigstoreInstance,
     /// Where the (possibly updated) `root.json` is embedded, relative to the
     /// crate root.
     root_path: &'static str,
@@ -54,8 +50,7 @@ struct Instance {
 const INSTANCES: &[Instance] = &[
     Instance {
         name: "production",
-        url: DEFAULT_TUF_URL,
-        embedded_root: PRODUCTION_TUF_ROOT,
+        instance: SigstoreInstance::PublicGood,
         root_path: "repository/tuf_root.json",
         targets: &[
             (TRUSTED_ROOT_TARGET, "src/trusted_root.json"),
@@ -64,8 +59,7 @@ const INSTANCES: &[Instance] = &[
     },
     Instance {
         name: "staging",
-        url: STAGING_TUF_URL,
-        embedded_root: STAGING_TUF_ROOT,
+        instance: SigstoreInstance::Staging,
         root_path: "repository/tuf_staging_root.json",
         targets: &[
             (TRUSTED_ROOT_TARGET, "src/trusted_root_staging.json"),
@@ -77,8 +71,7 @@ const INSTANCES: &[Instance] = &[
     },
     Instance {
         name: "github",
-        url: GITHUB_TUF_URL,
-        embedded_root: GITHUB_TUF_ROOT,
+        instance: SigstoreInstance::GitHub,
         root_path: "repository/tuf_github_root.json",
         // GitHub's Sigstore instance does not publish a signing config.
         targets: &[(TRUSTED_ROOT_TARGET, "src/trusted_root_github.json")],
@@ -97,7 +90,7 @@ fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<bool, Box<dyn std::erro
 }
 
 async fn update_instance(instance: &Instance) -> Result<bool, Box<dyn std::error::Error>> {
-    println!("{} ({})", instance.name, instance.url);
+    println!("{} ({})", instance.name, instance.instance.tuf_url());
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let now = jiff::Timestamp::now();
 
@@ -106,9 +99,9 @@ async fn update_instance(instance: &Instance) -> Result<bool, Box<dyn std::error
     // library does at runtime. The write-through store captures every verified
     // file so we can read the latest root.json back as raw bytes.
     let metadata_dir = tempfile::tempdir()?;
-    let repo = HttpRepository::new(instance.url)?;
-    let mut updater =
-        Updater::new(repo, instance.embedded_root)?.with_store(FileStore::new(metadata_dir.path()));
+    let repo = HttpRepository::new(instance.instance.tuf_url())?;
+    let mut updater = Updater::new(repo, instance.instance.tuf_root())?
+        .with_store(FileStore::new(metadata_dir.path()));
     updater.refresh(now).await?;
 
     // Read the freshest verified root.json verbatim, to keep the embedded file
@@ -117,8 +110,11 @@ async fn update_instance(instance: &Instance) -> Result<bool, Box<dyn std::error
 
     // Sanity check: the downloaded root.json must bootstrap on its own (it has
     // to be correctly self-signed to its `root` threshold).
-    Updater::new(HttpRepository::new(instance.url)?, &latest_root)
-        .map_err(|e| format!("downloaded root.json failed verification: {e}"))?;
+    Updater::new(
+        HttpRepository::new(instance.instance.tuf_url())?,
+        &latest_root,
+    )
+    .map_err(|e| format!("downloaded root.json failed verification: {e}"))?;
 
     let mut changed = write_if_changed(&crate_dir.join(instance.root_path), &latest_root)?;
 

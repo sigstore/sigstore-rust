@@ -99,7 +99,6 @@ pub use trusted_root::{
 
 #[cfg(feature = "tuf")]
 pub use tuf::{
-    fetch_trust_material, fetch_trust_material_at, TufBootstrap, TufConfig, DEFAULT_TUF_URL,
-    GITHUB_TUF_ROOT, GITHUB_TUF_URL, PRODUCTION_TUF_ROOT, SIGNING_CONFIG_TARGET, STAGING_TUF_ROOT,
-    STAGING_TUF_URL, TRUSTED_ROOT_TARGET,
+    fetch_trust_material, fetch_trust_material_at, TufBootstrap, TufConfig, SIGNING_CONFIG_TARGET,
+    TRUSTED_ROOT_TARGET,
 };
