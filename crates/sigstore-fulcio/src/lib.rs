@@ -14,7 +14,7 @@
 //! use sigstore_fulcio::FulcioClient;
 //!
 //! # async fn example() -> Result<(), sigstore_fulcio::Error> {
-//! let client = FulcioClient::public();
+//! let client = FulcioClient::new("https://fulcio.sigstore.dev")?;
 //! let config = client.get_configuration().await?;
 //! println!("Supported issuers: {:?}", config.issuers);
 //! # Ok(())
@@ -30,14 +30,16 @@
 //! let cache = FileSystemCache::default_location()?;
 //! let client = FulcioClient::builder("https://fulcio.sigstore.dev")
 //!     .with_cache(cache)
-//!     .build();
+//!     .build()?;
 //! ```
 
 pub mod client;
 pub mod error;
 
 pub use client::{
-    Configuration, FulcioClient, FulcioClientBuilder, IssuerUrl, OIDCIssuer, SigningCertificate,
+    Configuration, FulcioClient, FulcioClientBuilder, IssuerUrl, OidcIssuer, SigningCertificate,
     TrustBundle,
 };
 pub use error::{Error, Result};
+/// The HTTP client crate used by [`FulcioClientBuilder::with_http_client`].
+pub use reqwest;

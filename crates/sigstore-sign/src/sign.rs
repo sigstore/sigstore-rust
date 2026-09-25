@@ -487,16 +487,14 @@ impl Signer {
     /// Returns the leaf certificate as DerCertificate.
     async fn request_certificate(&self, key_pair: &KeyPair) -> Result<DerCertificate> {
         // Create Fulcio client and request certificate
-        let fulcio = FulcioClient::new(&self.fulcio_url);
+        let fulcio = FulcioClient::new(&self.fulcio_url)?;
         let cert_response = fulcio
             .create_signing_certificate(&self.identity_token, key_pair)
             .await
             .map_err(|e| Error::Signing(format!("Failed to get certificate from Fulcio: {}", e)))?;
 
         // Get the leaf certificate (v0.3 bundles use single cert, not chain)
-        cert_response
-            .leaf_certificate()
-            .map_err(|e| Error::Signing(format!("Failed to get certificate: {}", e)))
+        Ok(cert_response.leaf_certificate().clone())
     }
 
     /// Create a Rekor entry for the signed artifact

@@ -1,4 +1,4 @@
-use sigstore_fulcio::{Error, FulcioClient};
+use sigstore_fulcio::{reqwest, Error, FulcioClient};
 use std::time::Duration;
 use tokio::{io::AsyncWriteExt, net::TcpListener, time::timeout};
 
@@ -18,9 +18,14 @@ async fn request_timeout_covers_stalled_headers_and_body() {
             std::future::pending::<()>().await;
             drop(stream);
         });
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
         let client = FulcioClient::builder(url)
-            .with_timeout(Duration::from_millis(100))
-            .build();
+            .with_http_client(http)
+            .build()
+            .unwrap();
         let result = timeout(Duration::from_secs(3), client.get_configuration()).await;
         server.abort();
         assert!(matches!(result.expect("request hung"), Err(Error::Http(_))));
