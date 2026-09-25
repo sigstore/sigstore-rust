@@ -8,16 +8,14 @@ use sigstore_bundle::BundleV03;
 use sigstore_crypto::{
     hash_async_reader, hash_reader_yielding, hash_yielding, KeyPair, Sha256Hasher, SigningScheme,
 };
+use sigstore_fulcio::reqwest;
 use sigstore_fulcio::FulcioClient;
-use sigstore_oidc::IdentityToken;
+use sigstore_oidc::{DefaultAuthCallback, IdentityToken, OAuthClient, OAuthConfig};
 use sigstore_rekor::{
     DsseEntry, HashedRekord, HashedRekordV2, RekorApiVersion, RekorClient, RekorV2Client,
     RekorV2KeyDetails,
 };
-use sigstore_trust_root::{
-    ServiceSelector, SigningConfig as TufSigningConfig, SIGSTORE_PRODUCTION_SIGNING_CONFIG,
-    SIGSTORE_STAGING_SIGNING_CONFIG,
-};
+use sigstore_trust_root::{ServiceSelector, SigningConfig as TufSigningConfig, SigstoreInstance};
 use sigstore_tsa::TimestampClient;
 use sigstore_types::{
     Artifact, Bundle, DerCertificate, DsseEnvelope, DsseSignature, HashAlgorithm, KeyId,
@@ -69,60 +67,99 @@ async fn prepare_dsse_payload_yielding(
     (PayloadBytes::new(prepared.payload), prepared.hasher)
 }
 
-/// Configuration for signing operations
-#[derive(Debug, Clone)]
-pub struct SigningConfig {
-    /// Fulcio URL
-    pub fulcio_url: String,
-    /// Rekor URL
-    pub rekor_url: String,
-    /// TSA URL. Optional for Rekor v1 and required for Rekor v2.
-    pub tsa_url: Option<String>,
-    /// Signing scheme to use
-    pub signing_scheme: SigningScheme,
-    /// Rekor API version to use (defaults to v1).
-    pub rekor_api_version: RekorApiVersion,
-    /// OIDC provider URL (optional)
-    pub oidc_url: Option<String>,
+/// The services a signer submits to: Fulcio, Rekor and optionally a TSA,
+/// plus the OIDC provider used to authenticate.
+///
+/// Build it from an instance's signing config (fetched through TUF or
+/// embedded) or from explicit URLs. There is deliberately no default: the
+/// caller always chooses the instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SigningServices {
+    fulcio_url: String,
+    rekor_url: String,
+    rekor_api_version: RekorApiVersion,
+    tsa_url: Option<String>,
+    oidc_url: Option<String>,
+    signing_scheme: SigningScheme,
 }
 
-impl Default for SigningConfig {
-    fn default() -> Self {
-        let rekor_api_version = RekorApiVersion::default();
+impl SigningServices {
+    /// Submit to explicitly chosen Fulcio and Rekor v1 services, without a TSA
+    /// or OIDC provider. Use the `with_*` methods to change either.
+    pub fn new(fulcio_url: impl Into<String>, rekor_url: impl Into<String>) -> Self {
         Self {
-            fulcio_url: "https://fulcio.sigstore.dev".to_string(),
-            rekor_url: "https://rekor.sigstore.dev".to_string(),
-            tsa_url: Some("https://timestamp.sigstore.dev/api/v1/timestamp".to_string()),
+            fulcio_url: fulcio_url.into(),
+            rekor_url: rekor_url.into(),
+            rekor_api_version: RekorApiVersion::V1,
+            tsa_url: None,
+            oidc_url: None,
             signing_scheme: SigningScheme::EcdsaP256Sha256,
-            rekor_api_version,
-            oidc_url: Some("https://oauth2.sigstore.dev/auth".to_string()),
         }
     }
-}
 
-impl SigningConfig {
-    /// Create configuration for Sigstore public-good instance
+    /// The services from a well-known instance's embedded signing config.
     ///
-    /// This uses the embedded signing config to get the best available endpoints.
-    /// For the most up-to-date endpoints, use `from_tuf_config()` with a TUF-fetched config.
-    pub fn production() -> Self {
-        Self::from_tuf_config(
-            &TufSigningConfig::from_json(SIGSTORE_PRODUCTION_SIGNING_CONFIG)
-                .expect("Failed to parse embedded production config"),
-        )
-        .expect("Failed to find required endpoints in embedded production config")
+    /// Embedded snapshots go stale as instances add or retire services;
+    /// prefer [`SigningContext::for_instance`], which fetches the current
+    /// signing config through TUF.
+    pub fn embedded(instance: SigstoreInstance) -> Result<Self> {
+        let config = instance
+            .embedded_signing_config()?
+            .ok_or_else(|| Error::Config(format!("{instance:?} publishes no signing config")))?;
+        Self::from_tuf_config(&config)
     }
 
-    /// Create configuration for Sigstore staging instance
+    /// Submit to this Rekor log, which speaks the given API version.
     ///
-    /// This uses the embedded signing config to get the best available endpoints.
-    /// For the most up-to-date endpoints, use `from_tuf_config()` with a TUF-fetched config.
-    pub fn staging() -> Self {
-        Self::from_tuf_config(
-            &TufSigningConfig::from_json(SIGSTORE_STAGING_SIGNING_CONFIG)
-                .expect("Failed to parse embedded staging config"),
-        )
-        .expect("Failed to find required endpoints in embedded staging config")
+    /// URL and version are set together: v1 and v2 logs are separate
+    /// services, so changing only the version would point at the wrong log.
+    pub fn with_rekor(mut self, rekor_url: impl Into<String>, version: RekorApiVersion) -> Self {
+        self.rekor_url = rekor_url.into();
+        self.rekor_api_version = version;
+        self
+    }
+
+    /// Request an RFC 3161 timestamp from this TSA (required for Rekor v2).
+    pub fn with_tsa_url(mut self, tsa_url: impl Into<String>) -> Self {
+        self.tsa_url = Some(tsa_url.into());
+        self
+    }
+
+    /// Authenticate against this OIDC provider (see
+    /// [`SigningContext::authenticate`]).
+    pub fn with_oidc_url(mut self, oidc_url: impl Into<String>) -> Self {
+        self.oidc_url = Some(oidc_url.into());
+        self
+    }
+
+    /// The Fulcio URL.
+    pub fn fulcio_url(&self) -> &str {
+        &self.fulcio_url
+    }
+
+    /// The Rekor URL.
+    pub fn rekor_url(&self) -> &str {
+        &self.rekor_url
+    }
+
+    /// The Rekor API version used with [`Self::rekor_url`].
+    pub fn rekor_api_version(&self) -> RekorApiVersion {
+        self.rekor_api_version
+    }
+
+    /// The TSA URL, if timestamps are requested.
+    pub fn tsa_url(&self) -> Option<&str> {
+        self.tsa_url.as_deref()
+    }
+
+    /// The OIDC provider URL, if one is configured.
+    pub fn oidc_url(&self) -> Option<&str> {
+        self.oidc_url.as_deref()
+    }
+
+    /// The signing scheme (currently always ECDSA P-256 with SHA-256).
+    pub fn signing_scheme(&self) -> SigningScheme {
+        self.signing_scheme
     }
 
     /// Create configuration from a TUF signing config
@@ -288,58 +325,124 @@ fn validate_configuration(
     Ok(())
 }
 
-/// Context for signing operations
+/// Entry point for signing: the services to use and how to reach them.
+///
+/// ```no_run
+/// # #[cfg(feature = "tuf")]
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// use sigstore_sign::SigningContext;
+///
+/// // Fetch the current public-good signing config through TUF and
+/// // authenticate with its OIDC provider.
+/// let signer = SigningContext::production().await?.authenticate().await?;
+/// let bundle = signer.sign(b"hello world").await?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone)]
 pub struct SigningContext {
-    /// Configuration
-    config: SigningConfig,
+    services: SigningServices,
+    http_client: Option<reqwest::Client>,
 }
 
 impl SigningContext {
-    /// Create a new signing context with default configuration
-    pub fn new() -> Self {
-        Self::with_config(SigningConfig::default())
+    /// Sign with explicitly chosen services.
+    pub fn new(services: SigningServices) -> Self {
+        Self {
+            services,
+            http_client: None,
+        }
     }
 
-    /// Create a new signing context with custom configuration
-    pub fn with_config(config: SigningConfig) -> Self {
-        Self { config }
+    /// Sign with a well-known instance, using its current signing config
+    /// fetched and verified through TUF.
+    #[cfg(feature = "tuf")]
+    pub async fn for_instance(instance: SigstoreInstance) -> Result<Self> {
+        Self::from_tuf(instance.tuf_config()).await
     }
 
-    /// Create a signing context for the public-good instance
-    pub fn production() -> Self {
-        Self::with_config(SigningConfig::production())
+    /// Sign with the public-good instance (signing config fetched through TUF).
+    #[cfg(feature = "tuf")]
+    pub async fn production() -> Result<Self> {
+        Self::for_instance(SigstoreInstance::PublicGood).await
     }
 
-    /// Create a signing context for the staging instance
-    pub fn staging() -> Self {
-        Self::with_config(SigningConfig::staging())
+    /// Sign with the staging instance (signing config fetched through TUF).
+    #[cfg(feature = "tuf")]
+    pub async fn staging() -> Result<Self> {
+        Self::for_instance(SigstoreInstance::Staging).await
     }
 
-    /// Get the configuration
-    pub fn config(&self) -> &SigningConfig {
-        &self.config
+    /// Sign with the instance a TUF configuration points to, for example a
+    /// custom instance or one fetched through a caller-configured HTTP client
+    /// ([`TufConfig::with_http_client`](sigstore_trust_root::TufConfig::with_http_client)).
+    #[cfg(feature = "tuf")]
+    pub async fn from_tuf(config: sigstore_trust_root::TufConfig) -> Result<Self> {
+        let signing_config = TufSigningConfig::from_tuf(config).await?;
+        Ok(Self::new(SigningServices::from_tuf_config(
+            &signing_config,
+        )?))
     }
 
-    /// Create a signer with the given identity token
+    /// Sign with a well-known instance's embedded signing config snapshot,
+    /// without network access to TUF. See [`SigningServices::embedded`].
+    pub fn from_embedded(instance: SigstoreInstance) -> Result<Self> {
+        Ok(Self::new(SigningServices::embedded(instance)?))
+    }
+
+    /// Talk to Fulcio, Rekor, the TSA and the OIDC provider through a
+    /// caller-configured HTTP client (timeouts, proxies, TLS roots, user
+    /// agent). Without one, each service client uses its own default.
+    pub fn with_http_client(mut self, client: reqwest::Client) -> Self {
+        self.http_client = Some(client);
+        self
+    }
+
+    /// The services signatures are submitted to.
+    pub fn services(&self) -> &SigningServices {
+        &self.services
+    }
+
+    /// Create a signer for an identity token obtained elsewhere (for example
+    /// an ambient CI token, see
+    /// [`IdentityToken::detect_ambient`](sigstore_oidc::IdentityToken::detect_ambient)).
     pub fn signer(&self, identity_token: IdentityToken) -> Signer {
         Signer {
             identity_token,
-            signing_scheme: self.config.signing_scheme,
-            fulcio_url: self.config.fulcio_url.clone(),
-            rekor_url: self.config.rekor_url.clone(),
-            tsa_url: self.config.tsa_url.clone(),
-            rekor_api_version: self.config.rekor_api_version,
+            signing_scheme: self.services.signing_scheme,
+            fulcio_url: self.services.fulcio_url.clone(),
+            rekor_url: self.services.rekor_url.clone(),
+            tsa_url: self.services.tsa_url.clone(),
+            rekor_api_version: self.services.rekor_api_version,
+            http_client: self.http_client.clone(),
         }
     }
-}
 
-impl Default for SigningContext {
-    fn default() -> Self {
-        Self::new()
+    /// Authenticate interactively with the configured OIDC provider and
+    /// create a signer for the resulting identity.
+    ///
+    /// Opens a browser (with the `browser` feature) or prompts for an
+    /// out-of-band code, using
+    /// [`DefaultAuthCallback`](sigstore_oidc::DefaultAuthCallback).
+    pub async fn authenticate(&self) -> Result<Signer> {
+        let oidc_url = self
+            .services
+            .oidc_url()
+            .ok_or_else(|| Error::Config("no OIDC provider is configured".to_string()))?;
+        let config = OAuthConfig::dex(oidc_url);
+        let client = match &self.http_client {
+            Some(http) => OAuthClient::with_http_client(config, http.clone()),
+            None => OAuthClient::new(config)?,
+        };
+        let token = client.auth(DefaultAuthCallback).await?;
+        Ok(self.signer(token))
     }
 }
 
 /// A signer for creating Sigstore signatures
+///
+/// Its `Debug` output does not include the identity token.
+#[derive(Debug, Clone)]
 pub struct Signer {
     identity_token: IdentityToken,
     signing_scheme: SigningScheme,
@@ -347,9 +450,43 @@ pub struct Signer {
     rekor_url: String,
     tsa_url: Option<String>,
     rekor_api_version: RekorApiVersion,
+    http_client: Option<reqwest::Client>,
 }
 
 impl Signer {
+    fn fulcio_client(&self) -> Result<FulcioClient> {
+        let mut builder = FulcioClient::builder(&self.fulcio_url);
+        if let Some(http) = &self.http_client {
+            builder = builder.with_http_client(http.clone());
+        }
+        Ok(builder.build()?)
+    }
+
+    fn rekor_client(&self) -> Result<RekorClient> {
+        let mut builder = RekorClient::builder(&self.rekor_url);
+        if let Some(http) = &self.http_client {
+            builder = builder.with_http_client(http.clone());
+        }
+        Ok(builder.build()?)
+    }
+
+    fn rekor_v2_client(&self) -> Result<RekorV2Client> {
+        Ok(match &self.http_client {
+            Some(http) => RekorV2Client::with_http_client(&self.rekor_url, http.clone()),
+            None => RekorV2Client::new(&self.rekor_url)?,
+        })
+    }
+
+    fn tsa_client(&self, tsa_url: &str) -> Result<TimestampClient> {
+        let mut builder = TimestampClient::builder(tsa_url);
+        if let Some(http) = &self.http_client {
+            builder = builder.with_http_client(http.clone());
+        }
+        builder
+            .build()
+            .map_err(|e| Error::Signing(format!("Failed to create TSA client: {}", e)))
+    }
+
     /// Sign an artifact and return a Sigstore bundle (hashedrekord format)
     ///
     /// This creates a hashedrekord bundle that includes a signature over the artifact.
@@ -376,7 +513,7 @@ impl Signer {
     /// use sigstore_oidc::IdentityToken;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let context = SigningContext::production();
+    /// let context = SigningContext::from_embedded(sigstore_sign::SigstoreInstance::PublicGood)?;
     /// let token = IdentityToken::from_jwt("header.payload.signature")?;
     /// let signer = context.signer(token);
     /// let artifact = b"hello world";
@@ -490,7 +627,7 @@ impl Signer {
     /// Returns the leaf certificate as DerCertificate.
     async fn request_certificate(&self, key_pair: &KeyPair) -> Result<DerCertificate> {
         // Create Fulcio client and request certificate
-        let fulcio = FulcioClient::new(&self.fulcio_url)?;
+        let fulcio = self.fulcio_client()?;
         let cert_response = fulcio
             .create_signing_certificate(&self.identity_token, key_pair)
             .await
@@ -509,7 +646,7 @@ impl Signer {
     ) -> Result<TransparencyLogEntry> {
         match self.rekor_api_version {
             RekorApiVersion::V1 => {
-                let rekor = RekorClient::new(&self.rekor_url)?;
+                let rekor = self.rekor_client()?;
                 let request = HashedRekord::new(artifact_hash, signature, certificate);
                 let entry = rekor
                     .create_entry(request)
@@ -520,7 +657,7 @@ impl Signer {
                     .map_err(|e| Error::Signing(format!("invalid Rekor response: {e}")))
             }
             RekorApiVersion::V2 => {
-                let rekor = RekorV2Client::new(&self.rekor_url)?;
+                let rekor = self.rekor_v2_client()?;
                 let request = HashedRekordV2::new_with_certificate(
                     artifact_hash,
                     signature,
@@ -544,8 +681,7 @@ impl Signer {
         tsa_url: &str,
         signature: &SignatureBytes,
     ) -> Result<TimestampToken> {
-        let tsa = TimestampClient::new(tsa_url)
-            .map_err(|e| Error::Signing(format!("Failed to create TSA client: {}", e)))?;
+        let tsa = self.tsa_client(tsa_url)?;
         tsa.timestamp_signature(signature)
             .await
             .map_err(|e| Error::Signing(format!("Failed to get timestamp: {}", e)))
@@ -565,7 +701,7 @@ impl Signer {
     /// use sigstore_types::Sha256Hash;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let context = SigningContext::production();
+    /// let context = SigningContext::from_embedded(sigstore_sign::SigstoreInstance::PublicGood)?;
     /// let token = IdentityToken::from_jwt("header.payload.signature")?;
     /// let signer = context.signer(token);
     ///
@@ -659,7 +795,7 @@ impl Signer {
     ) -> Result<TransparencyLogEntry> {
         match self.rekor_api_version {
             RekorApiVersion::V1 => {
-                let rekor = RekorClient::new(&self.rekor_url)?;
+                let rekor = self.rekor_client()?;
                 let request = DsseEntry::new(envelope, certificate);
                 let entry = rekor.create_dsse_entry(request).await.map_err(|e| {
                     Error::Signing(format!("Failed to create DSSE Rekor entry: {e}"))
@@ -669,7 +805,7 @@ impl Signer {
                     .map_err(|e| Error::Signing(format!("invalid Rekor response: {e}")))
             }
             RekorApiVersion::V2 => {
-                let rekor = RekorV2Client::new(&self.rekor_url)?;
+                let rekor = self.rekor_v2_client()?;
                 let hash = sha256_pae_yielding(&envelope.payload_type, envelope.payload.as_bytes())
                     .await
                     .finalize();
@@ -746,7 +882,7 @@ pub struct Attestation {
 
 /// A subject in an attestation
 #[derive(Debug, Clone)]
-pub struct AttestationSubject {
+struct AttestationSubject {
     /// Name of the artifact
     pub name: String,
     /// SHA-256 digest of the artifact
@@ -795,20 +931,26 @@ impl Attestation {
     }
 }
 
-/// Convenience function to create a signing context
-pub fn sign_context() -> SigningContext {
-    SigningContext::production()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sigstore_trust_root::{
+        SIGSTORE_PRODUCTION_SIGNING_CONFIG, SIGSTORE_STAGING_SIGNING_CONFIG,
+    };
 
     #[test]
-    fn test_signing_config_default() {
-        let config = SigningConfig::default();
-        assert!(config.fulcio_url.contains("sigstore.dev"));
-        assert!(config.rekor_url.contains("sigstore.dev"));
+    fn embedded_services_come_from_the_instance() {
+        let production = SigningServices::embedded(SigstoreInstance::PublicGood).unwrap();
+        assert_eq!(production.fulcio_url(), "https://fulcio.sigstore.dev");
+        assert!(production.tsa_url().is_some() && production.oidc_url().is_some());
+        let staging = SigningServices::embedded(SigstoreInstance::Staging).unwrap();
+        assert!(staging.fulcio_url().contains("sigstage.dev"));
+        assert!(SigningServices::embedded(SigstoreInstance::GitHub).is_err());
+
+        let explicit = SigningServices::new("https://fulcio.example", "https://rekor.example");
+        assert_eq!(explicit.rekor_api_version(), RekorApiVersion::V1);
+        assert_eq!(explicit.tsa_url(), None);
+        assert_eq!(explicit.oidc_url(), None);
     }
 
     #[test]
@@ -836,7 +978,7 @@ mod tests {
                 requirement.count = count;
                 // Neither conversion entry point may discard the requirement.
                 for version in [None, Some(RekorApiVersion::V1)] {
-                    let result = SigningConfig::from_tuf_config_with_rekor_version(&tuf, version);
+                    let result = SigningServices::from_tuf_config_with_rekor_version(&tuf, version);
                     assert_eq!(
                         result.is_ok(),
                         count == Some(1),
@@ -847,7 +989,7 @@ mod tests {
                     }
                 }
                 assert_eq!(
-                    SigningConfig::from_tuf_config(&tuf).is_ok(),
+                    SigningServices::from_tuf_config(&tuf).is_ok(),
                     count == Some(1)
                 );
             }
@@ -873,7 +1015,7 @@ mod tests {
                     second.operator = Some(operator.into());
                     endpoints.push(second);
                 }
-                SigningConfig::from_tuf_config(&tuf)
+                SigningServices::from_tuf_config(&tuf)
             };
 
             // ALL is satisfiable by one submission when a single operator runs
@@ -928,7 +1070,7 @@ mod tests {
                             }
                         }
                     }
-                    let error = SigningConfig::from_tuf_config(&tuf).unwrap_err();
+                    let error = SigningServices::from_tuf_config(&tuf).unwrap_err();
                     assert!(matches!(error, Error::Config(message)
                         if message.contains(if tsa { "TSA" } else { "Rekor" })));
                 }
@@ -938,10 +1080,8 @@ mod tests {
 
     #[test]
     fn rekor_v2_requires_a_timestamp_authority() {
-        let mut config = SigningConfig {
-            rekor_api_version: RekorApiVersion::V2,
-            ..Default::default()
-        };
+        let mut config = SigningServices::new("https://fulcio.example", "https://rekor.example")
+            .with_rekor("https://rekor-v2.example", RekorApiVersion::V2);
         config.tsa_url = None;
         let error = config.validate().unwrap_err();
         assert!(error
@@ -956,16 +1096,20 @@ mod tests {
     fn forced_rekor_version_keeps_tuf_selected_instance() {
         let staging = TufSigningConfig::from_json(SIGSTORE_STAGING_SIGNING_CONFIG).unwrap();
 
-        let v2 =
-            SigningConfig::from_tuf_config_with_rekor_version(&staging, Some(RekorApiVersion::V2))
-                .unwrap();
+        let v2 = SigningServices::from_tuf_config_with_rekor_version(
+            &staging,
+            Some(RekorApiVersion::V2),
+        )
+        .unwrap();
         assert_eq!(v2.rekor_api_version, RekorApiVersion::V2);
         assert!(v2.rekor_url.contains("sigstage.dev"), "{}", v2.rekor_url);
         assert_ne!(v2.rekor_url, "https://log2025-1.rekor.sigstore.dev");
 
-        let v1 =
-            SigningConfig::from_tuf_config_with_rekor_version(&staging, Some(RekorApiVersion::V1))
-                .unwrap();
+        let v1 = SigningServices::from_tuf_config_with_rekor_version(
+            &staging,
+            Some(RekorApiVersion::V1),
+        )
+        .unwrap();
         assert_eq!(v1.rekor_api_version, RekorApiVersion::V1);
         assert_eq!(v1.rekor_url, "https://rekor.sigstage.dev");
     }
@@ -987,12 +1131,12 @@ mod tests {
         .unwrap();
 
         let v1 =
-            SigningConfig::from_tuf_config_with_rekor_version(&custom, Some(RekorApiVersion::V1))
+            SigningServices::from_tuf_config_with_rekor_version(&custom, Some(RekorApiVersion::V1))
                 .unwrap();
         assert_eq!(v1.rekor_url, "https://rekor.example");
 
         let error =
-            SigningConfig::from_tuf_config_with_rekor_version(&custom, Some(RekorApiVersion::V2))
+            SigningServices::from_tuf_config_with_rekor_version(&custom, Some(RekorApiVersion::V2))
                 .unwrap_err();
         assert!(
             error.to_string().contains("No Rekor V2 endpoint"),
@@ -1008,12 +1152,11 @@ mod tests {
             base64::engine::general_purpose::URL_SAFE_NO_PAD
                 .encode(br#"{"iss":"test","sub":"test","exp":9999999999}"#)
         );
-        let config = SigningConfig {
+        let config = SigningServices {
             signing_scheme: SigningScheme::Ed25519,
-            ..Default::default()
+            ..SigningServices::new("https://fulcio.example", "https://rekor.example")
         };
-        let signer =
-            SigningContext::with_config(config).signer(IdentityToken::from_jwt(&jwt).unwrap());
+        let signer = SigningContext::new(config).signer(IdentityToken::from_jwt(&jwt).unwrap());
         let mut reader = std::io::Cursor::new(b"do not read");
         assert!(signer
             .sign_reader(&mut reader)
@@ -1026,9 +1169,15 @@ mod tests {
 
     #[test]
     fn test_signing_context_creation() {
-        let _context = SigningContext::new();
-        let _prod = SigningContext::production();
-        let _staging = SigningContext::staging();
+        let context = SigningContext::from_embedded(SigstoreInstance::PublicGood).unwrap();
+        assert!(format!("{:?}", context.signer(test_token())).contains("Signer"));
+    }
+
+    fn test_token() -> IdentityToken {
+        use base64::Engine;
+        let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(br#"{"iss":"test","sub":"test","exp":9999999999}"#);
+        IdentityToken::from_jwt(&format!("header.{claims}.signature")).unwrap()
     }
 
     #[tokio::test]

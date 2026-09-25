@@ -27,24 +27,23 @@ This crate provides high-level APIs for creating Sigstore signatures. It orchest
 ## Usage
 
 ```rust
-use sigstore_sign::{SigningContext, Attestation, AttestationSubject};
-use sigstore_oidc::IdentityToken;
+use sigstore_sign::{Attestation, SigningContext};
 use sigstore_types::Sha256Hash;
 
-// Create a signing context for production
-let context = SigningContext::production();
+// Fetch the public-good signing config through TUF and authenticate with its
+// OIDC provider (browser with the `browser` feature, otherwise a pasted code)
+let signer = SigningContext::production().await?.authenticate().await?;
 
-// Get an identity token (from OIDC provider)
-let token = IdentityToken::new("your-identity-token".to_string());
-
-// Create a signer
-let signer = context.signer(token);
+// Or use an identity token obtained elsewhere, e.g. ambient CI credentials
+let token = sigstore_oidc::IdentityToken::detect_ambient()
+    .await?
+    .ok_or("no ambient credentials")?;
+let signer = SigningContext::production().await?.signer(token);
 
 // Sign artifact bytes
-let artifact = b"hello world";
-let bundle = signer.sign(artifact).await?;
+let bundle = signer.sign(b"hello world").await?;
 
-// Or sign with a pre-computed digest (for large files)
+// Or sign a pre-computed digest (for large files)
 let digest = Sha256Hash::from_hex("b94d27b9...")?;
 let bundle = signer.sign(digest).await?;
 
@@ -56,10 +55,11 @@ let bundle = signer.sign_reader(file).await?;
 let bundle = signer.sign_async_reader(async_reader).await?;
 
 // Sign an in-toto attestation (DSSE envelope)
-let subject = AttestationSubject::new("artifact.tar.gz", digest);
-let attestation = Attestation::new("https://slsa.dev/provenance/v1")
-    .with_subject(subject)
-    .with_predicate(serde_json::json!({"key": "value"}));
+let attestation = Attestation::new(
+    "https://slsa.dev/provenance/v1",
+    serde_json::json!({"key": "value"}),
+)
+.add_subject("artifact.tar.gz", digest);
 let bundle = signer.sign_attestation(attestation).await?;
 
 // Write bundle to file
@@ -69,13 +69,22 @@ std::fs::write("artifact.sigstore.json", bundle.to_json_pretty()?)?;
 ## Configuration
 
 ```rust
-use sigstore_sign::SigningContext;
+use sigstore_sign::{reqwest, SigningContext, SigningServices, SigstoreInstance};
 
-// Production environment
-let context = SigningContext::production();
+// Well-known instances, with signing configs fetched through TUF
+let context = SigningContext::staging().await?;
+let context = SigningContext::for_instance(SigstoreInstance::PublicGood).await?;
 
-// Staging environment
-let context = SigningContext::staging();
+// The embedded snapshot, without contacting TUF (may be stale)
+let context = SigningContext::from_embedded(SigstoreInstance::PublicGood)?;
+
+// Explicit services
+let services = SigningServices::new("https://fulcio.example", "https://rekor.example")
+    .with_tsa_url("https://tsa.example/api/v1/timestamp")
+    .with_oidc_url("https://oidc.example/auth");
+let context = SigningContext::new(services)
+    // Timeouts, proxies and TLS settings are configured on the HTTP client
+    .with_http_client(reqwest::Client::builder().build()?);
 ```
 
 For Tokio files/streams, enable `tokio-util`'s `compat` feature and call

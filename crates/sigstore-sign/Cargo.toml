@@ -27,7 +27,7 @@ hex = { workspace = true }
 sigstore-trust-root = { workspace = true, features = ["tuf"] }
 
 [features]
-default = ["rustls", "browser"]
+default = ["rustls", "browser", "tuf"]
 rustls = [
   "sigstore-rekor/rustls",
   "sigstore-fulcio/rustls",
@@ -44,3 +44,5 @@ native-tls = [
 ]
 # Enable automatic browser opening for authentication
 browser = ["sigstore-oidc/browser"]
+# Fetch signing configs through TUF (SigningContext::production and friends)
+tuf = ["sigstore-trust-root/tuf"]

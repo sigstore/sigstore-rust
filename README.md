@@ -66,13 +66,11 @@ verifier.verify(artifact_bytes, &bundle, &policy)?;
 ### Signing an Artifact
 
 ```rust
-use sigstore_sign::{SigningContext, SigningConfig};
+use sigstore_sign::SigningContext;
 
-let endpoints = sigstore_trust_root::SigningConfig::production().await?;
-let config = SigningConfig::from_tuf_config(&endpoints)?;
-let oidc_url = config.oidc_url.as_deref().ok_or("signing config lists no OIDC provider")?;
-let token = sigstore_oidc::get_identity_token(oidc_url).await?;
-let signer = SigningContext::with_config(config).signer(token);
+// Fetch the public-good signing config through TUF and authenticate with its
+// OIDC provider. Use `.signer(token)` instead to supply a token yourself.
+let signer = SigningContext::production().await?.authenticate().await?;
 
 // Sign the artifact - returns a Sigstore bundle
 let bundle = signer.sign(artifact_bytes).await?;
