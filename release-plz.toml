@@ -5,3 +5,7 @@ git_release_enable = true
 # Use conventional commit parsing for changelogs
 changelog_update = true
 
+
+# sigstore-tuf and sigstore-cache stay on 0.x while the other crates move to
+# 1.0: they carry their own `version` instead of `version.workspace`, so they
+# are versioned independently. No 1.0 crate may expose their types publicly.
