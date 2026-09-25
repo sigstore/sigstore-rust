@@ -6,7 +6,7 @@
 //! This binary implements the conformance test protocol for Sigstore clients.
 
 use sigstore_oidc::IdentityToken;
-use sigstore_sign::{SigningConfig as SignerSigningConfig, SigningContext};
+use sigstore_sign::{SigningContext, SigningServices};
 use sigstore_trust_root::{SigningConfig as TufSigningConfig, SigstoreInstance, TrustedRoot};
 use sigstore_types::{Bundle, Sha256Hash};
 use sigstore_verify::{verify, PublicKeyVerificationPolicy, VerificationPolicy};
@@ -115,16 +115,16 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     let bundle_path = bundle_path.ok_or("Missing required --bundle")?;
     let artifact_path = artifact_path.ok_or("Missing artifact path")?;
 
-    let signing_config = if let Some(config_path) = &_signing_config {
+    let signing_services = if let Some(config_path) = &_signing_config {
         let tuf_config = TufSigningConfig::from_file(config_path)?;
-        SignerSigningConfig::from_tuf_config(&tuf_config)?
+        SigningServices::from_tuf_config(&tuf_config)?
     } else if staging {
-        SignerSigningConfig::staging()
+        SigningServices::embedded(SigstoreInstance::Staging)?
     } else {
-        SignerSigningConfig::production()
+        SigningServices::embedded(SigstoreInstance::PublicGood)?
     };
 
-    let context = SigningContext::with_config(signing_config);
+    let context = SigningContext::new(signing_services);
     let identity_token = IdentityToken::from_jwt(&identity_token_str)?;
     let signer = context.signer(identity_token);
 

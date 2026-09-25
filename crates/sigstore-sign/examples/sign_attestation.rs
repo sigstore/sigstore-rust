@@ -40,7 +40,7 @@
 //! ```
 
 use sigstore_oidc::{get_identity_token, IdentityToken};
-use sigstore_sign::{Attestation, SigningConfig, SigningContext};
+use sigstore_sign::{Attestation, SigningContext, SigningServices};
 
 use std::env;
 use std::fs;
@@ -149,17 +149,17 @@ async fn main() {
             .await
             .expect("Failed to fetch production config via TUF")
     };
-    let config = SigningConfig::from_tuf_config(&tuf_config)
+    let config = SigningServices::from_tuf_config(&tuf_config)
         .expect("Missing required endpoints in TUF config");
 
-    println!("  Fulcio URL: {}", config.fulcio_url);
-    println!("  Rekor URL: {}", config.rekor_url);
-    if let Some(ref tsa_url) = config.tsa_url {
+    println!("  Fulcio URL: {}", config.fulcio_url());
+    println!("  Rekor URL: {}", config.rekor_url());
+    if let Some(tsa_url) = config.tsa_url() {
         println!("  TSA URL: {}", tsa_url);
     }
 
     // Get identity token
-    let identity_token = match get_token(token, config.oidc_url.as_deref()).await {
+    let identity_token = match get_token(token, config.oidc_url()).await {
         Ok(t) => t,
         Err(e) => {
             eprintln!("Error obtaining identity token: {}", e);
@@ -191,7 +191,7 @@ async fn main() {
     );
 
     // Create signing context and sign
-    let context = SigningContext::with_config(config);
+    let context = SigningContext::new(config);
     let signer = context.signer(identity_token);
 
     println!("\nSigning attestation...");
