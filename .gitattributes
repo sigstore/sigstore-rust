@@ -1,3 +1,8 @@
 # Preserve line endings in test data files (hashes depend on exact content)
 **/test_data/** binary
 **/fixtures/** binary
+
+# `insta` snapshots are written by `cargo insta`, not by hand: keep them out of
+# the language statistics and collapsed by default when reviewing, and pin their
+# line endings so a checkout that translates them does not fail the suite.
+**/snapshots/*.snap linguist-generated=true text eol=lf

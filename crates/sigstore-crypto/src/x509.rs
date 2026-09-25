@@ -57,9 +57,8 @@ pub struct CertificateInfo {
 /// party should render or match whichever claims are present instead of
 /// branching on the issuer.
 ///
-/// The deprecated extensions `1.3.6.1.4.1.57264.1.2` to `.1.6` are not read.
-/// The claims below supersede them, and unlike them are DER encoded rather than
-/// bare strings. See
+/// The extensions Fulcio has deprecated are read too, into
+/// [`Self::deprecated_github`]. See
 /// <https://github.com/sigstore/fulcio/blob/main/docs/oid-info.md>.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -120,10 +119,65 @@ pub struct FulcioCiClaims {
     /// Providers translate `sub` into the SAN identity and the claims above,
     /// each in their own way; this is what the token itself said, unchanged.
     pub token_subject: Option<String>,
+    /// The GitHub Actions specific claims Fulcio deprecated in favour of the
+    /// provider-neutral ones above.
+    pub deprecated_github: DeprecatedGitHubClaims,
 }
 
 impl FulcioCiClaims {
-    /// Whether the certificate carried no CI claims at all.
+    /// Whether the certificate carried no CI claims at all, deprecated ones
+    /// included.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// The GitHub Actions specific claims from the extensions
+/// `1.3.6.1.4.1.57264.1.2` to `.1.6`, which Fulcio deprecated in favour of the
+/// provider-neutral claims in [`FulcioCiClaims`].
+///
+/// Prefer the successor each field below points at. All but
+/// [`Self::workflow_name`] have one, and a certificate Fulcio issues to a GitHub
+/// Actions workflow today carries both. These are read for the certificates that
+/// predate the provider-neutral arc: such a certificate carries the deprecated
+/// extensions alone, so for that signature they are the only claims there are.
+///
+/// They are kept apart from their successors rather than folded into them
+/// because the values are not interchangeable — [`Self::workflow_repository`] is
+/// `owner/repository` where [`FulcioCiClaims::source_repository_uri`] is a full
+/// URL — and because [`Self::workflow_name`] has no successor at all.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DeprecatedGitHubClaims {
+    /// `.1.2` — the event that triggered the workflow run, e.g. `push`.
+    /// Superseded by [`FulcioCiClaims::build_trigger`], which holds the same
+    /// value.
+    pub workflow_trigger: Option<String>,
+    /// `.1.3` — the commit the workflow run was based on. Superseded by
+    /// [`FulcioCiClaims::source_repository_digest`], which holds the same value.
+    pub workflow_sha: Option<String>,
+    /// `.1.4` — the name of the workflow that ran, e.g. `Package and sign`.
+    ///
+    /// This one has no successor in the provider-neutral arc: it is the
+    /// workflow's display name, whereas
+    /// [`FulcioCiClaims::build_config_uri`] identifies the file the workflow was
+    /// defined in.
+    pub workflow_name: Option<String>,
+    /// `.1.5` — the repository the workflow run was based on, as
+    /// `owner/repository`.
+    ///
+    /// Superseded by [`FulcioCiClaims::source_repository_uri`], which is the
+    /// fully qualified URL of the same repository rather than this short form.
+    pub workflow_repository: Option<String>,
+    /// `.1.6` — the ref the workflow run was based on, e.g. `refs/heads/main`.
+    /// Superseded by [`FulcioCiClaims::source_repository_ref`], which holds the
+    /// same value.
+    pub workflow_ref: Option<String>,
+}
+
+impl DeprecatedGitHubClaims {
+    /// Whether the certificate carried none of the deprecated claims, which is
+    /// the case for any certificate not issued to a GitHub Actions workflow.
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
@@ -267,36 +321,82 @@ pub fn extract_fulcio_ci_claims(cert: &Certificate) -> FulcioCiClaims {
     };
 
     for ext in extensions.iter() {
-        let claim = match fulcio_claim_number(&ext.extn_id) {
-            // `.1.1` and `.1.8` are the OIDC issuer and `.1.2` to `.1.6` are
-            // the deprecated claims the fields below supersede.
-            Some(9) => &mut claims.build_signer_uri,
-            Some(10) => &mut claims.build_signer_digest,
-            Some(11) => &mut claims.runner_environment,
-            Some(12) => &mut claims.source_repository_uri,
-            Some(13) => &mut claims.source_repository_digest,
-            Some(14) => &mut claims.source_repository_ref,
-            Some(15) => &mut claims.source_repository_identifier,
-            Some(16) => &mut claims.source_repository_owner_uri,
-            Some(17) => &mut claims.source_repository_owner_identifier,
-            Some(18) => &mut claims.build_config_uri,
-            Some(19) => &mut claims.build_config_digest,
-            Some(20) => &mut claims.build_trigger,
-            Some(21) => &mut claims.run_invocation_uri,
-            Some(22) => &mut claims.source_repository_visibility_at_signing,
-            Some(23) => &mut claims.deployment_environment,
-            Some(24) => &mut claims.token_subject,
+        let bytes = ext.extn_value.as_bytes();
+
+        // `.1.1` and `.1.8` are the OIDC issuer, which `extract_fulcio_issuer`
+        // reads. The deprecated `.1.2` to `.1.6` hold a bare string, everything
+        // from `.1.9` onwards a DER UTF8String.
+        let (claim, value) = match fulcio_claim_number(&ext.extn_id) {
+            Some(2) => (
+                &mut claims.deprecated_github.workflow_trigger,
+                bare_string(bytes),
+            ),
+            Some(3) => (
+                &mut claims.deprecated_github.workflow_sha,
+                bare_string(bytes),
+            ),
+            Some(4) => (
+                &mut claims.deprecated_github.workflow_name,
+                bare_string(bytes),
+            ),
+            Some(5) => (
+                &mut claims.deprecated_github.workflow_repository,
+                bare_string(bytes),
+            ),
+            Some(6) => (
+                &mut claims.deprecated_github.workflow_ref,
+                bare_string(bytes),
+            ),
+            Some(9) => (&mut claims.build_signer_uri, der_string(bytes)),
+            Some(10) => (&mut claims.build_signer_digest, der_string(bytes)),
+            Some(11) => (&mut claims.runner_environment, der_string(bytes)),
+            Some(12) => (&mut claims.source_repository_uri, der_string(bytes)),
+            Some(13) => (&mut claims.source_repository_digest, der_string(bytes)),
+            Some(14) => (&mut claims.source_repository_ref, der_string(bytes)),
+            Some(15) => (&mut claims.source_repository_identifier, der_string(bytes)),
+            Some(16) => (&mut claims.source_repository_owner_uri, der_string(bytes)),
+            Some(17) => (
+                &mut claims.source_repository_owner_identifier,
+                der_string(bytes),
+            ),
+            Some(18) => (&mut claims.build_config_uri, der_string(bytes)),
+            Some(19) => (&mut claims.build_config_digest, der_string(bytes)),
+            Some(20) => (&mut claims.build_trigger, der_string(bytes)),
+            Some(21) => (&mut claims.run_invocation_uri, der_string(bytes)),
+            Some(22) => (
+                &mut claims.source_repository_visibility_at_signing,
+                der_string(bytes),
+            ),
+            Some(23) => (&mut claims.deployment_environment, der_string(bytes)),
+            Some(24) => (&mut claims.token_subject, der_string(bytes)),
             _ => continue,
         };
 
-        // Every claim in this arc is a DER UTF8String inside the extension's
-        // OCTET STRING.
-        if let Ok(value) = der::asn1::Utf8StringRef::from_der(ext.extn_value.as_bytes()) {
-            *claim = Some(value.as_str().to_owned());
+        if value.is_some() {
+            *claim = value;
         }
     }
 
     claims
+}
+
+/// A claim held as a DER `UTF8String` inside the extension's OCTET STRING, which
+/// is how Fulcio encodes everything from `1.3.6.1.4.1.57264.1.8` onwards.
+fn der_string(bytes: &[u8]) -> Option<String> {
+    der::asn1::Utf8StringRef::from_der(bytes)
+        .ok()
+        .map(|value| value.as_str().to_owned())
+}
+
+/// A claim held as a bare string, which is how Fulcio encodes the deprecated
+/// extensions `1.3.6.1.4.1.57264.1.2` to `.1.6`.
+///
+/// A DER `UTF8String` is accepted too, as it is for the legacy issuer in
+/// [`extract_fulcio_issuer`]: none of these values can begin with the tag byte
+/// that would make the bare form decode as one, so trying it first cannot
+/// misread a claim.
+fn bare_string(bytes: &[u8]) -> Option<String> {
+    der_string(bytes).or_else(|| std::str::from_utf8(bytes).ok().map(str::to_owned))
 }
 
 /// The number identifying a Fulcio extension, if `oid` is a direct child of the
@@ -332,105 +432,107 @@ mod tests {
         parse_certificate_info(der.as_bytes()).expect("the fixture is a valid certificate")
     }
 
+    /// Every claim the GitHub Actions fixture carries, as a snapshot so that a
+    /// claim added to [`FulcioCiClaims`] later shows up here instead of going
+    /// untested until someone remembers to assert it. The individual claims a
+    /// reader has to reason about are asserted by name in the tests below; the
+    /// identity and the issuer are, because a policy matches on them.
     #[test]
     fn test_parse_github_actions_claims() {
         let info = parse(GITHUB_ACTIONS_CERT);
-        let workflow =
-            "https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main";
-        let commit = "193b5bd7d3985809503963ae400594ea16df31cf";
 
-        assert_eq!(info.identity.as_deref(), Some(workflow));
+        assert_eq!(
+            info.identity.as_deref(),
+            Some("https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main")
+        );
         assert_eq!(
             info.issuer.as_deref(),
             Some("https://token.actions.githubusercontent.com")
         );
 
-        let claims = &info.ci_claims;
-        assert!(!claims.is_empty());
-        assert_eq!(claims.build_signer_uri.as_deref(), Some(workflow));
-        assert_eq!(claims.build_signer_digest.as_deref(), Some(commit));
-        assert_eq!(claims.runner_environment.as_deref(), Some("github-hosted"));
+        assert!(!info.ci_claims.is_empty());
+        // The job declared no environment and the certificate predates `.1.24`,
+        // so `deployment_environment` and `token_subject` are absent below.
+        insta::assert_debug_snapshot!(info.ci_claims);
+    }
+
+    /// A job that runs in a deployment environment adds `.1.23`, and `.1.24`
+    /// records the `sub` the certificate was requested with. This fixture is the
+    /// one that covers the arc in full, `.1.2` to `.1.24`, so it is snapshotted
+    /// as well.
+    ///
+    /// The assertion below is the point of the fixture: the SAN identity is the
+    /// workflow ref and says nothing about the environment the job ran in, which
+    /// for GitHub Actions makes the two claims in the snapshot the only place
+    /// `upload` appears at all.
+    #[test]
+    fn test_parse_deployment_environment_claims() {
+        let info = parse(ENVIRONMENT_CERT);
+
+        assert_eq!(
+            info.identity.as_deref(),
+            Some("https://github.com/pavelzw/skill-forge/.github/workflows/package.yml@refs/heads/main")
+        );
+        insta::assert_debug_snapshot!(info.ci_claims);
+    }
+
+    /// The deprecated `.1.2` to `.1.6`, which the fixture carries alongside the
+    /// extensions that superseded them, are read from their own extensions and
+    /// not confused with those: `.1.5` holds `owner/repository` where `.1.12`
+    /// holds the full URL, and the deprecated extensions are bare strings where
+    /// the arc from `.1.8` is DER. Reading both back verbatim shows neither the
+    /// values nor the encodings are mixed up.
+    #[test]
+    fn test_parse_deprecated_github_claims() {
+        let claims = parse(GITHUB_ACTIONS_CERT).ci_claims;
+
+        assert!(!claims.deprecated_github.is_empty());
+        assert_eq!(
+            claims.deprecated_github.workflow_repository.as_deref(),
+            Some("prefix-dev/sigstore-example")
+        );
         assert_eq!(
             claims.source_repository_uri.as_deref(),
             Some("https://github.com/prefix-dev/sigstore-example")
         );
-        assert_eq!(claims.source_repository_digest.as_deref(), Some(commit));
-        assert_eq!(
-            claims.source_repository_ref.as_deref(),
-            Some("refs/heads/main")
-        );
-        assert_eq!(
-            claims.source_repository_identifier.as_deref(),
-            Some("1048392115")
-        );
-        assert_eq!(
-            claims.source_repository_owner_uri.as_deref(),
-            Some("https://github.com/prefix-dev")
-        );
-        assert_eq!(
-            claims.source_repository_owner_identifier.as_deref(),
-            Some("111356225")
-        );
-        assert_eq!(claims.build_config_uri.as_deref(), Some(workflow));
-        assert_eq!(claims.build_config_digest.as_deref(), Some(commit));
-        assert_eq!(claims.build_trigger.as_deref(), Some("push"));
-        assert_eq!(
-            claims.run_invocation_uri.as_deref(),
-            Some("https://github.com/prefix-dev/sigstore-example/actions/runs/17377272645/attempts/1")
-        );
-        assert_eq!(
-            claims.source_repository_visibility_at_signing.as_deref(),
-            Some("public")
-        );
-
-        // The job declared no environment, and the certificate predates `.1.24`.
-        assert_eq!(claims.deployment_environment, None);
-        assert_eq!(claims.token_subject, None);
     }
 
-    /// A job that runs in a deployment environment adds `.1.23`, and `.1.24`
-    /// records the `sub` the certificate was requested with, which for GitHub
-    /// Actions is the only place the environment appears verbatim — the SAN
-    /// identity is the workflow ref and says nothing about it.
+    /// A certificate issued before Fulcio grew the provider-neutral arc carries
+    /// only the deprecated extensions, and is the case they are read for: its
+    /// claims are still reachable, under [`DeprecatedGitHubClaims`].
+    ///
+    /// Stands in for such a certificate by dropping everything from `.1.8`
+    /// onwards from the fixture, since the fixtures here are all recent enough
+    /// to carry both.
     #[test]
-    fn test_parse_deployment_environment_claims() {
-        let claims = parse(ENVIRONMENT_CERT).ci_claims;
-
-        assert_eq!(claims.deployment_environment.as_deref(), Some("upload"));
-        assert_eq!(
-            claims.token_subject.as_deref(),
-            Some("repo:pavelzw/skill-forge:environment:upload")
-        );
-        // The claims shared with the fixture above are parsed the same way, so
-        // one of them is enough to show this certificate is read as a whole.
-        assert_eq!(
-            claims.source_repository_uri.as_deref(),
-            Some("https://github.com/pavelzw/skill-forge")
-        );
-    }
-
-    /// The fixture also carries the deprecated extensions `.1.2` to `.1.6`, so
-    /// the claims asserted above are the ones the parser took from `.1.9`
-    /// onwards rather than from their predecessors. Guards the fixture: were
-    /// those extensions to disappear from it, the test above would no longer
-    /// show that the deprecated arc is skipped.
-    #[test]
-    fn test_fixture_carries_the_deprecated_extensions() {
+    fn test_parse_certificate_with_only_deprecated_claims() {
         let der = DerCertificate::from_pem(GITHUB_ACTIONS_CERT).expect("the fixture is a PEM");
-        let cert = Certificate::from_der(der.as_bytes()).expect("the fixture is a certificate");
+        let mut cert = Certificate::from_der(der.as_bytes()).expect("the fixture is a certificate");
         let extensions = cert
             .tbs_certificate
             .extensions
-            .as_ref()
+            .take()
             .expect("the fixture has extensions");
+        cert.tbs_certificate.extensions = Some(
+            extensions
+                .into_iter()
+                .filter(|ext| fulcio_claim_number(&ext.extn_id).is_none_or(|number| number <= 6))
+                .collect(),
+        );
 
-        for number in 2..=6 {
-            let oid = format!("1.3.6.1.4.1.57264.1.{number}");
-            assert!(
-                extensions.iter().any(|ext| ext.extn_id.to_string() == oid),
-                "the fixture is expected to carry the deprecated extension {oid}"
-            );
-        }
+        let claims = extract_fulcio_ci_claims(&cert);
+        assert!(!claims.is_empty());
+        assert_eq!(
+            claims.deprecated_github.workflow_trigger.as_deref(),
+            Some("push")
+        );
+        assert_eq!(
+            claims.deprecated_github.workflow_repository.as_deref(),
+            Some("prefix-dev/sigstore-example")
+        );
+        // Nothing was read from the arc that is no longer there.
+        assert_eq!(claims.build_signer_uri, None);
+        assert_eq!(claims.source_repository_uri, None);
     }
 
     /// A certificate that was not issued to a CI workload yields no claims rather

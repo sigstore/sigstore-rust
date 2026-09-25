@@ -1,0 +1,67 @@
+---
+source: crates/sigstore-crypto/src/x509.rs
+expression: info.ci_claims
+---
+FulcioCiClaims {
+    build_signer_uri: Some(
+        "https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main",
+    ),
+    build_signer_digest: Some(
+        "193b5bd7d3985809503963ae400594ea16df31cf",
+    ),
+    runner_environment: Some(
+        "github-hosted",
+    ),
+    source_repository_uri: Some(
+        "https://github.com/prefix-dev/sigstore-example",
+    ),
+    source_repository_digest: Some(
+        "193b5bd7d3985809503963ae400594ea16df31cf",
+    ),
+    source_repository_ref: Some(
+        "refs/heads/main",
+    ),
+    source_repository_identifier: Some(
+        "1048392115",
+    ),
+    source_repository_owner_uri: Some(
+        "https://github.com/prefix-dev",
+    ),
+    source_repository_owner_identifier: Some(
+        "111356225",
+    ),
+    build_config_uri: Some(
+        "https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main",
+    ),
+    build_config_digest: Some(
+        "193b5bd7d3985809503963ae400594ea16df31cf",
+    ),
+    build_trigger: Some(
+        "push",
+    ),
+    run_invocation_uri: Some(
+        "https://github.com/prefix-dev/sigstore-example/actions/runs/17377272645/attempts/1",
+    ),
+    source_repository_visibility_at_signing: Some(
+        "public",
+    ),
+    deployment_environment: None,
+    token_subject: None,
+    deprecated_github: DeprecatedGitHubClaims {
+        workflow_trigger: Some(
+            "push",
+        ),
+        workflow_sha: Some(
+            "193b5bd7d3985809503963ae400594ea16df31cf",
+        ),
+        workflow_name: Some(
+            "Package and sign",
+        ),
+        workflow_repository: Some(
+            "prefix-dev/sigstore-example",
+        ),
+        workflow_ref: Some(
+            "refs/heads/main",
+        ),
+    },
+}
