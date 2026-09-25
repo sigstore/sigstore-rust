@@ -15,6 +15,7 @@ use crate::token::{IdentityToken, SecretString};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::Rng;
 use serde::Deserialize;
+use sigstore_types::USER_AGENT;
 use std::io::Write;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -222,7 +223,7 @@ impl OAuthClient {
     pub fn new(config: OAuthConfig) -> Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
-            .user_agent(concat!("sigstore-rust/", env!("CARGO_PKG_VERSION")))
+            .user_agent(USER_AGENT)
             .build()
             .map_err(|e| Error::Http(format!("failed to build HTTP client: {e}")))?;
         Ok(Self::with_http_client(config, client))
