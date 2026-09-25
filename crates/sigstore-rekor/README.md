@@ -32,7 +32,7 @@ must obtain an RFC 3161 timestamp and include it in the bundle.
 use sigstore_rekor::RekorClient;
 
 # async fn example() -> Result<(), sigstore_rekor::Error> {
-let client = RekorClient::new("https://rekor.sigstore.dev");
+let client = RekorClient::new("https://rekor.sigstore.dev")?;
 let log = client.get_log_info().await?;
 println!("tree size: {}", log.tree_size);
 # Ok(())
@@ -56,7 +56,7 @@ let request = HashedRekordV2::new_with_certificate(
     &certificate,
     RekorV2KeyDetails::PkixEcdsaP256Sha256,
 );
-let client = RekorV2Client::new("https://log2025-1.rekor.sigstore.dev");
+let client = RekorV2Client::new("https://log2025-1.rekor.sigstore.dev")?;
 let entry = client.create_entry(request).await?;
 println!("log index: {}", entry.log_index);
 # Ok(())
@@ -74,7 +74,7 @@ use sigstore_rekor::RekorV2Client;
 use std::num::NonZeroU8;
 
 # async fn example() -> Result<(), sigstore_rekor::Error> {
-let client = RekorV2Client::new("https://log2025-1.rekor.sigstore.dev");
+let client = RekorV2Client::new("https://log2025-1.rekor.sigstore.dev")?;
 let checkpoint = client.get_checkpoint().await?;
 let full_tile = client.get_tile(0, 12, None).await?;
 let partial_entries = client

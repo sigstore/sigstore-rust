@@ -5,7 +5,11 @@ use crate::entry::{
     DsseEntry, HashedRekord, HashedRekordV2, LogEntry, LogEntryResponse, LogInfo, SearchIndex,
 };
 use crate::error::{Error, Result};
-use sigstore_types::{Checkpoint, KindVersion, TransparencyLogEntry, USER_AGENT};
+use serde::de::DeserializeOwned;
+use sigstore_types::{
+    Checkpoint, DerPublicKey, EntryUuid, KindVersion, LogIndex, Sha256Hash, TransparencyLogEntry,
+    USER_AGENT,
+};
 use std::num::NonZeroU8;
 use std::time::Duration;
 
@@ -33,17 +37,60 @@ use sigstore_cache::{CacheAdapter, CacheKey, CacheResource};
 #[cfg(feature = "cache")]
 use std::sync::Arc;
 
-fn build_http_client(timeout: Duration) -> reqwest::Client {
+/// The client used when the caller does not supply one.
+fn default_http_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
-        .timeout(timeout)
+        .timeout(DEFAULT_TIMEOUT)
         .user_agent(USER_AGENT)
         .build()
-        .expect("HTTP client configuration is valid")
+        .map_err(|e| Error::Http(format!("failed to build HTTP client: {e}")))
+}
+
+/// Send a request and turn a non-success status into [`Error::Status`].
+async fn send(request: reqwest::RequestBuilder, what: &str) -> Result<reqwest::Response> {
+    let response = request
+        .send()
+        .await
+        .map_err(|e| Error::Http(e.to_string()))?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    let body = response.text().await.unwrap_or_default();
+    Err(Error::Status {
+        status: status.as_u16(),
+        message: if body.is_empty() {
+            what.to_string()
+        } else {
+            format!("{what}: {body}")
+        },
+    })
+}
+
+/// Read a JSON response body, reporting malformed bodies as
+/// [`Error::InvalidResponse`].
+async fn read_json<T: DeserializeOwned>(response: reqwest::Response, what: &str) -> Result<T> {
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| Error::Http(e.to_string()))?;
+    serde_json::from_slice(&body).map_err(|e| Error::InvalidResponse(format!("{what}: {e}")))
+}
+
+/// Extract the single entry from a Rekor v1 `{uuid: entry}` response.
+fn single_entry(entries: LogEntryResponse) -> Result<LogEntry> {
+    let (uuid, mut entry) = entries
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::InvalidResponse("empty log entry response".to_string()))?;
+    entry.uuid = EntryUuid::new(uuid);
+    Ok(entry)
 }
 
 /// A client for the Rekor v1 REST API.
 ///
 /// For tile-based Rekor v2 logs, use [`RekorV2Client`].
+#[derive(Clone)]
 pub struct RekorClient {
     /// Base URL of the Rekor instance
     url: String,
@@ -54,15 +101,24 @@ pub struct RekorClient {
     cache: Option<Arc<dyn CacheAdapter>>,
 }
 
+impl std::fmt::Debug for RekorClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RekorClient")
+            .field("url", &self.url)
+            .finish_non_exhaustive()
+    }
+}
+
 impl RekorClient {
-    /// Create a new Rekor v1 client
-    pub fn new(url: impl Into<String>) -> Self {
-        Self {
-            url: url.into().trim_end_matches('/').to_string(),
-            client: build_http_client(DEFAULT_TIMEOUT),
-            #[cfg(feature = "cache")]
-            cache: None,
-        }
+    /// Create a Rekor v1 client with a default HTTP client (30-second
+    /// timeout, `sigstore-rust/<version>` user agent).
+    pub fn new(url: impl Into<String>) -> Result<Self> {
+        Self::builder(url).build()
+    }
+
+    /// The Rekor base URL this client talks to.
+    pub fn url(&self) -> &str {
+        &self.url
     }
 
     /// Create a builder for configuring the client
@@ -108,184 +164,65 @@ impl RekorClient {
     /// Fetch log info from the API (bypassing cache)
     async fn fetch_log_info(&self) -> Result<LogInfo> {
         let url = format!("{}/api/v1/log", self.url);
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-
-        if !response.status().is_success() {
-            return Err(Error::Api(format!(
-                "failed to get log info: {}",
-                response.status()
-            )));
-        }
-
-        response
-            .json()
-            .await
-            .map_err(|e| Error::Http(format!("failed to parse JSON: {}", e)))
+        let response = send(self.client.get(&url), "failed to get log info").await?;
+        read_json(response, "log info").await
     }
 
     /// Get a log entry by UUID
-    pub async fn get_entry_by_uuid(&self, uuid: &str) -> Result<LogEntry> {
+    pub async fn get_entry_by_uuid(&self, uuid: &EntryUuid) -> Result<LogEntry> {
         let url = format!("{}/api/v1/log/entries/{}", self.url, uuid);
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-
-        if !response.status().is_success() {
-            return Err(Error::Api(format!(
-                "failed to get entry {}: {}",
-                uuid,
-                response.status()
-            )));
-        }
-
-        let entries: LogEntryResponse = response
-            .json()
-            .await
-            .map_err(|e| Error::Http(format!("failed to parse JSON: {}", e)))?;
-
-        // Extract the single entry from the response
-        let (entry_uuid, mut entry) = entries
-            .into_iter()
-            .next()
-            .ok_or_else(|| Error::Api("empty response".to_string()))?;
-
-        entry.uuid = entry_uuid.into();
-        Ok(entry)
+        let response = send(
+            self.client.get(&url),
+            &format!("failed to get entry {uuid}"),
+        )
+        .await?;
+        single_entry(read_json(response, "log entry").await?)
     }
 
     /// Get a log entry by index
-    pub async fn get_entry_by_index(&self, index: i64) -> Result<LogEntry> {
+    pub async fn get_entry_by_index(&self, index: LogIndex) -> Result<LogEntry> {
         let url = format!("{}/api/v1/log/entries?logIndex={}", self.url, index);
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-
-        if !response.status().is_success() {
-            return Err(Error::Api(format!(
-                "failed to get entry at index {}: {}",
-                index,
-                response.status()
-            )));
-        }
-
-        let entries: LogEntryResponse = response
-            .json()
-            .await
-            .map_err(|e| Error::Http(format!("failed to parse JSON: {}", e)))?;
-
-        let (entry_uuid, mut entry) = entries
-            .into_iter()
-            .next()
-            .ok_or_else(|| Error::Api("empty response".to_string()))?;
-
-        entry.uuid = entry_uuid.into();
-        Ok(entry)
+        let response = send(
+            self.client.get(&url),
+            &format!("failed to get entry at index {index}"),
+        )
+        .await?;
+        single_entry(read_json(response, "log entry").await?)
     }
 
     /// Create a new log entry (V1)
     pub async fn create_entry(&self, entry: HashedRekord) -> Result<LogEntry> {
         let url = format!("{}/api/v1/log/entries", self.url);
-        let response = self
-            .client
-            .post(&url)
-            .json(&entry)
-            .send()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Api(format!(
-                "failed to create entry: {} - {}",
-                status, body
-            )));
-        }
-
-        let entries: LogEntryResponse = response
-            .json()
-            .await
-            .map_err(|e| Error::Http(format!("failed to parse JSON: {}", e)))?;
-
-        let (entry_uuid, mut entry) = entries
-            .into_iter()
-            .next()
-            .ok_or_else(|| Error::Api("empty response".to_string()))?;
-
-        entry.uuid = entry_uuid.into();
-        Ok(entry)
+        let response = send(
+            self.client.post(&url).json(&entry),
+            "failed to create entry",
+        )
+        .await?;
+        single_entry(read_json(response, "log entry").await?)
     }
 
     /// Create a new DSSE log entry (V1)
     pub async fn create_dsse_entry(&self, entry: DsseEntry) -> Result<LogEntry> {
         let url = format!("{}/api/v1/log/entries", self.url);
-        let response = self
-            .client
-            .post(&url)
-            .json(&entry)
-            .send()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Api(format!(
-                "failed to create DSSE entry: {} - {}",
-                status, body
-            )));
-        }
-
-        let entries: LogEntryResponse = response
-            .json()
-            .await
-            .map_err(|e| Error::Http(format!("failed to parse JSON: {}", e)))?;
-
-        let (entry_uuid, mut entry) = entries
-            .into_iter()
-            .next()
-            .ok_or_else(|| Error::Api("empty response".to_string()))?;
-
-        entry.uuid = entry_uuid.into();
-        Ok(entry)
+        let response = send(
+            self.client.post(&url).json(&entry),
+            "failed to create DSSE entry",
+        )
+        .await?;
+        single_entry(read_json(response, "log entry").await?)
     }
 
     /// Search the index for entries
-    pub async fn search_index(&self, query: SearchIndex) -> Result<Vec<String>> {
+    pub async fn search_index(&self, query: SearchIndex) -> Result<Vec<EntryUuid>> {
         let url = format!("{}/api/v1/index/retrieve", self.url);
-        let response = self
-            .client
-            .post(&url)
-            .json(&query)
-            .send()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-
-        if !response.status().is_success() {
-            return Err(Error::Api(format!("search failed: {}", response.status())));
-        }
-
-        response
-            .json()
-            .await
-            .map_err(|e| Error::Http(format!("failed to parse JSON: {}", e)))
+        let response = send(self.client.post(&url).json(&query), "search failed").await?;
+        read_json(response, "search results").await
     }
 
-    /// Search by hash (hex encoded)
-    pub async fn search_by_hash(&self, hash: &str) -> Result<Vec<String>> {
+    /// Search for entries of an artifact by its SHA-256 digest
+    pub async fn search_by_hash(&self, hash: &Sha256Hash) -> Result<Vec<EntryUuid>> {
         self.search_index(SearchIndex {
-            hash: Some(format!("sha256:{}", hash)),
+            hash: Some(format!("sha256:{}", hash.to_hex())),
             email: None,
             public_key: None,
         })
@@ -296,27 +233,32 @@ impl RekorClient {
     ///
     /// With the `cache` feature enabled and a cache configured, this will
     /// cache the public key with the default TTL (24 hours).
-    pub async fn get_public_key(&self) -> Result<String> {
+    pub async fn get_public_key(&self) -> Result<DerPublicKey> {
         #[cfg(feature = "cache")]
         if let Some(ref cache) = self.cache {
             if let Ok(Some(cached)) = cache
                 .get(&CacheKey::new(CacheResource::RekorPublicKey, &self.url))
                 .await
             {
-                if let Ok(key) = String::from_utf8(cached) {
+                if let Some(key) = String::from_utf8(cached)
+                    .ok()
+                    .and_then(|pem| DerPublicKey::from_pem(&pem).ok())
+                {
                     return Ok(key);
                 }
             }
         }
 
-        let key = self.fetch_public_key().await?;
+        let pem = self.fetch_public_key().await?;
+        let key = DerPublicKey::from_pem(&pem)
+            .map_err(|e| Error::InvalidResponse(format!("log public key: {e}")))?;
 
         #[cfg(feature = "cache")]
         if let Some(ref cache) = self.cache {
             let _ = cache
                 .set(
                     &CacheKey::new(CacheResource::RekorPublicKey, &self.url),
-                    key.as_bytes(),
+                    pem.as_bytes(),
                     CacheResource::RekorPublicKey.default_ttl(),
                 )
                 .await;
@@ -328,20 +270,7 @@ impl RekorClient {
     /// Fetch public key from the API (bypassing cache)
     async fn fetch_public_key(&self) -> Result<String> {
         let url = format!("{}/api/v1/log/publicKey", self.url);
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-
-        if !response.status().is_success() {
-            return Err(Error::Api(format!(
-                "failed to get public key: {}",
-                response.status()
-            )));
-        }
-
+        let response = send(self.client.get(&url), "failed to get public key").await?;
         response
             .text()
             .await
@@ -355,6 +284,7 @@ impl RekorClient {
 /// `/api/v2/log/entries` and reads use the C2SP tlog-tiles endpoints
 /// (checkpoint, hash tiles, and entry bundles). Use [`RekorClient`] for
 /// Rekor v1 instances.
+#[derive(Debug, Clone)]
 pub struct RekorV2Client {
     /// Base URL of the Rekor v2 log
     url: String,
@@ -363,19 +293,25 @@ pub struct RekorV2Client {
 }
 
 impl RekorV2Client {
-    /// Create a new Rekor v2 client with the default request timeout.
-    pub fn new(url: impl Into<String>) -> Self {
-        Self::new_with_timeout(url, DEFAULT_TIMEOUT)
+    /// Create a Rekor v2 client with a default HTTP client (30-second
+    /// timeout, `sigstore-rust/<version>` user agent).
+    pub fn new(url: impl Into<String>) -> Result<Self> {
+        Ok(Self::with_http_client(url, default_http_client()?))
     }
 
-    /// Create a new Rekor v2 client with a custom HTTP request timeout.
+    /// Create a Rekor v2 client that uses a caller-configured HTTP client.
     ///
-    /// Rekor v2 writes wait for log inclusion; use at least 20 seconds.
-    pub fn new_with_timeout(url: impl Into<String>, timeout: Duration) -> Self {
+    /// Rekor v2 writes wait for log inclusion; allow at least 20 seconds.
+    pub fn with_http_client(url: impl Into<String>, client: reqwest::Client) -> Self {
         Self {
             url: url.into().trim_end_matches('/').to_string(),
-            client: build_http_client(timeout),
+            client,
         }
+    }
+
+    /// The Rekor v2 log URL this client talks to.
+    pub fn url(&self) -> &str {
+        &self.url
     }
 
     /// Create a Rekor v2 hashedrekord entry.
@@ -388,29 +324,12 @@ impl RekorV2Client {
         entry_request: HashedRekordV2,
     ) -> Result<TransparencyLogEntry> {
         let url = format!("{}/api/v2/log/entries", self.url);
-        let response = self
-            .client
-            .post(&url)
-            .json(&entry_request)
-            .send()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Api(format!(
-                "failed to create entry: {} - {}",
-                status, body
-            )));
-        }
-
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-        let entry: TransparencyLogEntry = serde_json::from_str(&response_text)
-            .map_err(|e| Error::InvalidResponse(format!("invalid v2 log entry JSON: {e}")))?;
+        let response = send(
+            self.client.post(&url).json(&entry_request),
+            "failed to create entry",
+        )
+        .await?;
+        let entry: TransparencyLogEntry = read_json(response, "v2 log entry").await?;
         validate_v2_entry(&entry, &entry_request)?;
         Ok(entry)
     }
@@ -461,18 +380,11 @@ impl RekorV2Client {
 
     async fn get_bytes(&self, path: &str) -> Result<Vec<u8>> {
         let url = format!("{}/api/v2/{path}", self.url);
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-        if !response.status().is_success() {
-            return Err(Error::Api(format!(
-                "failed to fetch Rekor v2 {path}: {}",
-                response.status()
-            )));
-        }
+        let response = send(
+            self.client.get(&url),
+            &format!("failed to fetch Rekor v2 {path}"),
+        )
+        .await?;
         response
             .bytes()
             .await
@@ -486,11 +398,16 @@ impl RekorV2Client {
 /// # Example
 ///
 /// ```no_run
-/// use sigstore_rekor::RekorClient;
+/// use sigstore_rekor::{reqwest, RekorClient};
+/// use std::time::Duration;
 ///
-/// // Without caching
+/// let http = reqwest::Client::builder()
+///     .timeout(Duration::from_secs(10))
+///     .build()?;
 /// let client = RekorClient::builder("https://rekor.sigstore.dev")
-///     .build();
+///     .with_http_client(http)
+///     .build()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
 /// With the `cache` feature enabled:
@@ -502,11 +419,12 @@ impl RekorV2Client {
 /// let cache = FileSystemCache::default_location()?;
 /// let client = RekorClient::builder("https://rekor.sigstore.dev")
 ///     .with_cache(cache)
-///     .build();
+///     .build()?;
 /// ```
+#[must_use]
 pub struct RekorClientBuilder {
     url: String,
-    timeout: Duration,
+    http_client: Option<reqwest::Client>,
     #[cfg(feature = "cache")]
     cache: Option<Arc<dyn CacheAdapter>>,
 }
@@ -517,15 +435,19 @@ impl RekorClientBuilder {
         let url = url.into();
         Self {
             url: url.trim_end_matches('/').to_string(),
-            timeout: DEFAULT_TIMEOUT,
+            http_client: None,
             #[cfg(feature = "cache")]
             cache: None,
         }
     }
 
-    /// Set the HTTP request timeout.
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+    /// Use a caller-configured HTTP client (timeouts, proxies, TLS roots,
+    /// user agent).
+    ///
+    /// Without one, a client with a 30-second request timeout and a
+    /// `sigstore-rust/<version>` user agent is used.
+    pub fn with_http_client(mut self, http_client: reqwest::Client) -> Self {
+        self.http_client = Some(http_client);
         self
     }
 
@@ -544,13 +466,17 @@ impl RekorClientBuilder {
     }
 
     /// Build the client
-    pub fn build(self) -> RekorClient {
-        RekorClient {
+    pub fn build(self) -> Result<RekorClient> {
+        let client = match self.http_client {
+            Some(client) => client,
+            None => default_http_client()?,
+        };
+        Ok(RekorClient {
             url: self.url,
-            client: build_http_client(self.timeout),
+            client,
             #[cfg(feature = "cache")]
             cache: self.cache,
-        }
+        })
     }
 }
 

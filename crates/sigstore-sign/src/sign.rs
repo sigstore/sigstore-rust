@@ -506,7 +506,7 @@ impl Signer {
     ) -> Result<TransparencyLogEntry> {
         match self.rekor_api_version {
             RekorApiVersion::V1 => {
-                let rekor = RekorClient::new(&self.rekor_url);
+                let rekor = RekorClient::new(&self.rekor_url)?;
                 let request = HashedRekord::new(artifact_hash, signature, certificate);
                 let entry = rekor
                     .create_entry(request)
@@ -517,7 +517,7 @@ impl Signer {
                     .map_err(|e| Error::Signing(format!("invalid Rekor response: {e}")))
             }
             RekorApiVersion::V2 => {
-                let rekor = RekorV2Client::new(&self.rekor_url);
+                let rekor = RekorV2Client::new(&self.rekor_url)?;
                 let request = HashedRekordV2::new_with_certificate(
                     artifact_hash,
                     signature,
@@ -653,7 +653,7 @@ impl Signer {
     ) -> Result<TransparencyLogEntry> {
         match self.rekor_api_version {
             RekorApiVersion::V1 => {
-                let rekor = RekorClient::new(&self.rekor_url);
+                let rekor = RekorClient::new(&self.rekor_url)?;
                 let request = DsseEntry::new(envelope, certificate);
                 let entry = rekor.create_dsse_entry(request).await.map_err(|e| {
                     Error::Signing(format!("Failed to create DSSE Rekor entry: {e}"))
@@ -663,7 +663,7 @@ impl Signer {
                     .map_err(|e| Error::Signing(format!("invalid Rekor response: {e}")))
             }
             RekorApiVersion::V2 => {
-                let rekor = RekorV2Client::new(&self.rekor_url);
+                let rekor = RekorV2Client::new(&self.rekor_url)?;
                 let hash = sha256_pae_yielding(&envelope.payload_type, envelope.payload.as_bytes())
                     .await
                     .finalize();
