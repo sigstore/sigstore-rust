@@ -22,31 +22,30 @@ pub struct TimestampClient {
 #[must_use]
 pub struct TimestampClientBuilder {
     url: String,
-    timeout: Duration,
-    user_agent: String,
+    http_client: Option<reqwest::Client>,
 }
 
 impl TimestampClientBuilder {
-    /// Total HTTP request timeout, including reading the response body.
-    /// Defaults to 30 seconds.
-    pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-
-    /// The `User-Agent` header. Defaults to `sigstore-rust/<version>`.
-    pub fn user_agent(mut self, user_agent: impl Into<String>) -> Self {
-        self.user_agent = user_agent.into();
+    /// Use a caller-configured HTTP client (timeouts, proxies, TLS roots,
+    /// user agent).
+    ///
+    /// Without one, a client with a 30-second request timeout and a
+    /// `sigstore-rust/<version>` user agent is used.
+    pub fn with_http_client(mut self, http_client: reqwest::Client) -> Self {
+        self.http_client = Some(http_client);
         self
     }
 
     /// Build the client.
     pub fn build(self) -> Result<TimestampClient> {
-        let client = reqwest::Client::builder()
-            .timeout(self.timeout)
-            .user_agent(self.user_agent)
-            .build()
-            .map_err(|e| Error::Http(format!("failed to build HTTP client: {e}")))?;
+        let client = match self.http_client {
+            Some(client) => client,
+            None => reqwest::Client::builder()
+                .timeout(DEFAULT_TIMEOUT)
+                .user_agent(DEFAULT_USER_AGENT)
+                .build()
+                .map_err(|e| Error::Http(format!("failed to build HTTP client: {e}")))?,
+        };
         Ok(TimestampClient {
             url: self.url,
             client,
@@ -67,8 +66,7 @@ impl TimestampClient {
     pub fn builder(url: impl Into<String>) -> TimestampClientBuilder {
         TimestampClientBuilder {
             url: url.into(),
-            timeout: DEFAULT_TIMEOUT,
-            user_agent: DEFAULT_USER_AGENT.to_string(),
+            http_client: None,
         }
     }
 

@@ -12,5 +12,8 @@ mod verify;
 #[cfg(feature = "client")]
 pub use client::{TimestampClient, TimestampClientBuilder};
 pub use error::{Error, Result};
+/// The HTTP client crate used by [`TimestampClientBuilder::with_http_client`].
+#[cfg(feature = "client")]
+pub use reqwest;
 pub use sigstore_types::TsaAuthority;
 pub use verify::verify_timestamp_for_authority;
