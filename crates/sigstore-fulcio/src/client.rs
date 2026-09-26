@@ -9,11 +9,6 @@ use std::time::Duration;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[cfg(feature = "cache")]
-use sigstore_cache::{CacheAdapter, CacheKey, CacheResource};
-#[cfg(feature = "cache")]
-use std::sync::Arc;
-
 /// A client for interacting with Fulcio
 #[derive(Clone)]
 pub struct FulcioClient {
@@ -21,9 +16,6 @@ pub struct FulcioClient {
     url: String,
     /// HTTP client
     client: reqwest::Client,
-    /// Optional cache adapter
-    #[cfg(feature = "cache")]
-    cache: Option<Arc<dyn CacheAdapter>>,
 }
 
 impl std::fmt::Debug for FulcioClient {
@@ -54,45 +46,7 @@ impl FulcioClient {
     }
 
     /// Get the OIDC configuration (supported issuers)
-    ///
-    /// With the `cache` feature enabled and a cache configured, this will
-    /// cache the configuration with the default TTL (7 days).
     pub async fn get_configuration(&self) -> Result<Configuration> {
-        #[cfg(feature = "cache")]
-        if let Some(ref cache) = self.cache {
-            if let Ok(Some(cached)) = cache
-                .get(&CacheKey::new(
-                    CacheResource::FulcioConfiguration,
-                    &self.url,
-                ))
-                .await
-            {
-                if let Ok(config) = serde_json::from_slice(&cached) {
-                    return Ok(config);
-                }
-            }
-        }
-
-        let config = self.fetch_configuration().await?;
-
-        #[cfg(feature = "cache")]
-        if let Some(ref cache) = self.cache {
-            if let Ok(json) = serde_json::to_vec(&config) {
-                let _ = cache
-                    .set(
-                        &CacheKey::new(CacheResource::FulcioConfiguration, &self.url),
-                        &json,
-                        CacheResource::FulcioConfiguration.default_ttl(),
-                    )
-                    .await;
-            }
-        }
-
-        Ok(config)
-    }
-
-    /// Fetch configuration from the API (bypassing cache)
-    async fn fetch_configuration(&self) -> Result<Configuration> {
         let url = format!("{}/api/v2/configuration", self.url);
         let response = self
             .client
@@ -185,41 +139,9 @@ impl FulcioClient {
 
     /// Get the trust bundle (CA certificates)
     ///
-    /// With the `cache` feature enabled and a cache configured, this will
-    /// cache the trust bundle with the default TTL (24 hours).
+    /// This is Fulcio's unauthenticated view of its CAs; verification uses the
+    /// CAs from a TUF-verified trusted root instead.
     pub async fn get_trust_bundle(&self) -> Result<TrustBundle> {
-        // The cache holds the raw response, which is parsed like a fresh one.
-        #[cfg(feature = "cache")]
-        if let Some(ref cache) = self.cache {
-            if let Ok(Some(cached)) = cache
-                .get(&CacheKey::new(CacheResource::FulcioTrustBundle, &self.url))
-                .await
-            {
-                if let Ok(bundle) = TrustBundle::from_json(&cached) {
-                    return Ok(bundle);
-                }
-            }
-        }
-
-        let body = self.fetch_trust_bundle().await?;
-        let bundle = TrustBundle::from_json(&body)?;
-
-        #[cfg(feature = "cache")]
-        if let Some(ref cache) = self.cache {
-            let _ = cache
-                .set(
-                    &CacheKey::new(CacheResource::FulcioTrustBundle, &self.url),
-                    &body,
-                    CacheResource::FulcioTrustBundle.default_ttl(),
-                )
-                .await;
-        }
-
-        Ok(bundle)
-    }
-
-    /// Fetch trust bundle from the API (bypassing cache)
-    async fn fetch_trust_bundle(&self) -> Result<Vec<u8>> {
         let url = format!("{}/api/v2/trustBundle", self.url);
         let response = self
             .client
@@ -235,11 +157,11 @@ impl FulcioClient {
             });
         }
 
-        response
+        let body = response
             .bytes()
             .await
-            .map(|body| body.to_vec())
-            .map_err(|e| Error::Http(e.to_string()))
+            .map_err(|e| Error::Http(e.to_string()))?;
+        TrustBundle::from_json(&body)
     }
 }
 
@@ -261,24 +183,10 @@ impl FulcioClient {
 ///     .build()?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-///
-/// With the `cache` feature enabled:
-///
-/// ```ignore
-/// use sigstore_fulcio::FulcioClient;
-/// use sigstore_cache::FileSystemCache;
-///
-/// let cache = FileSystemCache::default_location()?;
-/// let client = FulcioClient::builder("https://fulcio.sigstore.dev")
-///     .with_cache(cache)
-///     .build()?;
-/// ```
 #[must_use]
 pub struct FulcioClientBuilder {
     url: String,
     http_client: Option<reqwest::Client>,
-    #[cfg(feature = "cache")]
-    cache: Option<Arc<dyn CacheAdapter>>,
 }
 
 impl FulcioClientBuilder {
@@ -287,8 +195,6 @@ impl FulcioClientBuilder {
         Self {
             url: url.into().trim_end_matches('/').to_string(),
             http_client: None,
-            #[cfg(feature = "cache")]
-            cache: None,
         }
     }
 
@@ -299,20 +205,6 @@ impl FulcioClientBuilder {
     /// `sigstore-rust/<version>` user agent is used.
     pub fn with_http_client(mut self, http_client: reqwest::Client) -> Self {
         self.http_client = Some(http_client);
-        self
-    }
-
-    /// Set the cache adapter
-    #[cfg(feature = "cache")]
-    pub fn with_cache(mut self, cache: impl CacheAdapter + 'static) -> Self {
-        self.cache = Some(Arc::new(cache));
-        self
-    }
-
-    /// Set a shared cache adapter
-    #[cfg(feature = "cache")]
-    pub fn with_shared_cache(mut self, cache: Arc<dyn CacheAdapter>) -> Self {
-        self.cache = Some(cache);
         self
     }
 
@@ -329,8 +221,6 @@ impl FulcioClientBuilder {
         Ok(FulcioClient {
             url: self.url,
             client,
-            #[cfg(feature = "cache")]
-            cache: self.cache,
         })
     }
 }

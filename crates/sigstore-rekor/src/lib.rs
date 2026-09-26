@@ -6,7 +6,6 @@
 //! # Features
 //!
 //! - `client` - HTTP clients. Enabled by the default `rustls` feature.
-//! - `cache` - HTTP response caching via `RekorClientBuilder::with_cache`.
 //! - Disable default features for offline entry types and bundle conversion.
 //!
 //! # Example
@@ -20,18 +19,6 @@
 //! println!("Tree size: {}", log_info.tree_size);
 //! # Ok(())
 //! # }
-//! ```
-//!
-//! With caching enabled:
-//!
-//! ```ignore
-//! use sigstore_rekor::RekorClient;
-//! use sigstore_cache::FileSystemCache;
-//!
-//! let cache = FileSystemCache::default_location()?;
-//! let client = RekorClient::builder("https://rekor.sigstore.dev")
-//!     .with_cache(cache)
-//!     .build();
 //! ```
 
 pub mod body;

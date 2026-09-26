@@ -3,11 +3,6 @@
 //! This crate provides a client for interacting with Fulcio, the Sigstore
 //! certificate authority service.
 //!
-//! # Features
-//!
-//! - `cache` - Enable caching support for configuration and trust bundle responses.
-//!   When enabled, use [`FulcioClientBuilder::with_cache`] to configure a cache adapter.
-//!
 //! # Example
 //!
 //! ```no_run
@@ -19,18 +14,6 @@
 //! println!("Supported issuers: {:?}", config.issuers);
 //! # Ok(())
 //! # }
-//! ```
-//!
-//! With caching enabled:
-//!
-//! ```ignore
-//! use sigstore_fulcio::FulcioClient;
-//! use sigstore_cache::FileSystemCache;
-//!
-//! let cache = FileSystemCache::default_location()?;
-//! let client = FulcioClient::builder("https://fulcio.sigstore.dev")
-//!     .with_cache(cache)
-//!     .build()?;
 //! ```
 
 pub mod client;

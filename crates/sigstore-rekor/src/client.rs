@@ -32,11 +32,6 @@ pub struct RekorV2EntryBundle {
     pub bytes: Vec<u8>,
 }
 
-#[cfg(feature = "cache")]
-use sigstore_cache::{CacheAdapter, CacheKey, CacheResource};
-#[cfg(feature = "cache")]
-use std::sync::Arc;
-
 /// The client used when the caller does not supply one.
 fn default_http_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
@@ -96,9 +91,6 @@ pub struct RekorClient {
     url: String,
     /// HTTP client
     client: reqwest::Client,
-    /// Optional cache adapter
-    #[cfg(feature = "cache")]
-    cache: Option<Arc<dyn CacheAdapter>>,
 }
 
 impl std::fmt::Debug for RekorClient {
@@ -127,42 +119,7 @@ impl RekorClient {
     }
 
     /// Get log info (tree size, root hash, etc.)
-    ///
-    /// With the `cache` feature enabled and a cache configured, this will
-    /// cache the log info with the default TTL (1 hour).
     pub async fn get_log_info(&self) -> Result<LogInfo> {
-        #[cfg(feature = "cache")]
-        if let Some(ref cache) = self.cache {
-            if let Ok(Some(cached)) = cache
-                .get(&CacheKey::new(CacheResource::RekorLogInfo, &self.url))
-                .await
-            {
-                if let Ok(info) = serde_json::from_slice(&cached) {
-                    return Ok(info);
-                }
-            }
-        }
-
-        let info = self.fetch_log_info().await?;
-
-        #[cfg(feature = "cache")]
-        if let Some(ref cache) = self.cache {
-            if let Ok(json) = serde_json::to_vec(&info) {
-                let _ = cache
-                    .set(
-                        &CacheKey::new(CacheResource::RekorLogInfo, &self.url),
-                        &json,
-                        CacheResource::RekorLogInfo.default_ttl(),
-                    )
-                    .await;
-            }
-        }
-
-        Ok(info)
-    }
-
-    /// Fetch log info from the API (bypassing cache)
-    async fn fetch_log_info(&self) -> Result<LogInfo> {
         let url = format!("{}/api/v1/log", self.url);
         let response = send(self.client.get(&url), "failed to get log info").await?;
         read_json(response, "log info").await
@@ -231,50 +188,17 @@ impl RekorClient {
 
     /// Get the public key of the log
     ///
-    /// With the `cache` feature enabled and a cache configured, this will
-    /// cache the public key with the default TTL (24 hours).
+    /// This is the log's unauthenticated claim about its own key; verification
+    /// uses keys from a TUF-verified trusted root instead.
     pub async fn get_public_key(&self) -> Result<DerPublicKey> {
-        #[cfg(feature = "cache")]
-        if let Some(ref cache) = self.cache {
-            if let Ok(Some(cached)) = cache
-                .get(&CacheKey::new(CacheResource::RekorPublicKey, &self.url))
-                .await
-            {
-                if let Some(key) = String::from_utf8(cached)
-                    .ok()
-                    .and_then(|pem| DerPublicKey::from_pem(&pem).ok())
-                {
-                    return Ok(key);
-                }
-            }
-        }
-
-        let pem = self.fetch_public_key().await?;
-        let key = DerPublicKey::from_pem(&pem)
-            .map_err(|e| Error::InvalidResponse(format!("log public key: {e}")))?;
-
-        #[cfg(feature = "cache")]
-        if let Some(ref cache) = self.cache {
-            let _ = cache
-                .set(
-                    &CacheKey::new(CacheResource::RekorPublicKey, &self.url),
-                    pem.as_bytes(),
-                    CacheResource::RekorPublicKey.default_ttl(),
-                )
-                .await;
-        }
-
-        Ok(key)
-    }
-
-    /// Fetch public key from the API (bypassing cache)
-    async fn fetch_public_key(&self) -> Result<String> {
         let url = format!("{}/api/v1/log/publicKey", self.url);
         let response = send(self.client.get(&url), "failed to get public key").await?;
-        response
+        let pem = response
             .text()
             .await
-            .map_err(|e| Error::Http(e.to_string()))
+            .map_err(|e| Error::Http(e.to_string()))?;
+        DerPublicKey::from_pem(&pem)
+            .map_err(|e| Error::InvalidResponse(format!("log public key: {e}")))
     }
 }
 
@@ -409,24 +333,10 @@ impl RekorV2Client {
 ///     .build()?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-///
-/// With the `cache` feature enabled:
-///
-/// ```ignore
-/// use sigstore_rekor::RekorClient;
-/// use sigstore_cache::FileSystemCache;
-///
-/// let cache = FileSystemCache::default_location()?;
-/// let client = RekorClient::builder("https://rekor.sigstore.dev")
-///     .with_cache(cache)
-///     .build()?;
-/// ```
 #[must_use]
 pub struct RekorClientBuilder {
     url: String,
     http_client: Option<reqwest::Client>,
-    #[cfg(feature = "cache")]
-    cache: Option<Arc<dyn CacheAdapter>>,
 }
 
 impl RekorClientBuilder {
@@ -436,8 +346,6 @@ impl RekorClientBuilder {
         Self {
             url: url.trim_end_matches('/').to_string(),
             http_client: None,
-            #[cfg(feature = "cache")]
-            cache: None,
         }
     }
 
@@ -451,20 +359,6 @@ impl RekorClientBuilder {
         self
     }
 
-    /// Set the cache adapter
-    #[cfg(feature = "cache")]
-    pub fn with_cache(mut self, cache: impl CacheAdapter + 'static) -> Self {
-        self.cache = Some(Arc::new(cache));
-        self
-    }
-
-    /// Set a shared cache adapter
-    #[cfg(feature = "cache")]
-    pub fn with_shared_cache(mut self, cache: Arc<dyn CacheAdapter>) -> Self {
-        self.cache = Some(cache);
-        self
-    }
-
     /// Build the client
     pub fn build(self) -> Result<RekorClient> {
         let client = match self.http_client {
@@ -474,8 +368,6 @@ impl RekorClientBuilder {
         Ok(RekorClient {
             url: self.url,
             client,
-            #[cfg(feature = "cache")]
-            cache: self.cache,
         })
     }
 }
