@@ -4,14 +4,19 @@ use thiserror::Error;
 
 /// Errors that can occur during trusted root operations
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum Error {
     /// JSON parsing error
     #[error("failed to parse JSON: {0}")]
     Json(#[from] serde_json::Error),
 
-    /// Base64 decoding error
-    #[error("failed to decode base64: {0}")]
-    Base64(#[from] base64::DecodeError),
+    /// Reading trust material from a file failed
+    #[error("failed to read trust material: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// Trust material contained an invalid encoding, key or checkpoint
+    #[error(transparent)]
+    Types(#[from] sigstore_types::Error),
 
     /// Certificate parsing error
     #[error("failed to parse certificate: {0}")]
@@ -20,10 +25,6 @@ pub enum Error {
     /// Invalid key format
     #[error("invalid key format: {0}")]
     InvalidKey(String),
-
-    /// Missing required field
-    #[error("missing required field: {0}")]
-    MissingField(String),
 
     /// Unsupported media type
     #[error("unsupported media type: {0}")]
@@ -44,15 +45,3 @@ pub enum Error {
 
 /// Result type for trusted root operations
 pub type Result<T> = std::result::Result<T, Error>;
-
-/// Convert from sigstore_types::Error to our Error type
-impl From<sigstore_types::Error> for Error {
-    fn from(err: sigstore_types::Error) -> Self {
-        match err {
-            sigstore_types::Error::Json(e) => Error::Json(e),
-            sigstore_types::Error::InvalidEncoding(s) => Error::InvalidKey(s),
-            // For other variants, convert to string error
-            _ => Error::InvalidKey(err.to_string()),
-        }
-    }
-}

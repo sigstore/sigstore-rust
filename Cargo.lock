@@ -2179,11 +2179,9 @@ dependencies = [
 name = "sigstore-trust-root"
 version = "0.13.0"
 dependencies = [
- "base64",
  "directories",
  "hex",
  "jiff",
- "rustls-pki-types",
  "serde",
  "serde_json",
  "sha2",

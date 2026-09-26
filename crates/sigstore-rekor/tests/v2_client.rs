@@ -91,7 +91,7 @@ fn request() -> HashedRekordV2 {
 #[tokio::test]
 async fn create_entry_returns_the_protobuf_entry_without_lossy_conversion() {
     let (url, received) = serve_once("201 Created", "application/json", VALID_ENTRY.as_bytes());
-    let client = RekorV2Client::new(url);
+    let client = RekorV2Client::new(url).unwrap();
 
     let entry = client.create_entry(request()).await.unwrap();
 
@@ -129,6 +129,7 @@ async fn create_entry_rejects_malformed_or_incomplete_v2_responses() {
     ] {
         let (url, received) = serve_once("201 Created", "application/json", invalid.as_bytes());
         let error = RekorV2Client::new(url)
+            .unwrap()
             .create_entry(request())
             .await
             .unwrap_err();
@@ -160,6 +161,7 @@ async fn create_entry_rejects_mismatched_algorithm_semantics() {
     ] {
         let (url, _received) = serve_once("201 Created", "application/json", response.as_bytes());
         let error = RekorV2Client::new(url)
+            .unwrap()
             .create_entry(request())
             .await
             .unwrap_err();
@@ -180,6 +182,7 @@ async fn create_entry_rejects_a_response_for_a_different_submission() {
         RekorV2KeyDetails::PkixEcdsaP256Sha256,
     );
     let error = RekorV2Client::new(url)
+        .unwrap()
         .create_entry(different)
         .await
         .unwrap_err();
@@ -199,6 +202,7 @@ async fn create_entry_ignores_unauthenticated_duplicate_proof_fields() {
     let (url, _received) = serve_once("201 Created", "application/json", response.as_bytes());
 
     let entry = RekorV2Client::new(url)
+        .unwrap()
         .create_entry(request())
         .await
         .unwrap();
@@ -213,7 +217,11 @@ async fn reads_v2_checkpoint_and_tile_storage_paths() {
         "application/octet-stream",
         b"example.com/log\n1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n\n\xe2\x80\x94 example.com/log AAAAAAA=\n",
     );
-    let checkpoint = RekorV2Client::new(url).get_checkpoint().await.unwrap();
+    let checkpoint = RekorV2Client::new(url)
+        .unwrap()
+        .get_checkpoint()
+        .await
+        .unwrap();
     assert_eq!(checkpoint.origin(), "example.com/log");
     assert_eq!(checkpoint.tree_size(), 1);
     assert!(checkpoint_request
@@ -223,6 +231,7 @@ async fn reads_v2_checkpoint_and_tile_storage_paths() {
 
     let (url, tile_request) = serve_once("200 OK", "application/octet-stream", b"tile");
     let tile = RekorV2Client::new(url)
+        .unwrap()
         .get_tile(2, 1_234_067, NonZeroU8::new(7))
         .await
         .unwrap();
@@ -238,6 +247,7 @@ async fn reads_v2_checkpoint_and_tile_storage_paths() {
 
     let (url, entries_request) = serve_once("200 OK", "application/octet-stream", b"entries");
     let entries = RekorV2Client::new(url)
+        .unwrap()
         .get_entry_bundle(1, None)
         .await
         .unwrap();

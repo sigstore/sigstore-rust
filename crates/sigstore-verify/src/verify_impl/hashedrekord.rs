@@ -28,12 +28,8 @@ pub(crate) fn verify_hashedrekord_entry(
     managed_key: Option<&DerPublicKey>,
 ) -> Result<()> {
     // Parse the Rekor entry body (convert canonicalized body to base64 string)
-    let body = RekorEntryBody::from_base64_json(
-        &entry.canonicalized_body.to_base64(),
-        entry.kind_version.kind(),
-        entry.kind_version.version(),
-    )
-    .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
+    let body = RekorEntryBody::parse(&entry.canonicalized_body, entry.kind_version)
+        .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
 
     // Compute hash from artifact (bytes or pre-computed digest) or DSSE envelope
     let hash = match &bundle.content {

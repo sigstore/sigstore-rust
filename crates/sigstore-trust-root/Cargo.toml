@@ -30,8 +30,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Crypto & Certificates
-base64 = { workspace = true }
-rustls-pki-types = { workspace = true }
 
 # Time handling
 jiff = { workspace = true }

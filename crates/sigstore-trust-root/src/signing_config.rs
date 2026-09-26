@@ -17,7 +17,7 @@
 //! let config = SigningConfig::production().await?;
 //!
 //! // Get the best Rekor endpoint (highest available version)
-//! if let Some(rekor) = config.get_rekor_url(None) {
+//! if let Some(rekor) = config.rekor_url(None) {
 //!     println!("Rekor URL: {} (v{})", rekor.url, rekor.major_api_version);
 //! }
 //! # Ok(())
@@ -61,6 +61,7 @@ pub const SIGNING_CONFIG_MEDIA_TYPE: &str = "application/vnd.dev.sigstore.signin
 /// A service endpoint configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ServiceEndpoint {
     /// URL of the service
     pub url: String,
@@ -104,6 +105,7 @@ pub enum ServiceSelector {
 
 /// Service configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub struct ServiceConfiguration {
     /// How to select services
     #[serde(default)]
@@ -116,6 +118,7 @@ pub struct ServiceConfiguration {
 /// Signing configuration for a Sigstore instance
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SigningConfig {
     /// Media type of this configuration
     pub media_type: String,
@@ -151,7 +154,7 @@ impl SigningConfig {
     /// use sigstore_trust_root::{SigningConfig, SIGSTORE_PRODUCTION_SIGNING_CONFIG};
     ///
     /// let config = SigningConfig::from_json(SIGSTORE_PRODUCTION_SIGNING_CONFIG).unwrap();
-    /// if let Some(rekor) = config.get_rekor_url(None) {
+    /// if let Some(rekor) = config.rekor_url(None) {
     ///     println!("Rekor URL: {}", rekor.url);
     /// }
     /// ```
@@ -175,10 +178,8 @@ impl SigningConfig {
     }
 
     /// Parse signing config from a file
-    pub fn from_file(path: &str) -> Result<Self> {
-        let json = std::fs::read_to_string(path)
-            .map_err(|e| Error::MissingField(format!("Failed to read file {}: {}", path, e)))?;
-        Self::from_json(&json)
+    pub fn from_file(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        Self::from_json(&std::fs::read_to_string(path)?)
     }
 
     /// Get valid Rekor endpoints, optionally filtered by version
@@ -187,7 +188,7 @@ impl SigningConfig {
     /// Otherwise returns all valid endpoints for supported versions.
     ///
     /// Endpoints are sorted by version descending (highest first).
-    pub fn get_rekor_urls(&self, force_version: Option<u32>) -> Vec<&ServiceEndpoint> {
+    pub fn eligible_rekor_urls(&self, force_version: Option<u32>) -> Vec<&ServiceEndpoint> {
         let mut endpoints: Vec<_> = self
             .rekor_tlog_urls
             .iter()
@@ -216,12 +217,12 @@ impl SigningConfig {
     /// Get the best Rekor endpoint (highest version available)
     ///
     /// If `force_version` is Some, returns the first endpoint with that version.
-    pub fn get_rekor_url(&self, force_version: Option<u32>) -> Option<&ServiceEndpoint> {
-        self.get_rekor_urls(force_version).first().copied()
+    pub fn rekor_url(&self, force_version: Option<u32>) -> Option<&ServiceEndpoint> {
+        self.eligible_rekor_urls(force_version).first().copied()
     }
 
     /// Get valid Fulcio endpoints
-    pub fn get_fulcio_urls(&self) -> Vec<&ServiceEndpoint> {
+    pub fn eligible_fulcio_urls(&self) -> Vec<&ServiceEndpoint> {
         self.ca_urls
             .iter()
             .filter(|e| e.is_valid() && SUPPORTED_FULCIO_VERSIONS.contains(&e.major_api_version))
@@ -229,12 +230,12 @@ impl SigningConfig {
     }
 
     /// Get the best Fulcio endpoint
-    pub fn get_fulcio_url(&self) -> Option<&ServiceEndpoint> {
-        self.get_fulcio_urls().first().copied()
+    pub fn fulcio_url(&self) -> Option<&ServiceEndpoint> {
+        self.eligible_fulcio_urls().first().copied()
     }
 
     /// Get valid TSA endpoints
-    pub fn get_tsa_urls(&self) -> Vec<&ServiceEndpoint> {
+    pub fn eligible_tsa_urls(&self) -> Vec<&ServiceEndpoint> {
         self.tsa_urls
             .iter()
             .filter(|e| e.is_valid() && SUPPORTED_TSA_VERSIONS.contains(&e.major_api_version))
@@ -242,18 +243,18 @@ impl SigningConfig {
     }
 
     /// Get the best TSA endpoint
-    pub fn get_tsa_url(&self) -> Option<&ServiceEndpoint> {
-        self.get_tsa_urls().first().copied()
+    pub fn tsa_url(&self) -> Option<&ServiceEndpoint> {
+        self.eligible_tsa_urls().first().copied()
     }
 
     /// Get valid OIDC provider URLs
-    pub fn get_oidc_urls(&self) -> Vec<&ServiceEndpoint> {
+    pub fn eligible_oidc_urls(&self) -> Vec<&ServiceEndpoint> {
         self.oidc_urls.iter().filter(|e| e.is_valid()).collect()
     }
 
     /// Get the best OIDC provider URL
-    pub fn get_oidc_url(&self) -> Option<&ServiceEndpoint> {
-        self.get_oidc_urls().first().copied()
+    pub fn oidc_url(&self) -> Option<&ServiceEndpoint> {
+        self.eligible_oidc_urls().first().copied()
     }
 }
 
@@ -280,27 +281,27 @@ mod tests {
     }
 
     #[test]
-    fn test_get_rekor_url_highest_version() {
+    fn test_rekor_url_highest_version() {
         let config = SigningConfig::from_json(SIGSTORE_STAGING_SIGNING_CONFIG)
             .expect("Failed to parse staging config");
-        if let Some(rekor) = config.get_rekor_url(None) {
+        if let Some(rekor) = config.rekor_url(None) {
             // Staging should have V2 available
             println!("Best Rekor: {} v{}", rekor.url, rekor.major_api_version);
         }
     }
 
     #[test]
-    fn test_get_rekor_url_force_version() {
+    fn test_rekor_url_force_version() {
         let config = SigningConfig::from_json(SIGSTORE_STAGING_SIGNING_CONFIG)
             .expect("Failed to parse staging config");
 
         // Force V1
-        if let Some(rekor) = config.get_rekor_url(Some(1)) {
+        if let Some(rekor) = config.rekor_url(Some(1)) {
             assert_eq!(rekor.major_api_version, 1);
         }
 
         // Force V2
-        if let Some(rekor) = config.get_rekor_url(Some(2)) {
+        if let Some(rekor) = config.rekor_url(Some(2)) {
             assert_eq!(rekor.major_api_version, 2);
         }
     }

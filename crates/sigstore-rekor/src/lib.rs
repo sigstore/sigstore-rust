@@ -15,7 +15,7 @@
 //! # #[cfg(feature = "client")]
 //! # async fn example() -> Result<(), sigstore_rekor::Error> {
 //! use sigstore_rekor::RekorClient;
-//! let client = RekorClient::new("https://rekor.sigstore.dev");
+//! let client = RekorClient::new("https://rekor.sigstore.dev")?;
 //! let log_info = client.get_log_info().await?;
 //! println!("Tree size: {}", log_info.tree_size);
 //! # Ok(())
@@ -50,3 +50,7 @@ pub use entry::{
 };
 pub use error::{Error, Result};
 pub use hex_encoded::{HexHash, HexLogId};
+/// The HTTP client crate used by [`RekorClientBuilder::with_http_client`] and
+/// [`RekorV2Client::with_http_client`].
+#[cfg(feature = "client")]
+pub use reqwest;

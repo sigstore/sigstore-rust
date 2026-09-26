@@ -44,25 +44,25 @@ use sigstore_tuf::{FileStore, HttpRepository, StoreRepository, Updater};
 use crate::{Error, Result, SigningConfig, SigstoreInstance, TrustedRoot};
 
 /// Default Sigstore production TUF repository URL
-pub const DEFAULT_TUF_URL: &str = "https://tuf-repo-cdn.sigstore.dev";
+const DEFAULT_TUF_URL: &str = "https://tuf-repo-cdn.sigstore.dev";
 
 /// Sigstore staging TUF repository URL
-pub const STAGING_TUF_URL: &str = "https://tuf-repo-cdn.sigstage.dev";
+const STAGING_TUF_URL: &str = "https://tuf-repo-cdn.sigstage.dev";
 
 /// GitHub artifact attestation TUF repository URL
 ///
 /// This is GitHub's separate Sigstore instance, used for GitHub-hosted artifact
 /// attestations whose leaf certificates are issued by `O=GitHub, Inc.`.
-pub const GITHUB_TUF_URL: &str = "https://tuf-repo.github.com";
+const GITHUB_TUF_URL: &str = "https://tuf-repo.github.com";
 
 /// Embedded root.json for production TUF instance
-pub const PRODUCTION_TUF_ROOT: &[u8] = include_bytes!("../repository/tuf_root.json");
+const PRODUCTION_TUF_ROOT: &[u8] = include_bytes!("../repository/tuf_root.json");
 
 /// Embedded root.json for staging TUF instance
-pub const STAGING_TUF_ROOT: &[u8] = include_bytes!("../repository/tuf_staging_root.json");
+const STAGING_TUF_ROOT: &[u8] = include_bytes!("../repository/tuf_staging_root.json");
 
 /// Embedded root.json for GitHub's artifact attestation TUF instance
-pub const GITHUB_TUF_ROOT: &[u8] = include_bytes!("../repository/tuf_github_root.json");
+const GITHUB_TUF_ROOT: &[u8] = include_bytes!("../repository/tuf_github_root.json");
 
 /// TUF target name for trusted root
 pub const TRUSTED_ROOT_TARGET: &str = "trusted_root.json";
@@ -98,6 +98,7 @@ const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
 
 /// Where trust in a TUF repository begins.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TufBootstrap {
     /// Root metadata trusted by the application.
     TrustedRoot(Vec<u8>),
@@ -125,6 +126,7 @@ pub struct TufConfig {
     disable_cache: bool,
     offline: bool,
     bootstrap: TufBootstrap,
+    http_client: Option<sigstore_tuf::reqwest::Client>,
 }
 
 impl Default for TufConfig {
@@ -134,29 +136,27 @@ impl Default for TufConfig {
 }
 
 impl TufConfig {
-    fn known(url: &str, root_json: &[u8]) -> Self {
-        Self {
-            url: url.to_string(),
-            cache_dir: None,
-            disable_cache: false,
-            offline: false,
-            bootstrap: TufBootstrap::trusted(root_json),
-        }
+    /// Create configuration for a well-known instance with its embedded root.
+    pub fn for_instance(instance: SigstoreInstance) -> Self {
+        Self::custom(
+            instance.tuf_url(),
+            TufBootstrap::trusted(instance.tuf_root()),
+        )
     }
 
     /// Create configuration for production Sigstore with its embedded root.
     pub fn production() -> Self {
-        Self::known(DEFAULT_TUF_URL, PRODUCTION_TUF_ROOT)
+        Self::for_instance(SigstoreInstance::PublicGood)
     }
 
     /// Create configuration for staging Sigstore with its embedded root.
     pub fn staging() -> Self {
-        Self::known(STAGING_TUF_URL, STAGING_TUF_ROOT)
+        Self::for_instance(SigstoreInstance::Staging)
     }
 
     /// Create configuration for GitHub artifact attestations with its embedded root.
     pub fn github() -> Self {
-        Self::known(GITHUB_TUF_URL, GITHUB_TUF_ROOT)
+        Self::for_instance(SigstoreInstance::GitHub)
     }
 
     /// Create configuration for a custom repository with an explicit bootstrap policy.
@@ -171,6 +171,7 @@ impl TufConfig {
             disable_cache: false,
             offline: false,
             bootstrap,
+            http_client: None,
         }
     }
 
@@ -206,6 +207,16 @@ impl TufConfig {
     /// Set the cache directory
     pub fn with_cache_dir(mut self, path: PathBuf) -> Self {
         self.cache_dir = Some(path);
+        self
+    }
+
+    /// Fetch through a caller-configured HTTP client (timeouts, proxies, TLS
+    /// roots, user agent) instead of the default one.
+    ///
+    /// Configure timeouts on it: without them a malicious mirror can hang a
+    /// refresh indefinitely (the slow-retrieval attack).
+    pub fn with_http_client(mut self, client: sigstore_tuf::reqwest::Client) -> Self {
+        self.http_client = Some(client);
         self
     }
 
@@ -326,7 +337,11 @@ impl TufClient {
     /// written through to the per-URL cache directory so a later `offline()`
     /// run can serve them.
     async fn build_updater(&self, validation_time: jiff::Timestamp) -> Result<Updater> {
-        let repo = HttpRepository::new(&self.config.url).map_err(|e| Error::Tuf(e.to_string()))?;
+        let mut repo =
+            HttpRepository::new(&self.config.url).map_err(|e| Error::Tuf(e.to_string()))?;
+        if let Some(client) = &self.config.http_client {
+            repo = repo.with_http_client(client.clone());
+        }
         let root_bytes = self.get_root_json()?;
         let mut updater = Updater::new(repo, &root_bytes).map_err(|e| Error::Tuf(e.to_string()))?;
 
@@ -488,13 +503,27 @@ impl TrustedRoot {
 }
 
 impl SigstoreInstance {
+    /// The URL of this instance's TUF repository.
+    pub fn tuf_url(self) -> &'static str {
+        match self {
+            Self::PublicGood => DEFAULT_TUF_URL,
+            Self::Staging => STAGING_TUF_URL,
+            Self::GitHub => GITHUB_TUF_URL,
+        }
+    }
+
+    /// The embedded TUF `root.json` trusted to bootstrap this instance.
+    pub fn tuf_root(self) -> &'static [u8] {
+        match self {
+            Self::PublicGood => PRODUCTION_TUF_ROOT,
+            Self::Staging => STAGING_TUF_ROOT,
+            Self::GitHub => GITHUB_TUF_ROOT,
+        }
+    }
+
     /// Return the TUF configuration for this well-known Sigstore instance.
     pub fn tuf_config(self) -> TufConfig {
-        match self {
-            Self::PublicGood => TufConfig::production(),
-            Self::Staging => TufConfig::staging(),
-            Self::GitHub => TufConfig::github(),
-        }
+        TufConfig::for_instance(self)
     }
 }
 
@@ -518,7 +547,7 @@ impl SigningConfig {
     ///
     /// # async fn example() -> Result<(), sigstore_trust_root::Error> {
     /// let config = SigningConfig::production().await?;
-    /// if let Some(rekor) = config.get_rekor_url(None) {
+    /// if let Some(rekor) = config.rekor_url(None) {
     ///     println!("Rekor URL: {} (v{})", rekor.url, rekor.major_api_version);
     /// }
     /// # Ok(())
@@ -632,6 +661,23 @@ pub async fn fetch_trust_material_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn well_known_configs_come_from_the_instance() {
+        for instance in [
+            SigstoreInstance::PublicGood,
+            SigstoreInstance::Staging,
+            SigstoreInstance::GitHub,
+        ] {
+            let config = instance.tuf_config();
+            assert_eq!(config.url, instance.tuf_url());
+            assert_eq!(config.bootstrap, TufBootstrap::trusted(instance.tuf_root()));
+        }
+        assert_eq!(
+            TufConfig::production().url,
+            "https://tuf-repo-cdn.sigstore.dev"
+        );
+    }
 
     #[test]
     fn test_url_to_dirname() {

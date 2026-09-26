@@ -7,12 +7,18 @@ use crate::entry::RekorV2KeyDetails;
 use crate::hex_encoded::HexHash;
 use serde::{Deserialize, Serialize};
 use sigstore_types::{
-    DerCertificate, DerPublicKey, DigestBytes, HashAlgorithm, PemContent, SignatureBytes,
+    CanonicalizedBody, DerCertificate, DerPublicKey, DigestBytes, HashAlgorithm, KindVersion,
+    PemContent, SignatureBytes,
 };
 
 /// Parsed Rekor entry body
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Parse with [`RekorEntryBody::parse`] (for bundle entries) or
+/// [`RekorEntryBody::from_json`], which select the body type from the entry's
+/// kind and version rather than guessing from its shape.
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum RekorEntryBody {
     /// HashedRekord v0.0.1
     HashedRekordV001(HashedRekordV001Body),
@@ -334,28 +340,27 @@ impl IntotoSignature {
 // ============================================================================
 
 impl RekorEntryBody {
-    /// Parse a Rekor entry body from base64-encoded JSON
-    pub fn from_base64_json(
-        base64_body: &str,
-        kind: &str,
-        version: &str,
+    /// Parse the canonicalized body of a bundle's transparency log entry.
+    pub fn parse(
+        body: &CanonicalizedBody,
+        kind_version: KindVersion,
     ) -> Result<Self, crate::error::Error> {
-        // Decode base64
-        let body_bytes =
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, base64_body)
-                .map_err(|e| {
-                    crate::error::Error::InvalidResponse(format!("failed to decode body: {}", e))
-                })?;
+        Self::from_json(body.as_bytes(), kind_version.kind(), kind_version.version())
+    }
 
-        // Convert to UTF-8 string
-        let body_str = String::from_utf8(body_bytes).map_err(|e| {
+    /// Parse a JSON entry body of the given Rekor `kind` and `version`.
+    ///
+    /// Use this for entry types that bundles cannot carry, such as
+    /// `dsse`/`0.0.2`.
+    pub fn from_json(body: &[u8], kind: &str, version: &str) -> Result<Self, crate::error::Error> {
+        let body_str = std::str::from_utf8(body).map_err(|e| {
             crate::error::Error::InvalidResponse(format!("body is not valid UTF-8: {}", e))
         })?;
 
         // Parse based on kind and version
         match (kind, version) {
             ("hashedrekord", "0.0.1") => {
-                let body: HashedRekordV001Body = serde_json::from_str(&body_str).map_err(|e| {
+                let body: HashedRekordV001Body = serde_json::from_str(body_str).map_err(|e| {
                     crate::error::Error::InvalidResponse(format!(
                         "failed to parse hashedrekord v0.0.1 body: {}",
                         e
@@ -364,7 +369,7 @@ impl RekorEntryBody {
                 Ok(RekorEntryBody::HashedRekordV001(body))
             }
             ("hashedrekord", "0.0.2") => {
-                let body: HashedRekordV002Body = serde_json::from_str(&body_str).map_err(|e| {
+                let body: HashedRekordV002Body = serde_json::from_str(body_str).map_err(|e| {
                     crate::error::Error::InvalidResponse(format!(
                         "failed to parse hashedrekord v0.0.2 body: {}",
                         e
@@ -373,7 +378,7 @@ impl RekorEntryBody {
                 Ok(RekorEntryBody::HashedRekordV002(body))
             }
             ("dsse", "0.0.1") => {
-                let body: DsseV001Body = serde_json::from_str(&body_str).map_err(|e| {
+                let body: DsseV001Body = serde_json::from_str(body_str).map_err(|e| {
                     crate::error::Error::InvalidResponse(format!(
                         "failed to parse dsse v0.0.1 body: {}",
                         e
@@ -382,7 +387,7 @@ impl RekorEntryBody {
                 Ok(RekorEntryBody::DsseV001(body))
             }
             ("dsse", "0.0.2") => {
-                let body: DsseV002Body = serde_json::from_str(&body_str).map_err(|e| {
+                let body: DsseV002Body = serde_json::from_str(body_str).map_err(|e| {
                     crate::error::Error::InvalidResponse(format!(
                         "failed to parse dsse v0.0.2 body: {}",
                         e
@@ -391,7 +396,7 @@ impl RekorEntryBody {
                 Ok(RekorEntryBody::DsseV002(body))
             }
             ("intoto", "0.0.2") => {
-                let body: IntotoV002Body = serde_json::from_str(&body_str).map_err(|e| {
+                let body: IntotoV002Body = serde_json::from_str(body_str).map_err(|e| {
                     crate::error::Error::InvalidResponse(format!(
                         "failed to parse intoto v0.0.2 body: {}",
                         e
@@ -430,12 +435,7 @@ mod tests {
             }
         }"#;
 
-        let base64_body = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            body_json.as_bytes(),
-        );
-
-        let body = RekorEntryBody::from_base64_json(&base64_body, "hashedrekord", "0.0.1");
+        let body = RekorEntryBody::from_json(body_json.as_bytes(), "hashedrekord", "0.0.1");
         assert!(body.is_ok());
     }
 
@@ -447,11 +447,7 @@ mod tests {
                 "signatures": [{{"content": "c2lnbmF0dXJl", "verifier": {verifier}}}]
             }}}}}}"#
         );
-        let base64_body = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            body_json.as_bytes(),
-        );
-        match RekorEntryBody::from_base64_json(&base64_body, "dsse", "0.0.2").unwrap() {
+        match RekorEntryBody::from_json(body_json.as_bytes(), "dsse", "0.0.2").unwrap() {
             RekorEntryBody::DsseV002(body) => body,
             other => panic!("expected dsse v0.0.2 body, got {other:?}"),
         }

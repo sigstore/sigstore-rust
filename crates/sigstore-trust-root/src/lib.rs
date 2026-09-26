@@ -38,7 +38,7 @@
 //! let config = SigningConfig::production().await?;
 //!
 //! // Get the best Rekor endpoint (highest available version)
-//! if let Some(rekor) = config.get_rekor_url(None) {
+//! if let Some(rekor) = config.rekor_url(None) {
 //!     println!("Rekor URL: {} (v{})", rekor.url, rekor.major_api_version);
 //! }
 //! # Ok(())
@@ -92,14 +92,16 @@ pub use signing_config::{
 };
 pub use sigstore_types::{TimeRange, TsaAuthority};
 pub use trusted_root::{
-    CertificateAuthority, CertificateTransparencyLog, SigstoreInstance, TimestampAuthority,
-    TransparencyLog, TrustedRoot, ValidityPeriod, SIGSTORE_GITHUB_TRUSTED_ROOT,
+    CertificateAuthority, CertificateTransparencyLog, PublicKeyDetails, SigstoreInstance,
+    TimestampAuthority, TransparencyLog, TrustedRoot, SIGSTORE_GITHUB_TRUSTED_ROOT,
     SIGSTORE_PRODUCTION_TRUSTED_ROOT, SIGSTORE_STAGING_TRUSTED_ROOT,
 };
 
+/// The HTTP client crate used by [`TufConfig::with_http_client`].
+#[cfg(feature = "tuf")]
+pub use sigstore_tuf::reqwest;
 #[cfg(feature = "tuf")]
 pub use tuf::{
-    fetch_trust_material, fetch_trust_material_at, TufBootstrap, TufConfig, DEFAULT_TUF_URL,
-    GITHUB_TUF_ROOT, GITHUB_TUF_URL, PRODUCTION_TUF_ROOT, SIGNING_CONFIG_TARGET, STAGING_TUF_ROOT,
-    STAGING_TUF_URL, TRUSTED_ROOT_TARGET,
+    fetch_trust_material, fetch_trust_material_at, TufBootstrap, TufConfig, SIGNING_CONFIG_TARGET,
+    TRUSTED_ROOT_TARGET,
 };
