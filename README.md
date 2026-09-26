@@ -19,7 +19,6 @@ This workspace provides a modular Rust implementation of the Sigstore ecosystem,
 | [`sigstore-rekor`](crates/sigstore-rekor) | Rekor transparency log client |
 | [`sigstore-tsa`](crates/sigstore-tsa) | RFC 3161 timestamp authority client |
 | [`sigstore-tuf`](crates/sigstore-tuf) | The Update Framework (TUF) client |
-| [`sigstore-cache`](crates/sigstore-cache) | Flexible caching support |
 | [`sigstore-merkle`](crates/sigstore-merkle) | RFC 6962 Merkle tree verification |
 | [`sigstore-crypto`](crates/sigstore-crypto) | Cryptographic primitives |
 | [`sigstore-types`](crates/sigstore-types) | Core types and data structures |
@@ -128,9 +127,9 @@ cargo run -p sigstore-verify --example verify_bundle -- \
 │            sigstore-bundle            │         sigstore-oidc         │
 ├─────────────────┬─────────────────┬───┴─────────────┬─────────────────┤
 │ sigstore-fulcio │ sigstore-rekor  │  sigstore-tsa   │  sigstore-tuf   │
-├─────────────────┴─────┬───────────┴───────────┬─────┴─────────────────┤
-│    sigstore-crypto    │    sigstore-merkle    │    sigstore-cache     │
-├───────────────────────┴───────────────────────┴───────────────────────┤
+├─────────────────┴─────────────────┼─────────────────┴─────────────────┤
+│          sigstore-crypto          │          sigstore-merkle          │
+├───────────────────────────────────┴───────────────────────────────────┤
 │                            sigstore-types                             │
 └───────────────────────────────────────────────────────────────────────┘
 ```

@@ -11,13 +11,11 @@ rust-version.workspace = true
 default = ["rustls"]
 rustls = ["reqwest/rustls", "sigstore-oidc/rustls"]
 native-tls = ["reqwest/native-tls", "sigstore-oidc/native-tls"]
-cache = ["sigstore-cache"]
 
 [dependencies]
 sigstore-types = { workspace = true }
 sigstore-crypto = { workspace = true }
 sigstore-oidc = { workspace = true }
-sigstore-cache = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
