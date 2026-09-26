@@ -42,7 +42,7 @@
 
 use sigstore_oidc::{get_identity_token, IdentityToken};
 use sigstore_rekor::RekorApiVersion;
-use sigstore_sign::{SigningConfig, SigningContext};
+use sigstore_sign::{SigningContext, SigningServices};
 
 use std::env;
 use std::fs;
@@ -187,33 +187,32 @@ async fn main() {
     // An explicit `--rekor-url` is the only way to use a log the instance does
     // not publish.
     let config = if let Some(url) = rekor_url {
-        let mut config = SigningConfig::from_tuf_config(&tuf_config)
-            .expect("Missing required endpoints in TUF config");
-        config.rekor_url = url;
-        config.rekor_api_version = if use_v2 {
+        let version = if use_v2 {
             RekorApiVersion::V2
         } else {
             RekorApiVersion::V1
         };
-        config
+        SigningServices::from_tuf_config(&tuf_config)
+            .expect("Missing required endpoints in TUF config")
+            .with_rekor(url, version)
     } else {
-        SigningConfig::from_tuf_config_with_rekor_version(
+        SigningServices::from_tuf_config_with_rekor_version(
             &tuf_config,
             use_v2.then_some(RekorApiVersion::V2),
         )
         .expect("Missing required endpoints in TUF config")
     };
 
-    println!("  Rekor API: {:?}", config.rekor_api_version);
-    println!("  Rekor URL: {}", config.rekor_url);
-    if let Some(ref tsa_url) = config.tsa_url {
+    println!("  Rekor API: {:?}", config.rekor_api_version());
+    println!("  Rekor URL: {}", config.rekor_url());
+    if let Some(tsa_url) = config.tsa_url() {
         println!("  TSA URL: {}", tsa_url);
     } else {
         println!("  TSA URL: (none)");
     }
 
     // Get identity token
-    let identity_token = match get_token(token, config.oidc_url.as_deref()).await {
+    let identity_token = match get_token(token, config.oidc_url()).await {
         Ok(t) => t,
         Err(e) => {
             eprintln!("Error obtaining identity token: {}", e);
@@ -228,7 +227,7 @@ async fn main() {
     }
     println!("  Issuer: {}", identity_token.issuer());
 
-    let context = SigningContext::with_config(config);
+    let context = SigningContext::new(config);
 
     // Create signer and sign
     let signer = context.signer(identity_token);

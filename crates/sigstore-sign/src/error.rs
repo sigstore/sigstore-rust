@@ -4,6 +4,7 @@ use thiserror::Error;
 
 /// Errors that can occur during signing
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// Signing error
     #[error("Signing error: {0}")]
@@ -36,6 +37,10 @@ pub enum Error {
     /// OIDC error
     #[error("OIDC error: {0}")]
     Oidc(#[from] sigstore_oidc::Error),
+
+    /// Loading the instance's signing config failed
+    #[error("trust root error: {0}")]
+    TrustRoot(#[from] sigstore_trust_root::Error),
 
     /// Failed to read artifact input.
     #[error("failed to read artifact: {0}")]
