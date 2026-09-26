@@ -2023,20 +2023,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sigstore-cache"
-version = "0.13.0"
-dependencies = [
- "directories",
- "jiff",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror",
- "tokio",
-]
-
-[[package]]
 name = "sigstore-conformance"
 version = "0.13.0"
 dependencies = [
@@ -2075,7 +2061,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sigstore-cache",
  "sigstore-crypto",
  "sigstore-oidc",
  "sigstore-types",
@@ -2148,7 +2133,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sigstore-cache",
  "sigstore-merkle",
  "sigstore-types",
  "thiserror",
