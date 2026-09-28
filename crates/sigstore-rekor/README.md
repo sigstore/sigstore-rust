@@ -7,7 +7,7 @@ Rekor transparency-log client for [sigstore-rust](https://github.com/sigstore/si
 Default features enable the HTTP `client` with `rustls`. For offline entry/body
 parsing and `LogEntry::to_bundle_entry`, use `default-features = false`; neither
 reqwest nor Tokio is then required. `native-tls` selects the alternative HTTP TLS
-backend, and `cache` enables client response caching.
+backend.
 
 ## Supported APIs
 
@@ -16,7 +16,6 @@ backend, and `cache` enables client response caching.
 | Submit artifact signatures | Yes (`hashedrekord/0.0.1`) | Yes (`hashedrekord/0.0.2`) |
 | Submit DSSE envelopes | Yes (`dsse/0.0.1`) | Yes, as `hashedrekord/0.0.2` over the DSSE PAE |
 | Lookup and search | Yes | Not provided by Rekor v2 |
-| Log information/public key endpoints | Yes | Not provided by Rekor v2 |
 | Checkpoint and tile reads | No | Yes |
 
 Rekor v2 deliberately has no `dsse/0.0.2` entry type. A DSSE client logs the
@@ -30,11 +29,12 @@ must obtain an RFC 3161 timestamp and include it in the bundle.
 
 ```rust,no_run
 use sigstore_rekor::RekorClient;
+use sigstore_types::LogIndex;
 
-# async fn example() -> Result<(), sigstore_rekor::Error> {
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let client = RekorClient::new("https://rekor.sigstore.dev")?;
-let log = client.get_log_info().await?;
-println!("tree size: {}", log.tree_size);
+let entry = client.get_entry_by_index(LogIndex::new(1)?).await?;
+println!("integrated at {:?}", entry.integrated_time);
 # Ok(())
 # }
 ```

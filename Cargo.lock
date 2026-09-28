@@ -2148,7 +2148,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sigstore-cache",
  "sigstore-merkle",
  "sigstore-types",
  "thiserror",

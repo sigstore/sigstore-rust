@@ -146,43 +146,6 @@ pub struct RekorInclusionProof {
     pub tree_size: u64,
 }
 
-/// Log info response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub struct LogInfo {
-    /// Root hash of the tree
-    #[serde(with = "hex_sha256")]
-    pub root_hash: Sha256Hash,
-    /// Signed tree head (checkpoint)
-    pub signed_tree_head: String,
-    /// Tree ID
-    #[serde(rename = "treeID")]
-    pub tree_id: String,
-    /// Tree size
-    pub tree_size: u64,
-    /// Inactive shards
-    #[serde(default)]
-    pub inactive_shards: Vec<InactiveShard>,
-}
-
-/// Inactive shard info
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub struct InactiveShard {
-    /// Root hash
-    #[serde(with = "hex_sha256")]
-    pub root_hash: Sha256Hash,
-    /// Signed tree head
-    pub signed_tree_head: String,
-    /// Tree ID
-    #[serde(rename = "treeID")]
-    pub tree_id: String,
-    /// Tree size
-    pub tree_size: u64,
-}
-
 mod hex_sha256 {
     use serde::{Deserialize, Deserializer, Serializer};
     use sigstore_types::Sha256Hash;
