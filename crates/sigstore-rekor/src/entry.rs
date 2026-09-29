@@ -191,48 +191,61 @@ mod hex_sha256_vec {
     }
 }
 
-/// Search index query
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A query against the Rekor v1 search index.
+///
+/// Build one with [`SearchIndex::sha256`] or [`SearchIndex::email`] and pass
+/// it to `RekorClient::search_index`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SearchIndex {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub email: Option<String>,
+    email: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_key: Option<SearchIndexPublicKey>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hash: Option<String>,
+    hash: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SearchIndexPublicKey {
-    pub format: String,
-    pub content: String,
+impl SearchIndex {
+    /// Find entries of an artifact by its SHA-256 digest.
+    pub fn sha256(hash: &Sha256Hash) -> Self {
+        Self {
+            email: None,
+            hash: Some(format!("sha256:{}", hash.to_hex())),
+        }
+    }
+
+    /// Find entries whose signing certificate carries this email identity.
+    pub fn email(email: impl Into<String>) -> Self {
+        Self {
+            email: Some(email.into()),
+            hash: None,
+        }
+    }
 }
 
 /// DSSE entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DsseEntry {
-    pub api_version: String,
-    pub kind: String,
-    pub spec: DsseEntrySpec,
+    pub(crate) api_version: String,
+    pub(crate) kind: String,
+    pub(crate) spec: DsseEntrySpec,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DsseEntrySpec {
+pub(crate) struct DsseEntrySpec {
     /// Proposed content - when present, signatures should NOT be included
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub proposed_content: Option<DsseProposedContent>,
+    pub(crate) proposed_content: Option<DsseProposedContent>,
     /// Signatures - only used when proposedContent is NOT present
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub signatures: Vec<DsseEntrySignature>,
+    pub(crate) signatures: Vec<DsseEntrySignature>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DsseProposedContent {
-    pub envelope: String,
-    pub verifiers: Vec<String>,
+pub(crate) struct DsseProposedContent {
+    pub(crate) envelope: String,
+    pub(crate) verifiers: Vec<String>,
 }
 
 /// Signature entry in a Rekor DSSE entry.
@@ -241,9 +254,9 @@ pub struct DsseProposedContent {
 /// signatures in the DSSE envelope format itself.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DsseEntrySignature {
-    pub signature: String,
-    pub verifier: String,
+pub(crate) struct DsseEntrySignature {
+    pub(crate) signature: String,
+    pub(crate) verifier: String,
 }
 
 impl DsseEntry {
@@ -255,12 +268,18 @@ impl DsseEntry {
     /// # Arguments
     /// * `envelope` - The DSSE envelope containing signatures
     /// * `certificate` - DER-encoded X.509 certificate from Fulcio
-    pub fn new(envelope: &sigstore_types::DsseEnvelope, certificate: &DerCertificate) -> Self {
+    ///
+    /// # Errors
+    /// Returns [`Error::Json`](crate::Error::Json) if the envelope cannot be
+    /// serialized.
+    pub fn new(
+        envelope: &sigstore_types::DsseEnvelope,
+        certificate: &DerCertificate,
+    ) -> crate::Result<Self> {
         use base64::Engine;
 
         // Serialize envelope to JSON (Rekor expects JSON string, not base64)
-        let envelope_json =
-            serde_json::to_string(envelope).expect("Failed to serialize DSSE envelope");
+        let envelope_json = serde_json::to_string(envelope)?;
 
         // Rekor API expects the PEM to be base64-encoded
         let cert_pem = certificate.to_pem();
@@ -268,7 +287,7 @@ impl DsseEntry {
 
         // When using proposedContent, do NOT include signatures separately -
         // they are extracted from the envelope by the Rekor server
-        Self {
+        Ok(Self {
             api_version: "0.0.1".to_string(),
             kind: "dsse".to_string(),
             spec: DsseEntrySpec {
@@ -278,7 +297,7 @@ impl DsseEntry {
                 }),
                 signatures: vec![],
             },
-        }
+        })
     }
 }
 
@@ -287,27 +306,27 @@ impl DsseEntry {
 pub struct HashedRekord {
     /// API version
     #[serde(rename = "apiVersion")]
-    pub api_version: String,
+    pub(crate) api_version: String,
     /// Entry kind
-    pub kind: String,
+    pub(crate) kind: String,
     /// Spec containing the actual data
-    pub spec: HashedRekordSpec,
+    pub(crate) spec: HashedRekordSpec,
 }
 
 /// HashedRekord specification
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HashedRekordSpec {
+pub(crate) struct HashedRekordSpec {
     /// Data containing the hash
-    pub data: HashedRekordData,
+    pub(crate) data: HashedRekordData,
     /// Signature
-    pub signature: HashedRekordSignature,
+    pub(crate) signature: HashedRekordSignature,
 }
 
 /// Data portion of HashedRekord
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HashedRekordData {
+pub(crate) struct HashedRekordData {
     /// Hash of the artifact
-    pub hash: HashedRekordHash,
+    pub(crate) hash: HashedRekordHash,
 }
 
 /// Serde helper for lowercase hash algorithm serialization (for Rekor API)
@@ -336,29 +355,29 @@ mod rekor_hash_algorithm {
 
 /// Hash in HashedRekord
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HashedRekordHash {
+pub(crate) struct HashedRekordHash {
     /// Hash algorithm (serializes as lowercase for Rekor API)
     #[serde(with = "rekor_hash_algorithm")]
-    pub algorithm: HashAlgorithm,
+    pub(crate) algorithm: HashAlgorithm,
     /// Hash value (hex encoded)
-    pub value: String,
+    pub(crate) value: String,
 }
 
 /// Signature in HashedRekord
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HashedRekordSignature {
+pub(crate) struct HashedRekordSignature {
     /// Signature content (base64 encoded)
-    pub content: SignatureBytes,
+    pub(crate) content: SignatureBytes,
     /// Public key
     #[serde(rename = "publicKey")]
-    pub public_key: HashedRekordPublicKey,
+    pub(crate) public_key: HashedRekordPublicKey,
 }
 
 /// Public key in HashedRekord
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HashedRekordPublicKey {
+pub(crate) struct HashedRekordPublicKey {
     /// PEM-encoded public key or certificate (base64-encoded PEM)
-    pub content: PemContent,
+    pub(crate) content: PemContent,
 }
 
 impl HashedRekord {
@@ -404,22 +423,22 @@ impl HashedRekord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HashedRekordV2 {
     #[serde(rename = "hashedRekordRequestV002")]
-    pub request: HashedRekordRequestV002,
+    pub(crate) request: HashedRekordRequestV002,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HashedRekordRequestV002 {
-    pub digest: Sha256Hash,
-    pub signature: HashedRekordSignatureV2,
+pub(crate) struct HashedRekordRequestV002 {
+    pub(crate) digest: Sha256Hash,
+    pub(crate) signature: HashedRekordSignatureV2,
 }
 
 /// Signature in HashedRekord V2
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HashedRekordSignatureV2 {
+pub(crate) struct HashedRekordSignatureV2 {
     /// Signature content
-    pub content: SignatureBytes,
+    pub(crate) content: SignatureBytes,
     /// Verifier
-    pub verifier: HashedRekordVerifierV2,
+    pub(crate) verifier: HashedRekordVerifierV2,
 }
 
 /// Signature algorithms accepted by the Rekor v2 hashedrekord service.
@@ -437,24 +456,24 @@ pub enum RekorV2KeyDetails {
 /// Verifier in a Rekor v2 hashedrekord request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct HashedRekordVerifierV2 {
-    pub key_details: RekorV2KeyDetails,
+pub(crate) struct HashedRekordVerifierV2 {
+    pub(crate) key_details: RekorV2KeyDetails,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x509_certificate: Option<HashedRekordCertificateV2>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_key: Option<HashedRekordPublicKeyV2>,
+    pub(crate) public_key: Option<HashedRekordPublicKeyV2>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HashedRekordCertificateV2 {
+pub(crate) struct HashedRekordCertificateV2 {
     #[serde(rename = "rawBytes")]
-    pub content: DerCertificate,
+    pub(crate) content: DerCertificate,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HashedRekordPublicKeyV2 {
+pub(crate) struct HashedRekordPublicKeyV2 {
     #[serde(rename = "rawBytes")]
-    pub content: DerPublicKey,
+    pub(crate) content: DerPublicKey,
 }
 
 impl HashedRekordV2 {

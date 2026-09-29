@@ -766,7 +766,7 @@ impl Signer {
         match self.rekor_api_version {
             RekorApiVersion::V1 => {
                 let rekor = self.rekor_client()?;
-                let request = DsseEntry::new(envelope, certificate);
+                let request = DsseEntry::new(envelope, certificate)?;
                 let entry = rekor.create_dsse_entry(request).await?;
                 to_bundle_entry(&entry, KindVersion::DsseV001)
             }

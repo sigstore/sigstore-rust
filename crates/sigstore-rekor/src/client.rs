@@ -171,12 +171,7 @@ impl RekorClient {
 
     /// Search for entries of an artifact by its SHA-256 digest
     pub async fn search_by_hash(&self, hash: &Sha256Hash) -> Result<Vec<EntryUuid>> {
-        self.search_index(SearchIndex {
-            hash: Some(format!("sha256:{}", hash.to_hex())),
-            email: None,
-            public_key: None,
-        })
-        .await
+        self.search_index(SearchIndex::sha256(hash)).await
     }
 }
 
