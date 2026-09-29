@@ -337,7 +337,7 @@ fn requires_blob(bundle: &Bundle) -> Result<bool, Error> {
     }
     let cert = bundle
         .signing_certificate()
-        .ok_or_else(|| Error::Verification("bundle has no signing certificate".into()))?;
+        .ok_or_else(|| Error::InvalidBundle("bundle has no signing certificate".into()))?;
     Ok(!sigstore_crypto::parse_certificate_info(cert)?
         .key_algorithm
         .default_signing_scheme()

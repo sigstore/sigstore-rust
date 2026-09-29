@@ -94,7 +94,7 @@ impl DigitallySigned {
         let mut tbs_precert_der = Vec::new();
         tbs_precert
             .encode_to_vec(&mut tbs_precert_der)
-            .map_err(|e| Error::Verification(format!("failed to encode precert TBS: {}", e)))?;
+            .map_err(|e| Error::sct(format!("failed to encode precert TBS: {}", e)))?;
 
         Ok(DigitallySigned {
             version: match sct.version {
@@ -115,7 +115,7 @@ impl DigitallySigned {
     /// The bytes the CT log signed, serialized according to RFC 6962
     pub fn signed_data(&self) -> Result<Vec<u8>> {
         self.tls_serialize()
-            .map_err(|e| Error::Verification(format!("failed to serialize SCT data: {}", e)))
+            .map_err(|e| Error::sct(format!("failed to serialize SCT data: {}", e)))
     }
 
     /// The log ID this SCT claims to come from: RFC 6962 §3.2's key ID, i.e.
@@ -133,7 +133,7 @@ fn sct_signing_scheme(sig_alg: u16) -> Result<SigningScheme> {
         RSA_PKCS1_SHA256 => Ok(SigningScheme::RsaPkcs1Sha256),
         RSA_PKCS1_SHA384 => Ok(SigningScheme::RsaPkcs1Sha384),
         RSA_PKCS1_SHA512 => Ok(SigningScheme::RsaPkcs1Sha512),
-        _ => Err(Error::Verification(format!(
+        _ => Err(Error::sct(format!(
             "unsupported SCT signature algorithm: 0x{:04x}",
             sig_alg
         ))),
@@ -149,7 +149,7 @@ pub fn extract_sct(
     let scts: SignedCertificateTimestampList = match cert.tbs_certificate.get() {
         Ok(Some((_, ext))) => ext,
         _ => {
-            return Err(Error::Verification(
+            return Err(Error::sct(
                 "certificate is missing SCT extension (Signed Certificate Timestamp)".to_string(),
             ))
         }
@@ -158,20 +158,16 @@ pub fn extract_sct(
     // Parse the SCT structures
     let timestamps = scts
         .parse_timestamps()
-        .map_err(|e| Error::Verification(format!("failed to parse SCT list: {:?}", e)))?;
+        .map_err(|e| Error::sct(format!("failed to parse SCT list: {:?}", e)))?;
 
     // We expect exactly one SCT
     let sct = match timestamps.as_slice() {
         [single] => single
             .parse_timestamp()
-            .map_err(|e| Error::Verification(format!("failed to parse SCT: {:?}", e)))?,
-        [] => {
-            return Err(Error::Verification(
-                "no SCTs found in certificate".to_string(),
-            ))
-        }
+            .map_err(|e| Error::sct(format!("failed to parse SCT: {:?}", e)))?,
+        [] => return Err(Error::sct("no SCTs found in certificate".to_string())),
         _ => {
-            return Err(Error::Verification(
+            return Err(Error::sct(
                 "certificate contains multiple SCTs, expected exactly one".to_string(),
             ))
         }
@@ -195,16 +191,18 @@ pub fn verify_sct(
 ) -> Result<()> {
     // Parse the certificate
     let cert = Certificate::from_der(cert_der)
-        .map_err(|e| Error::Verification(format!("failed to parse certificate: {}", e)))?;
+        .map_err(|e| Error::cert_malformed(format!("failed to parse certificate: {}", e)))?;
 
     // Extract the SCT and calculate issuer key hash
     let (sct, issuer_key_hash) = extract_sct(&cert, issuer_spki_der)?;
 
     // Extract signature algorithm and signature bytes for verification
     // Convert the SignatureAndHashAlgorithm to u16
-    let sig_alg_bytes = sct.signature.algorithm.tls_serialize().map_err(|e| {
-        Error::Verification(format!("failed to serialize signature algorithm: {}", e))
-    })?;
+    let sig_alg_bytes = sct
+        .signature
+        .algorithm
+        .tls_serialize()
+        .map_err(|e| Error::sct(format!("failed to serialize signature algorithm: {}", e)))?;
     let sig_alg = u16::from_be_bytes([sig_alg_bytes[0], sig_alg_bytes[1]]);
     let scheme = sct_signing_scheme(sig_alg)?;
     let signature = SignatureBytes::new(sct.signature.signature.clone().into_vec());
@@ -215,10 +213,10 @@ pub fn verify_sct(
     let keyring = &ct_keys
         .iter()
         .find(|(candidate, _)| *candidate == scheme)
-        .ok_or_else(|| Error::Verification("unsupported SCT signing scheme".into()))?
+        .ok_or_else(|| Error::sct("unsupported SCT signing scheme".into()))?
         .1;
     if keyring.is_empty() {
-        return Err(Error::Verification(
+        return Err(Error::InvalidTrustRoot(
             "no CT log keys in trusted root".to_string(),
         ));
     }
@@ -227,9 +225,9 @@ pub fn verify_sct(
     let log_id = digitally_signed.log_id();
     let issued_at = jiff::Timestamp::from_millisecond(
         i64::try_from(sct.timestamp)
-            .map_err(|_| Error::Verification("SCT timestamp is out of range".to_string()))?,
+            .map_err(|_| Error::sct("SCT timestamp is out of range".to_string()))?,
     )
-    .map_err(|e| Error::Verification(format!("invalid SCT timestamp: {e}")))?;
+    .map_err(|e| Error::sct(format!("invalid SCT timestamp: {e}")))?;
 
     keyring
         .verify_with_key_id_at(
@@ -238,5 +236,5 @@ pub fn verify_sct(
             &digitally_signed.signed_data()?,
             &signature,
         )
-        .map_err(|e| Error::Verification(format!("SCT signature verification failed: {e}")))
+        .map_err(|e| Error::sct(format!("SCT signature verification failed: {e}")))
 }

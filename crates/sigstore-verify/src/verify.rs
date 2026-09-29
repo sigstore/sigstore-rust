@@ -390,7 +390,7 @@ impl Verifier {
             validate_trust_window(public_key.valid_for)?;
             let id = Sha256Hash::try_from(id.key_id.as_bytes())?;
             if !ids.insert((is_rekor, id)) {
-                return Err(Error::Verification(format!(
+                return Err(Error::InvalidTrustRoot(format!(
                     "duplicate trusted log ID: {}",
                     id.to_hex()
                 )));
@@ -428,7 +428,7 @@ impl Verifier {
         for (is_fulcio, chain, window) in authorities {
             validate_trust_window(window)?;
             if chain.certificates.is_empty() {
-                return Err(Error::Verification(
+                return Err(Error::InvalidTrustRoot(
                     "trusted authority has an empty certificate chain".into(),
                 ));
             }
@@ -572,7 +572,7 @@ impl Verifier {
         let mut result = VerificationResult::new();
         let cert = bundle
             .signing_certificate()
-            .ok_or_else(|| Error::Verification("bundle has no signing certificate".into()))?;
+            .ok_or_else(|| Error::InvalidBundle("bundle has no signing certificate".into()))?;
 
         // Store the certificate and its two matchable claims in the result
         result.identity = cert_info.identity.clone();
@@ -620,7 +620,7 @@ impl Verifier {
             // closed rather than panic if that ever stops holding: reaching
             // here with no issuer means no timestamp was actually checked.
             let Some(issuer_spki) = issuer_spki else {
-                return Err(Error::Verification(
+                return Err(Error::no_verified_timestamp(
                     "no verified timestamp to validate the signing certificate against".to_string(),
                 ));
             };
@@ -875,7 +875,7 @@ impl Verifier {
                 requirements.verify_binding(&artifact)?;
             }
             _ => {
-                return Err(Error::Verification(
+                return Err(Error::UnsupportedBundle(
                     "unsupported bundle signature content".to_string(),
                 ))
             }
@@ -897,7 +897,7 @@ impl Verifier {
 
 fn validate_trust_window(window: Option<sigstore_types::TimeRange>) -> Result<()> {
     if window.is_some_and(|range| range.end.is_some_and(|end| end < range.start)) {
-        return Err(Error::Verification(
+        return Err(Error::InvalidTrustRoot(
             "trusted validity window ends before it starts".into(),
         ));
     }
@@ -913,7 +913,7 @@ fn verify_message_digest_binding(
     if let Some(digest) = &msg_sig.message_digest {
         let artifact_digest = artifact.digest(digest.algorithm)?;
         if digest.digest != artifact_digest.as_bytes() {
-            return Err(Error::Verification(
+            return Err(Error::ArtifactMismatch(
                 "message digest in bundle does not match artifact hash".to_string(),
             ));
         }
@@ -931,7 +931,7 @@ fn verify_dsse_envelope_signature(
     let pae = envelope.pae();
 
     sigstore_crypto::verify_signature(public_key, &pae, &envelope.signature.sig, scheme)
-        .map_err(|e| Error::Verification(format!("DSSE signature verification failed: {}", e)))
+        .map_err(|e| Error::SignatureInvalid(format!("DSSE signature verification failed: {}", e)))
 }
 
 /// Verify `signature` over `artifact` with an already-resolved signing scheme.
@@ -956,9 +956,9 @@ fn verify_signature_over_artifact(
     } else if let Some(blob) = artifact.blob() {
         sigstore_crypto::verify_signature(public_key, blob, signature, scheme)
     } else {
-        return Err(Error::Verification(format!("cannot verify signature from a digest or reader - scheme {} does not support prehashed mode", scheme.name())));
+        return Err(Error::UnsupportedArtifact(format!("cannot verify signature from a digest or reader - scheme {} does not support prehashed mode", scheme.name())));
     };
-    result.map_err(|e| Error::Verification(format!("signature verification failed: {}", e)))
+    result.map_err(|e| Error::SignatureInvalid(format!("signature verification failed: {}", e)))
 }
 
 /// Cryptographically verify a `MessageSignature`'s signature over the artifact
@@ -989,7 +989,7 @@ fn signing_scheme_for_content(
             signing_scheme_for_message_signature(key_algorithm, msg_sig)
         }
         SignatureContent::DsseEnvelope(_) => Ok(key_algorithm.default_signing_scheme()),
-        _ => Err(Error::Verification(
+        _ => Err(Error::UnsupportedBundle(
             "unsupported bundle signature content".to_string(),
         )),
     }
@@ -1002,7 +1002,7 @@ fn validate_structure(bundle: &Bundle, verify_tlog: bool) -> Result<()> {
             .with_require_inclusion_proof(verify_tlog)
             .with_require_timestamp(false),
     )
-    .map_err(|e| Error::Verification(format!("bundle validation failed: {e}")))
+    .map_err(Error::Bundle)
 }
 
 fn prepare_certificate(
@@ -1012,9 +1012,9 @@ fn prepare_certificate(
     validate_structure(bundle, policy.verify_tlog)?;
     let cert = bundle
         .signing_certificate()
-        .ok_or_else(|| Error::Verification("bundle has no signing certificate".into()))?;
+        .ok_or_else(|| Error::InvalidBundle("bundle has no signing certificate".into()))?;
     parse_certificate_info(cert)
-        .map_err(|e| Error::Verification(format!("failed to parse certificate: {e}")))
+        .map_err(|e| Error::cert_malformed(format!("failed to parse certificate: {e}")))
 }
 
 fn prepare_public_key(
@@ -1026,7 +1026,7 @@ fn prepare_public_key(
         bundle.verification_material.content,
         VerificationMaterialContent::PublicKey(_)
     ) {
-        return Err(Error::Verification(
+        return Err(Error::UnsupportedBundle(
             "bundle contains a certificate but public-key verification was requested".into(),
         ));
     }

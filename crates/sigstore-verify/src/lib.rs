@@ -39,7 +39,7 @@ pub use sigstore_trust_root as trust_root;
 pub use sigstore_tsa as tsa;
 pub use sigstore_types as types;
 
-pub use error::{Error, Result};
+pub use error::{CertificateError, Error, Result, TimestampError, TransparencyLogError};
 pub use sigstore_crypto::SubjectAltName;
 pub use verify::{
     verify, verify_with_key, CertificatePolicy, IdentityMatcher, PublicKeyVerificationPolicy,

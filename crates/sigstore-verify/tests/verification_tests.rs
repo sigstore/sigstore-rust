@@ -168,7 +168,12 @@ fn test_tampered_inclusion_proof_fails_verification() {
     let err = verify(artifact_digest, &bundle, &policy, &production_root())
         .expect_err("verification must fail with a tampered inclusion proof");
     assert!(
-        err.to_string().contains("inclusion proof"),
+        matches!(
+            err,
+            sigstore_verify::Error::TransparencyLog(
+                sigstore_verify::TransparencyLogError::InclusionProof(_)
+            )
+        ),
         "unexpected error: {}",
         err
     );
@@ -190,8 +195,8 @@ fn test_tampered_canonicalized_body_fails_verification() {
 
     let result = verify(artifact_digest, &bundle, &policy, &production_root());
     assert!(
-        result.is_err(),
-        "verification must fail when the canonicalized body does not match the inclusion proof"
+        matches!(result, Err(sigstore_verify::Error::TransparencyLog(_))),
+        "verification must fail when the canonicalized body does not match the inclusion proof: {result:?}"
     );
 }
 
@@ -1045,7 +1050,7 @@ fn test_verify_conda_package_tampered_from_reader() {
         )
         .unwrap_err();
     assert!(
-        err.to_string().contains("does not match any subject"),
+        matches!(err, sigstore_verify::Error::ArtifactMismatch(_)),
         "unexpected error: {err}"
     );
 }
@@ -1065,8 +1070,8 @@ fn test_verify_conda_package_wrong_identity() {
 
     let result = verify(CONDA_PACKAGE, &bundle, &policy, &production_root());
     assert!(
-        result.is_err(),
-        "Verification should fail with wrong identity"
+        matches!(result, Err(sigstore_verify::Error::IdentityMismatch { .. })),
+        "Verification should fail with wrong identity: {result:?}"
     );
 }
 
@@ -1084,8 +1089,8 @@ fn test_verify_conda_package_tampered() {
 
     let result = verify(tampered_package, &bundle, &policy, &production_root());
     assert!(
-        result.is_err(),
-        "Verification should fail with tampered package"
+        matches!(result, Err(sigstore_verify::Error::ArtifactMismatch(_))),
+        "Verification should fail with tampered package: {result:?}"
     );
 }
 

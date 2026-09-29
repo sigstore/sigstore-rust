@@ -29,14 +29,14 @@ pub(crate) fn verify_hashedrekord_entry(
 ) -> Result<()> {
     // Parse the Rekor entry body (convert canonicalized body to base64 string)
     let body = RekorEntryBody::parse(&entry.canonicalized_body, entry.kind_version)
-        .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
+        .map_err(|e| Error::malformed_entry(format!("failed to parse Rekor body: {}", e)))?;
 
     // Compute hash from artifact (bytes or pre-computed digest) or DSSE envelope
     let hash = match &bundle.content {
         SignatureContent::MessageSignature(_) => artifact.sha256()?,
         SignatureContent::DsseEnvelope(envelope) => sigstore_crypto::sha256(&envelope.pae()),
         _ => {
-            return Err(Error::Verification(
+            return Err(Error::UnsupportedBundle(
                 "unsupported bundle signature content".to_string(),
             ))
         }
@@ -46,8 +46,10 @@ pub(crate) fn verify_hashedrekord_entry(
     match &body {
         RekorEntryBody::HashedRekordV001(rekord) => {
             // v0.0.1: spec.data.hash.value (hex-encoded)
-            let expected = Sha256Hash::from_hex(rekord.spec.data.hash.value.as_str())
-                .map_err(|e| Error::Verification(format!("invalid hash in Rekor entry: {}", e)))?;
+            let expected =
+                Sha256Hash::from_hex(rekord.spec.data.hash.value.as_str()).map_err(|e| {
+                    Error::malformed_entry(format!("invalid hash in Rekor entry: {}", e))
+                })?;
             validate_artifact_hash(&hash, &expected)?;
         }
         RekorEntryBody::HashedRekordV002(rekord) => {
@@ -55,18 +57,18 @@ pub(crate) fn verify_hashedrekord_entry(
             // not reinterpret a digest logged under a different algorithm.
             let logged = &rekord.spec.hashed_rekord_v002;
             if logged.data.algorithm != sigstore_types::HashAlgorithm::Sha2256 {
-                return Err(Error::Verification(format!(
+                return Err(Error::UnsupportedBundle(format!(
                     "unsupported Rekor v2 digest algorithm: {}",
                     logged.data.algorithm
                 )));
             }
             let expected = Sha256Hash::try_from(&logged.data.digest).map_err(|e| {
-                Error::Verification(format!("invalid digest in Rekor entry: {}", e))
+                Error::malformed_entry(format!("invalid digest in Rekor entry: {}", e))
             })?;
             validate_artifact_hash(&hash, &expected)?;
         }
         _ => {
-            return Err(Error::Verification(format!(
+            return Err(Error::malformed_entry(format!(
                 "expected HashedRekord body, got different type for version {}",
                 entry.kind_version.version()
             )));
@@ -88,7 +90,7 @@ pub(crate) fn verify_hashedrekord_entry(
 /// Validate artifact hash matches expected hash
 fn validate_artifact_hash(artifact_hash: &Sha256Hash, expected_hash: &Sha256Hash) -> Result<()> {
     if artifact_hash != expected_hash {
-        return Err(Error::Verification(
+        return Err(Error::ArtifactMismatch(
             "artifact hash mismatch for hashedrekord entry".to_string(),
         ));
     }
@@ -114,14 +116,14 @@ fn validate_verifier_match(
         VerificationMaterialContent::Certificate(cert) => Some(&cert.raw_bytes),
         VerificationMaterialContent::PublicKey(_) => None,
         _ => {
-            return Err(Error::Verification(
+            return Err(Error::UnsupportedBundle(
                 "unsupported bundle verification material".to_string(),
             ))
         }
     };
     if bundle_cert.is_none() {
         let managed_key = managed_key.ok_or_else(|| {
-            Error::Verification(
+            Error::entry_mismatch(
                 "Rekor verifier cannot be bound without the managed public key".to_string(),
             )
         })?;
@@ -131,7 +133,7 @@ fn validate_verifier_match(
                 .signature
                 .public_key
                 .parse_public_key()
-                .map_err(|e| Error::Verification(e.to_string()))?,
+                .map_err(|e| Error::malformed_entry(e.to_string()))?,
             RekorEntryBody::HashedRekordV002(rekord) => rekord
                 .spec
                 .hashed_rekord_v002
@@ -141,18 +143,18 @@ fn validate_verifier_match(
                 .as_ref()
                 .map(|key| key.raw_bytes.clone())
                 .ok_or_else(|| {
-                    Error::Verification(
+                    Error::entry_mismatch(
                         "managed-key Rekor entry contains no public-key verifier".to_string(),
                     )
                 })?,
             _ => {
-                return Err(Error::Verification(
+                return Err(Error::UnsupportedBundle(
                     "unsupported Rekor verifier type".to_string(),
                 ))
             }
         };
         if rekor_key.as_bytes() != managed_key.as_bytes() {
-            return Err(Error::Verification(
+            return Err(Error::entry_mismatch(
                 "public key in Rekor entry does not match managed key".to_string(),
             ));
         }
@@ -169,7 +171,7 @@ fn validate_verifier_match(
                 .signature
                 .public_key
                 .parse_certificate()
-                .map_err(|e| Error::Verification(format!("{}", e)))?;
+                .map_err(|e| Error::malformed_entry(format!("{}", e)))?;
             Some(cert.as_bytes().to_vec())
         }
         RekorEntryBody::HashedRekordV002(rekord) => {
@@ -187,10 +189,10 @@ fn validate_verifier_match(
     };
 
     let rekor_cert_der = rekor_cert_der_opt.ok_or_else(|| {
-        Error::Verification("certificate-backed Rekor entry contains no certificate".to_string())
+        Error::entry_mismatch("certificate-backed Rekor entry contains no certificate".to_string())
     })?;
     if bundle_cert.as_bytes() != rekor_cert_der {
-        return Err(Error::Verification(
+        return Err(Error::entry_mismatch(
             "certificate in bundle does not match certificate in Rekor entry".to_string(),
         ));
     }
@@ -225,21 +227,21 @@ fn validate_signature_match(
 
                 // Compare signatures (both are SignatureBytes)
                 if bundle_sig != rekor_sig {
-                    return Err(Error::Verification(
+                    return Err(Error::entry_mismatch(
                         "signature in bundle does not match signature in Rekor entry".to_string(),
                     ));
                 }
             }
             SignatureContent::DsseEnvelope(envelope) => {
                 if &envelope.signature.sig != rekor_sig {
-                    return Err(Error::Verification(
+                    return Err(Error::entry_mismatch(
                         "DSSE signature in bundle does not match signature in Rekor entry"
                             .to_string(),
                     ));
                 }
             }
             _ => {
-                return Err(Error::Verification(
+                return Err(Error::UnsupportedBundle(
                     "unsupported bundle signature content".to_string(),
                 ))
             }
@@ -269,7 +271,7 @@ fn validate_integrated_time(entry: &TransparencyLogEntry, bundle: &Bundle) -> Re
             .filter(|_| entry.kind_version == KindVersion::HashedRekordV001);
         if let Some(integrated_time) = v1_integrated_time {
             let cert = Certificate::from_der(bundle_cert_der).map_err(|e| {
-                Error::Verification(format!(
+                Error::cert_malformed(format!(
                     "failed to parse certificate for time validation: {}",
                     e
                 ))
@@ -278,13 +280,13 @@ fn validate_integrated_time(entry: &TransparencyLogEntry, bundle: &Bundle) -> Re
             let not_before = jiff::Timestamp::try_from(
                 cert.tbs_certificate.validity.not_before.to_system_time(),
             )
-            .map_err(|e| Error::Verification(format!("invalid notBefore time: {}", e)))?;
+            .map_err(|e| Error::cert_malformed(format!("invalid notBefore time: {}", e)))?;
             let not_after =
                 jiff::Timestamp::try_from(cert.tbs_certificate.validity.not_after.to_system_time())
-                    .map_err(|e| Error::Verification(format!("invalid notAfter time: {}", e)))?;
+                    .map_err(|e| Error::cert_malformed(format!("invalid notAfter time: {}", e)))?;
 
             if integrated_time < not_before || integrated_time > not_after {
-                return Err(Error::Verification(format!(
+                return Err(Error::integrated_time(format!(
                     "integrated time {} is outside certificate validity period ({} to {})",
                     integrated_time, not_before, not_after
                 )));

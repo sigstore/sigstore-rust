@@ -45,21 +45,21 @@ pub(crate) fn verify_tlog_consistency_with_key(
                 verify_intoto_v002(entry, envelope, bundle, managed_key)?
             }
             (SignatureContent::DsseEnvelope(_), format) => {
-                return Err(Error::Verification(format!(
+                return Err(Error::UnsupportedBundle(format!(
                     "Rekor entry {}/{} is incompatible with a DSSE envelope",
                     format.kind(),
                     format.version()
                 )))
             }
             (SignatureContent::MessageSignature(_), format) => {
-                return Err(Error::Verification(format!(
+                return Err(Error::UnsupportedBundle(format!(
                     "Rekor entry {}/{} is incompatible with a message signature",
                     format.kind(),
                     format.version()
                 )))
             }
             _ => {
-                return Err(Error::Verification(
+                return Err(Error::UnsupportedBundle(
                     "unsupported bundle signature content".to_string(),
                 ))
             }
@@ -87,21 +87,21 @@ fn verify_dsse_v001(
     managed_key: Option<&DerPublicKey>,
 ) -> Result<()> {
     let body = RekorEntryBody::parse(&entry.canonicalized_body, entry.kind_version)
-        .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
+        .map_err(|e| Error::malformed_entry(format!("failed to parse Rekor body: {}", e)))?;
 
     let (payload_hash, rekor_signatures) = match &body {
         RekorEntryBody::DsseV001(dsse_body) => {
             (&dsse_body.spec.payload_hash, &dsse_body.spec.signatures)
         }
         _ => {
-            return Err(Error::Verification(
+            return Err(Error::malformed_entry(
                 "expected DSSE v0.0.1 body, got different type".to_string(),
             ))
         }
     };
 
     if payload_hash.algorithm != HashAlgorithm::Sha2256 {
-        return Err(Error::Verification(
+        return Err(Error::UnsupportedBundle(
             "unsupported DSSE payload hash algorithm".into(),
         ));
     }
@@ -113,7 +113,7 @@ fn verify_dsse_v001(
     let payload_hash_hex = hex::encode(payload_hash);
 
     if &payload_hash_hex != expected_hash {
-        return Err(Error::Verification(format!(
+        return Err(Error::entry_mismatch(format!(
             "DSSE payload hash mismatch: computed {}, expected {}",
             payload_hash_hex, expected_hash
         )));
@@ -126,7 +126,7 @@ fn verify_dsse_v001(
     // IMPORTANT: We must verify BOTH the signature bytes AND the verifier (certificate)
     // The bundle's envelope holds exactly one signature by construction.
     if rekor_signatures.len() != 1 {
-        return Err(Error::Verification(format!(
+        return Err(Error::entry_mismatch(format!(
             "DSSE signature count mismatch: bundle has 1, Rekor entry has {}",
             rekor_signatures.len()
         )));
@@ -134,7 +134,7 @@ fn verify_dsse_v001(
     let rekor_sig = &rekor_signatures[0];
 
     if envelope.signature.sig.as_bytes() != rekor_sig.signature.as_bytes() {
-        return Err(Error::Verification(
+        return Err(Error::entry_mismatch(
             "DSSE signature in bundle does not match any signature in Rekor entry (signature or verifier mismatch)".to_string(),
         ));
     }
@@ -142,15 +142,15 @@ fn verify_dsse_v001(
         // Convert Rekor's PEM verifier to DER for canonical comparison
         let rekor_cert_der = rekor_sig
             .parse_certificate()
-            .map_err(|e| Error::Verification(format!("{}", e)))?;
+            .map_err(|e| Error::malformed_entry(format!("{}", e)))?;
         if cert.as_bytes() != rekor_cert_der.as_bytes() {
-            return Err(Error::Verification(
+            return Err(Error::entry_mismatch(
                 "DSSE signature in bundle does not match any signature in Rekor entry (signature or verifier mismatch)".to_string(),
             ));
         }
     } else {
         let expected_key = managed_key.ok_or_else(|| {
-            Error::Verification(
+            Error::entry_mismatch(
                 "DSSE Rekor signature cannot be bound without the managed public key".into(),
             )
         })?;
@@ -158,13 +158,13 @@ fn verify_dsse_v001(
             Ok(cert) => certificate_public_key(&cert)?,
             Err(_) => {
                 let pem = std::str::from_utf8(rekor_sig.verifier.as_bytes())
-                    .map_err(|e| Error::Verification(format!("invalid DSSE verifier: {e}")))?;
+                    .map_err(|e| Error::malformed_entry(format!("invalid DSSE verifier: {e}")))?;
                 DerPublicKey::from_pem(pem)
-                    .map_err(|e| Error::Verification(format!("invalid DSSE verifier: {e}")))?
+                    .map_err(|e| Error::malformed_entry(format!("invalid DSSE verifier: {e}")))?
             }
         };
         if rekor_key != *expected_key {
-            return Err(Error::Verification(
+            return Err(Error::entry_mismatch(
                 "DSSE managed public key does not match the Rekor verifier".into(),
             ));
         }
@@ -181,7 +181,7 @@ fn verify_intoto_v002(
     managed_key: Option<&DerPublicKey>,
 ) -> Result<()> {
     let body = RekorEntryBody::parse(&entry.canonicalized_body, entry.kind_version)
-        .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
+        .map_err(|e| Error::malformed_entry(format!("failed to parse Rekor body: {}", e)))?;
 
     let (rekor_envelope, payload_hash) = match &body {
         RekorEntryBody::IntotoV002(intoto_body) => (
@@ -189,14 +189,14 @@ fn verify_intoto_v002(
             &intoto_body.spec.content.payload_hash,
         ),
         _ => {
-            return Err(Error::Verification(
+            return Err(Error::malformed_entry(
                 "expected Intoto v0.0.2 body, got different type".to_string(),
             ))
         }
     };
 
     if payload_hash.algorithm != HashAlgorithm::Sha2256 {
-        return Err(Error::Verification(format!(
+        return Err(Error::UnsupportedBundle(format!(
             "unsupported intoto payload hash algorithm: {}",
             payload_hash.algorithm
         )));
@@ -204,16 +204,16 @@ fn verify_intoto_v002(
     let expected_payload_hash = payload_hash
         .value
         .decode()
-        .map_err(|e| Error::Verification(format!("invalid intoto payload hash: {}", e)))?;
+        .map_err(|e| Error::malformed_entry(format!("invalid intoto payload hash: {}", e)))?;
     let actual_payload_hash = sigstore_crypto::sha256(envelope.payload.as_bytes());
     if actual_payload_hash.as_bytes() != expected_payload_hash.as_slice() {
-        return Err(Error::Verification(
+        return Err(Error::entry_mismatch(
             "DSSE payload hash does not match intoto Rekor entry".to_string(),
         ));
     }
 
     if envelope.payload_type != rekor_envelope.payload_type {
-        return Err(Error::Verification(format!(
+        return Err(Error::entry_mismatch(format!(
             "DSSE payload type mismatch: bundle has {:?}, Rekor entry has {:?}",
             envelope.payload_type, rekor_envelope.payload_type
         )));
@@ -222,25 +222,25 @@ fn verify_intoto_v002(
     let expected_public_key = match &bundle.verification_material.content {
         VerificationMaterialContent::X509CertificateChain { certificates } => {
             let certificate = certificates.first().ok_or_else(|| {
-                Error::Verification("bundle certificate chain is empty".to_string())
+                Error::InvalidBundle("bundle certificate chain is empty".to_string())
             })?;
             certificate_public_key(&certificate.raw_bytes)?
         }
         VerificationMaterialContent::Certificate(cert) => certificate_public_key(&cert.raw_bytes)?,
         VerificationMaterialContent::PublicKey(_) => managed_key.cloned().ok_or_else(|| {
-            Error::Verification(
+            Error::entry_mismatch(
                 "intoto Rekor signature cannot be bound without the managed public key".to_string(),
             )
         })?,
         _ => {
-            return Err(Error::Verification(
+            return Err(Error::UnsupportedBundle(
                 "unsupported bundle verification material".to_string(),
             ))
         }
     };
 
     let [rekor_sig] = rekor_envelope.signatures.as_slice() else {
-        return Err(Error::Verification(format!(
+        return Err(Error::entry_mismatch(format!(
             "DSSE signature count mismatch: bundle has 1, Rekor entry has {}",
             rekor_envelope.signatures.len()
         )));
@@ -250,9 +250,9 @@ fn verify_intoto_v002(
     // intoto/0.0.2 entries.
     let rekor_sig_decoded = base64::engine::general_purpose::STANDARD
         .decode(rekor_sig.sig.as_bytes())
-        .map_err(|e| Error::Verification(format!("failed to decode Rekor signature: {e}")))?;
+        .map_err(|e| Error::malformed_entry(format!("failed to decode Rekor signature: {e}")))?;
     if envelope.signature.sig.as_bytes() != rekor_sig_decoded.as_slice() {
-        return Err(Error::Verification(
+        return Err(Error::entry_mismatch(
             "DSSE signature in bundle does not match the intoto Rekor signature".to_string(),
         ));
     }
@@ -261,10 +261,10 @@ fn verify_intoto_v002(
         Ok(certificate) => certificate_public_key(&certificate)?,
         Err(_) => rekor_sig
             .parse_public_key()
-            .map_err(|e| Error::Verification(e.to_string()))?,
+            .map_err(|e| Error::malformed_entry(e.to_string()))?,
     };
     if rekor_public_key.as_bytes() != expected_public_key.as_bytes() {
-        return Err(Error::Verification(
+        return Err(Error::entry_mismatch(
             "DSSE signing certificate does not match the intoto Rekor verifier".to_string(),
         ));
     }
@@ -274,13 +274,13 @@ fn verify_intoto_v002(
 
 fn certificate_public_key(certificate: &DerCertificate) -> Result<DerPublicKey> {
     let certificate = x509_cert::Certificate::from_der(certificate.as_bytes())
-        .map_err(|e| Error::Verification(format!("failed to parse signing certificate: {e}")))?;
+        .map_err(|e| Error::cert_malformed(format!("failed to parse signing certificate: {e}")))?;
     let spki = certificate
         .tbs_certificate
         .subject_public_key_info
         .to_der()
         .map_err(|e| {
-            Error::Verification(format!(
+            Error::cert_malformed(format!(
                 "failed to encode signing certificate public key: {e}"
             ))
         })?;

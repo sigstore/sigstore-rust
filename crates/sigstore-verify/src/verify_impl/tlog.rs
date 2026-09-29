@@ -66,14 +66,14 @@ fn validate_integrated_time(
 
     // Check that integrated time is within certificate validity period
     if time < not_before {
-        return Err(Error::Verification(format!(
+        return Err(Error::integrated_time(format!(
             "integrated time {} is before certificate validity (not_before: {})",
             time, not_before
         )));
     }
 
     if time > not_after {
-        return Err(Error::Verification(format!(
+        return Err(Error::integrated_time(format!(
             "integrated time {} is after certificate validity (not_after: {})",
             time, not_after
         )));
@@ -87,7 +87,7 @@ pub(crate) fn validate_integrated_time_not_in_future(
     now: jiff::Timestamp,
 ) -> Result<()> {
     if time > now {
-        return Err(Error::Verification(format!(
+        return Err(Error::integrated_time(format!(
             "integrated time {} is in the future (current time: {})",
             time, now
         )));
@@ -137,7 +137,7 @@ pub fn verify_entry_inclusion(entry: &TransparencyLogEntry, rekor_keys: &Keyring
 fn verify_merkle_inclusion(entry: &TransparencyLogEntry, proof: &InclusionProof) -> Result<()> {
     let (leaf_index, tree_size, root_hash) = if is_rekor_v2(entry) {
         let checkpoint = proof.checkpoint.checkpoint().ok_or_else(|| {
-            Error::Verification("Rekor v2 inclusion proof has no checkpoint".to_string())
+            Error::checkpoint("Rekor v2 inclusion proof has no checkpoint".to_string())
         })?;
         let leaf_index = entry.log_index.get();
         (leaf_index, checkpoint.tree_size(), *checkpoint.root_hash())
@@ -156,7 +156,7 @@ fn verify_merkle_inclusion(entry: &TransparencyLogEntry, proof: &InclusionProof)
         &proof.hashes,
         &root_hash,
     )
-    .map_err(|e| Error::Verification(format!("inclusion proof verification failed: {}", e)))
+    .map_err(|e| Error::inclusion_proof(format!("inclusion proof verification failed: {}", e)))
 }
 
 /// Verify a checkpoint signature using the trusted root
@@ -168,7 +168,7 @@ pub fn verify_checkpoint(
 ) -> Result<()> {
     // Parse the checkpoint (signed note)
     let checkpoint = Checkpoint::from_text(checkpoint_envelope)
-        .map_err(|e| Error::Verification(format!("Failed to parse checkpoint: {}", e)))?;
+        .map_err(|e| Error::checkpoint(format!("Failed to parse checkpoint: {}", e)))?;
 
     // Rekor v1 requires internal consistency with its duplicate proof root.
     // Rekor v2 explicitly treats that field as unauthenticated and ignores it.
@@ -176,7 +176,7 @@ pub fn verify_checkpoint(
     let proof_root_hash = &inclusion_proof.root_hash;
 
     if !is_v2 && checkpoint_root_hash.as_bytes() != proof_root_hash.as_bytes() {
-        return Err(Error::Verification(format!(
+        return Err(Error::checkpoint(format!(
             "Checkpoint root hash mismatch: expected {}, got {}",
             checkpoint_root_hash.to_hex(),
             proof_root_hash.to_hex()
@@ -205,7 +205,7 @@ pub fn verify_checkpoint(
     } else {
         "No matching Rekor key found for checkpoint signature"
     };
-    Err(Error::Verification(message.to_string()))
+    Err(Error::checkpoint(message.to_string()))
 }
 
 fn is_rekor_v2(entry: &TransparencyLogEntry) -> bool {
@@ -228,18 +228,18 @@ pub fn verify_set(entry: &TransparencyLogEntry, rekor_keys: &Keyring) -> Result<
     let promise = entry
         .inclusion_promise
         .as_ref()
-        .ok_or(Error::Verification("Missing inclusion promise".into()))?;
+        .ok_or(Error::inclusion_promise("Missing inclusion promise".into()))?;
 
     // Find the key for the log ID. When the entry carries an integrated
     // time, require the log key's validity window to cover it: an entry must
     // have been integrated while the log key was valid.
     let decoded_key_id = entry.log_id.key_id.as_bytes();
     let key_id = Sha256Hash::try_from(decoded_key_id)
-        .map_err(|e| Error::Verification(format!("invalid Rekor log ID: {e}")))?;
+        .map_err(|e| Error::malformed_entry(format!("invalid Rekor log ID: {e}")))?;
     let keyring = rekor_keys;
     let log_key = if let Some(integrated_ts) = entry.integrated_time {
         keyring.get_key_at(&key_id, integrated_ts).ok_or_else(|| {
-            Error::Verification(format!(
+            Error::inclusion_promise(format!(
                 "No log key valid at integrated time {} for log ID {}",
                 integrated_ts, entry.log_id.key_id
             ))
@@ -247,9 +247,7 @@ pub fn verify_set(entry: &TransparencyLogEntry, rekor_keys: &Keyring) -> Result<
     } else {
         keyring
             .get_key_started_by(&key_id, jiff::Timestamp::now())
-            .ok_or_else(|| {
-                Error::Verification(format!("Unknown log ID: {}", entry.log_id.key_id))
-            })?
+            .ok_or_else(|| Error::unknown_log(entry.log_id.key_id.to_string()))?
     };
 
     // Construct the payload (base64-encoded body)
@@ -269,14 +267,14 @@ pub fn verify_set(entry: &TransparencyLogEntry, rekor_keys: &Keyring) -> Result<
     };
 
     let canonical_json = serde_json_canonicalizer::to_vec(&payload)
-        .map_err(|e| Error::Verification(format!("Canonicalization failed: {}", e)))?;
+        .map_err(|e| Error::inclusion_promise(format!("Canonicalization failed: {}", e)))?;
 
     // Get signature bytes from signed timestamp
     let signature = SignatureBytes::new(promise.signed_entry_timestamp.as_bytes().to_vec());
 
     log_key
         .verify(&canonical_json, &signature)
-        .map_err(|e| Error::Verification(format!("SET verification failed: {e}")))?;
+        .map_err(|e| Error::inclusion_promise(format!("SET verification failed: {e}")))?;
 
     Ok(())
 }

@@ -27,7 +27,7 @@ pub fn extract_signature(content: &SignatureContent) -> Result<SignatureBytes> {
     match content {
         SignatureContent::MessageSignature(msg_sig) => Ok(msg_sig.signature.clone()),
         SignatureContent::DsseEnvelope(envelope) => Ok(envelope.signature.sig.clone()),
-        _ => Err(Error::Verification(
+        _ => Err(Error::UnsupportedBundle(
             "unsupported bundle signature content".to_string(),
         )),
     }
@@ -99,13 +99,10 @@ fn verify_timestamp_against_authorities(
     }
 
     if let Some(time) = rejected_time {
-        return Err(Error::Verification(format!(
-            "TSA timestamp {} is outside the validity period of the timestamp authority that signed it",
-            time
-        )));
+        return Err(crate::error::TimestampError::OutsideAuthorityValidity { time }.into());
     }
 
-    Err(Error::Verification(format!(
+    Err(Error::timestamp_invalid(format!(
         "TSA timestamp verification failed: {}",
         last_error
             .unwrap_or_else(|| "no timestamp authorities configured in trusted root".to_string())
@@ -211,14 +208,14 @@ pub fn determine_validation_times(
     // This matches sigstore-python's behavior: "not enough sources of verified time"
     let is_v2 = has_v2_tlog_entries(bundle);
     if is_v2 {
-        Err(Error::Verification(
+        Err(Error::no_verified_timestamp(
             "V2 bundle requires RFC3161 timestamp but none could be verified. \
              V2 tlog entries have no integrated time by design. \
              Ensure TSA certificates are present in the trusted root."
                 .to_string(),
         ))
     } else {
-        Err(Error::Verification(
+        Err(Error::no_verified_timestamp(
             "No verified timestamp found. V1 bundles require either an RFC3161 timestamp \
              or a tlog entry with both an integrated time and an inclusion_promise (SET)."
                 .to_string(),
@@ -232,17 +229,19 @@ pub fn validate_certificate_time(
     cert_info: &CertificateInfo,
 ) -> Result<()> {
     if validation_time < cert_info.not_before {
-        return Err(Error::Verification(format!(
-            "certificate not yet valid: validation time {} is before not_before {}",
-            validation_time, cert_info.not_before
-        )));
+        return Err(crate::error::CertificateError::NotYetValid {
+            time: validation_time,
+            not_before: cert_info.not_before,
+        }
+        .into());
     }
 
     if validation_time > cert_info.not_after {
-        return Err(Error::Verification(format!(
-            "certificate has expired: validation time {} is after not_after {}",
-            validation_time, cert_info.not_after
-        )));
+        return Err(crate::error::CertificateError::Expired {
+            time: validation_time,
+            not_after: cert_info.not_after,
+        }
+        .into());
     }
 
     Ok(())
@@ -272,7 +271,7 @@ pub fn verify_certificate_chain(
         }
         VerificationMaterialContent::X509CertificateChain { certificates } => {
             if certificates.is_empty() {
-                return Err(Error::Verification("no certificates in chain".to_string()));
+                return Err(Error::InvalidBundle("no certificates in chain".to_string()));
             }
             let ee = certificates[0].raw_bytes.as_bytes().to_vec();
             let intermediates: Vec<Vec<u8>> = certificates[1..]
@@ -282,12 +281,12 @@ pub fn verify_certificate_chain(
             (ee, intermediates)
         }
         VerificationMaterialContent::PublicKey(_) => {
-            return Err(Error::Verification(
+            return Err(Error::UnsupportedBundle(
                 "public key verification not yet supported".to_string(),
             ));
         }
         _ => {
-            return Err(Error::Verification(
+            return Err(Error::UnsupportedBundle(
                 "unsupported bundle verification material".to_string(),
             ))
         }
@@ -302,9 +301,10 @@ pub fn verify_certificate_chain(
         .collect();
 
     if trust_anchors.is_empty() {
-        return Err(Error::Verification(format!(
-            "no Fulcio trust anchor is valid at authenticated signing time {validation_time}"
-        )));
+        return Err(crate::error::CertificateError::NoValidAuthority {
+            time: validation_time,
+        }
+        .into());
     }
 
     // Convert intermediate certificates to CertificateDer
@@ -316,7 +316,7 @@ pub fn verify_certificate_chain(
     // Parse the end-entity certificate for webpki
     let ee_cert_der_ref = CertificateDer::from(ee_cert_der.as_slice());
     let end_entity_cert = EndEntityCert::try_from(&ee_cert_der_ref).map_err(|e| {
-        Error::Verification(format!("failed to parse end-entity certificate: {}", e))
+        Error::cert_malformed(format!("failed to parse end-entity certificate: {}", e))
     })?;
 
     // Convert validation time to webpki UnixTime
@@ -340,7 +340,9 @@ pub fn verify_certificate_chain(
             None, // No CRL/OCSP revocation checking (matches sigstore-python)
             None, // No custom path validation callback needed
         )
-        .map_err(|e| Error::Verification(format!("certificate chain validation failed: {}", e)))?;
+        .map_err(|e| {
+            Error::cert_chain_invalid(format!("certificate chain validation failed: {}", e))
+        })?;
 
     tracing::debug!("Certificate chain validated successfully with CODE_SIGNING EKU");
 
@@ -364,7 +366,9 @@ fn issuer_spki_from_path(path: &webpki::VerifiedPath) -> Result<DerPublicKey> {
             let spki = path.anchor().subject_public_key_info.as_ref();
             Any::new(Tag::Sequence, spki)
                 .and_then(|any| any.to_der())
-                .map_err(|e| Error::Verification(format!("failed to encode issuer SPKI: {e}")))?
+                .map_err(|e| {
+                    Error::cert_chain_invalid(format!("failed to encode issuer SPKI: {e}"))
+                })?
         }
     };
     Ok(DerPublicKey::new(der))

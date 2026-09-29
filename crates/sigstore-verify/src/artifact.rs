@@ -38,24 +38,24 @@ impl ArtifactRequirements {
             }
             SignatureContent::DsseEnvelope(envelope) => {
                 if envelope.payload_type != "application/vnd.in-toto+json" {
-                    return Err(Error::Verification(format!(
+                    return Err(Error::UnsupportedBundle(format!(
                         "unsupported DSSE payload type {:?}: cannot bind artifact to attestation",
                         envelope.payload_type
                     )));
                 }
                 let statement: Statement = serde_json::from_slice(envelope.payload.as_bytes())
                     .map_err(|e| {
-                        Error::Verification(format!("failed to parse in-toto statement: {e}"))
+                        Error::InvalidBundle(format!("failed to parse in-toto statement: {e}"))
                     })?;
                 if statement.subject.is_empty() {
-                    return Err(Error::Verification(
+                    return Err(Error::InvalidBundle(
                         "in-toto statement has no subjects: cannot bind artifact to attestation"
                             .into(),
                     ));
                 }
                 let algorithms = statement.subject_algorithms();
                 if algorithms.is_empty() {
-                    return Err(Error::Verification(
+                    return Err(Error::UnsupportedBundle(
                         "in-toto statement has no supported subject digest algorithms".into(),
                     ));
                 }
@@ -65,7 +65,7 @@ impl ArtifactRequirements {
                     message_scheme: None,
                 })
             }
-            _ => Err(Error::Verification(
+            _ => Err(Error::UnsupportedBundle(
                 "unsupported bundle signature content".into(),
             )),
         }
@@ -82,7 +82,7 @@ impl ArtifactRequirements {
     fn check_reader(&self) -> Result<()> {
         if let Some(scheme) = self.message_scheme {
             if !scheme.supports_prehashed() {
-                return Err(Error::Verification(format!("cannot verify signature from a digest or reader - scheme {} does not support prehashed mode", scheme.name())));
+                return Err(Error::UnsupportedArtifact(format!("cannot verify signature from a digest or reader - scheme {} does not support prehashed mode", scheme.name())));
             }
         }
         Ok(())
@@ -97,7 +97,7 @@ impl ArtifactRequirements {
                     .sha512()
                     .is_ok_and(|digest| statement.matches_sha512(&digest));
             if !matches {
-                return Err(Error::Verification(
+                return Err(Error::ArtifactMismatch(
                     "artifact hash does not match any subject in attestation".into(),
                 ));
             }
@@ -134,7 +134,7 @@ impl<'a> PreparedArtifact<'a> {
                 digests: vec![digest],
             },
             other => {
-                return Err(Error::Verification(format!(
+                return Err(Error::UnsupportedArtifact(format!(
                     "unsupported artifact input: {other:?}"
                 )))
             }
@@ -190,7 +190,7 @@ impl<'a> PreparedArtifact<'a> {
                     .map(|digest| digest.algorithm().to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
-                Error::Verification(format!(
+                Error::UnsupportedArtifact(format!(
                     "verification requires an {algorithm} artifact digest; supplied: {supplied}"
                 ))
             })
@@ -198,12 +198,12 @@ impl<'a> PreparedArtifact<'a> {
 
     pub(crate) fn sha256(&self) -> Result<Sha256Hash> {
         Sha256Hash::try_from(self.digest(HashAlgorithm::Sha2256)?.as_bytes())
-            .map_err(|e| Error::Verification(e.to_string()))
+            .map_err(|e| Error::UnsupportedArtifact(e.to_string()))
     }
 
     pub(crate) fn sha512(&self) -> Result<Sha512Hash> {
         Sha512Hash::try_from(self.digest(HashAlgorithm::Sha2512)?.as_bytes())
-            .map_err(|e| Error::Verification(e.to_string()))
+            .map_err(|e| Error::UnsupportedArtifact(e.to_string()))
     }
 }
 
