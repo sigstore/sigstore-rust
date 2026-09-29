@@ -155,6 +155,13 @@ fn extract_v1_integrated_times_with_promise(
 
         if let Some(time) = entry.integrated_time {
             crate::verify_impl::tlog::verify_set(entry, rekor_keys)?;
+            // Checked here, not only in tlog verification, so that a signing
+            // time from the future is rejected even when tlog verification
+            // is skipped.
+            crate::verify_impl::tlog::validate_integrated_time_not_in_future(
+                time,
+                jiff::Timestamp::now(),
+            )?;
             times.push(time);
         }
     }

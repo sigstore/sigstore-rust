@@ -847,13 +847,27 @@ impl Verifier {
                             time,
                             jiff::Timestamp::now(),
                         )?;
-                        result.integrated_time = Some(time);
+                        result.integrated_time = Some(crate::verify_impl::tlog::earliest(
+                            result.integrated_time,
+                            time,
+                        ));
                         result.verified_timestamps.push(time);
                     }
                 }
             }
             result.tlog_verified = true;
         }
+
+        // RFC 3161 timestamps are optional for managed keys, but a timestamp
+        // that is present must verify, as on the keyless path.
+        let signature = crate::verify_impl::helpers::extract_signature(&bundle.content)?;
+        result
+            .verified_timestamps
+            .extend(crate::verify_impl::helpers::extract_tsa_timestamps(
+                bundle,
+                &signature,
+                &self.trusted_root,
+            )?);
 
         // Verify the signature
         match &bundle.content {

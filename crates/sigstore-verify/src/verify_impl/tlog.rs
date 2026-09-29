@@ -46,12 +46,18 @@ pub fn verify_tlog_entries(
         if !is_rekor_v2 && entry.inclusion_promise.is_some() {
             if let Some(time) = entry.integrated_time {
                 validate_integrated_time(time, jiff::Timestamp::now(), not_before, not_after)?;
-                integrated_time_result = Some(time);
+                integrated_time_result = Some(earliest(integrated_time_result, time));
             }
         }
     }
 
     Ok(integrated_time_result)
+}
+
+/// The earlier of an optional time and `time`: the earliest log integration
+/// is the strongest proof of when the signature existed.
+pub(crate) fn earliest(current: Option<jiff::Timestamp>, time: jiff::Timestamp) -> jiff::Timestamp {
+    current.map_or(time, |current| current.min(time))
 }
 
 /// Validate an entry's integrated time: it must not be in the future and

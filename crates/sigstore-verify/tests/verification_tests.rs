@@ -1821,7 +1821,49 @@ fn test_verifier_with_key_accepts_digest_and_reports_integrated_time() {
     assert!(!result.certificate_verified());
     assert!(!result.sct_verified());
     assert!(!result.identity_policy_checked());
-    assert_eq!(result.verified_timestamps(), &[expected_time.unwrap()]);
+    // The Rekor SET and the bundle's RFC 3161 timestamp both vouch for the
+    // signing time.
+    assert_eq!(
+        bundle
+            .verification_material
+            .timestamp_verification_data
+            .rfc3161_timestamps
+            .len(),
+        1
+    );
+    assert_eq!(result.verified_timestamps().len(), 2);
+    assert!(result
+        .verified_timestamps()
+        .contains(&expected_time.unwrap()));
+}
+
+/// An RFC 3161 timestamp in a managed-key bundle must verify: a token over a
+/// different signature is rejected rather than ignored.
+#[test]
+fn test_verifier_with_key_rejects_foreign_timestamp() {
+    let mut bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
+    let donor = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
+    bundle
+        .verification_material
+        .timestamp_verification_data
+        .rfc3161_timestamps = donor
+        .verification_material
+        .timestamp_verification_data
+        .rfc3161_timestamps;
+    let verifier = Verifier::new(&production_root()).unwrap();
+
+    let error = verifier
+        .verify_with_key(
+            MANAGED_KEY_ARTIFACT,
+            &bundle,
+            &managed_key_public_key(),
+            &PublicKeyVerificationPolicy::default(),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(error, sigstore_verify::Error::Timestamp(_)),
+        "{error}"
+    );
 }
 
 #[test]
