@@ -110,6 +110,18 @@ impl Digest {
     }
 }
 
+impl From<Sha256Hash> for Digest {
+    fn from(hash: Sha256Hash) -> Self {
+        Self::sha256(hash)
+    }
+}
+
+impl From<Sha512Hash> for Digest {
+    fn from(hash: Sha512Hash) -> Self {
+        Self::sha512(hash)
+    }
+}
+
 impl<'de> Deserialize<'de> for Digest {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

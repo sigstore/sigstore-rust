@@ -873,20 +873,11 @@ impl Signer {
 #[derive(Debug, Clone)]
 pub struct Attestation {
     /// Subjects (artifacts being attested about)
-    subjects: Vec<AttestationSubject>,
+    subjects: Vec<Subject>,
     /// Predicate type URI
     predicate_type: String,
     /// Predicate content
     predicate: serde_json::Value,
-}
-
-/// A subject in an attestation
-#[derive(Debug, Clone)]
-struct AttestationSubject {
-    /// Name of the artifact
-    pub name: String,
-    /// SHA-256 digest of the artifact
-    pub digest: Sha256Hash,
 }
 
 impl Attestation {
@@ -899,35 +890,36 @@ impl Attestation {
         }
     }
 
-    /// Add a subject to the attestation
-    pub fn add_subject(mut self, name: impl Into<String>, digest: Sha256Hash) -> Self {
-        self.subjects.push(AttestationSubject {
-            name: name.into(),
-            digest,
-        });
+    /// Add a subject to the attestation.
+    ///
+    /// `digest` is a [`Sha256Hash`], a [`Sha512Hash`](sigstore_types::Sha512Hash),
+    /// or a [`Digest`](sigstore_types::Digest) with several algorithms.
+    pub fn add_subject(
+        mut self,
+        name: impl Into<String>,
+        digest: impl Into<sigstore_types::Digest>,
+    ) -> Self {
+        self.subjects.push(Subject::new(name, digest.into()));
         self
     }
 
     /// Add multiple subjects at once
-    pub fn with_subjects(mut self, subjects: Vec<(String, Sha256Hash)>) -> Self {
-        for (name, digest) in subjects {
-            self.subjects.push(AttestationSubject { name, digest });
-        }
+    pub fn with_subjects<N, D>(mut self, subjects: impl IntoIterator<Item = (N, D)>) -> Self
+    where
+        N: Into<String>,
+        D: Into<sigstore_types::Digest>,
+    {
+        self.subjects.extend(
+            subjects
+                .into_iter()
+                .map(|(name, digest)| Subject::new(name, digest.into())),
+        );
         self
     }
 
     /// Build the in-toto statement
-    fn build_statement(&self) -> sigstore_types::Statement {
-        use sigstore_types::Digest;
-
-        sigstore_types::Statement::new(
-            self.subjects
-                .iter()
-                .map(|s| Subject::new(s.name.clone(), Digest::sha256(s.digest)))
-                .collect(),
-            self.predicate_type.clone(),
-            self.predicate.clone(),
-        )
+    fn build_statement(self) -> sigstore_types::Statement {
+        sigstore_types::Statement::new(self.subjects, self.predicate_type, self.predicate)
     }
 }
 
@@ -1142,6 +1134,19 @@ mod tests {
             error.to_string().contains("No Rekor V2 endpoint"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn attestation_subjects_accept_any_digest_algorithm() {
+        let sha256 = sigstore_crypto::sha256(b"a");
+        let sha512 = sigstore_crypto::sha512(b"b");
+        let statement = Attestation::new("https://example.com/p", serde_json::json!({}))
+            .add_subject("a", sha256)
+            .with_subjects([("b", sha512)])
+            .build_statement();
+        assert!(statement.matches_sha256(&sha256));
+        assert!(statement.matches_sha512(&sha512));
+        assert_eq!(statement.subject[1].name, "b");
     }
 
     #[tokio::test]
