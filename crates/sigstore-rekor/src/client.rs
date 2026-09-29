@@ -1,9 +1,7 @@
 //! Rekor client for transparency log operations
 
 use crate::body::RekorEntryBody;
-use crate::entry::{
-    DsseEntry, HashedRekord, HashedRekordV2, LogEntry, LogEntryResponse, SearchIndex,
-};
+use crate::entry::{DsseEntry, HashedRekord, HashedRekordV2, LogEntry, SearchIndex};
 use crate::error::{Error, Result};
 use serde::de::DeserializeOwned;
 use sigstore_types::{
@@ -70,6 +68,9 @@ async fn read_json<T: DeserializeOwned>(response: reqwest::Response, what: &str)
         .map_err(|e| Error::Http(e.to_string()))?;
     serde_json::from_slice(&body).map_err(|e| Error::InvalidResponse(format!("{what}: {e}")))
 }
+
+/// A Rekor v1 log entry response: a map of UUID to entry.
+type LogEntryResponse = std::collections::HashMap<String, LogEntry>;
 
 /// Extract the single entry from a Rekor v1 `{uuid: entry}` response.
 fn single_entry(entries: LogEntryResponse) -> Result<LogEntry> {

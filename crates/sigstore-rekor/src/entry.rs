@@ -6,7 +6,6 @@ use sigstore_types::{
     CanonicalizedBody, DerCertificate, DerPublicKey, EntryUuid, HashAlgorithm, LogIndex,
     PemContent, Sha256Hash, SignatureBytes, SignedTimestamp,
 };
-use std::collections::HashMap;
 
 /// Rekor API version
 ///
@@ -191,9 +190,6 @@ mod hex_sha256_vec {
             .collect()
     }
 }
-
-/// Response from creating a log entry (map of UUID to LogEntry)
-pub(crate) type LogEntryResponse = HashMap<String, LogEntry>;
 
 /// Search index query
 #[derive(Debug, Clone, Serialize, Deserialize)]

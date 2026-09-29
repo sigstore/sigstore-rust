@@ -4,10 +4,13 @@
 //! as specified in RFC 3161.
 
 use const_oid::ObjectIdentifier;
+#[cfg(any(feature = "client", test))]
+use der::{asn1::Uint, Encode};
 use der::{
-    asn1::{BitString, GeneralizedTime, Int, OctetString, Uint},
-    Encode, Sequence,
+    asn1::{BitString, GeneralizedTime, Int, OctetString},
+    Sequence,
 };
+#[cfg(any(feature = "client", test))]
 use rand::Rng;
 use sigstore_types::HashAlgorithm;
 use x509_cert::{ext::pkix::name::GeneralName, ext::Extensions};
@@ -30,6 +33,7 @@ pub const OID_TST_INFO: ObjectIdentifier =
 /// Uses `der::asn1::Uint` to guarantee correct minimal positive DER INTEGER
 /// encoding. Raw random bytes are passed through `Uint::new` which strips
 /// leading zeros and adds sign-bit padding as required by DER.
+#[cfg(any(feature = "client", test))]
 pub fn generate_nonce() -> Int {
     let nonce: u64 = rand::rng().random();
     let uint = Uint::new(&nonce.to_be_bytes()).expect("valid uint from random u64");
@@ -101,6 +105,7 @@ pub struct Asn1MessageImprint {
     pub hashed_message: OctetString,
 }
 
+#[cfg(any(feature = "client", test))]
 impl Asn1MessageImprint {
     /// Create a new message imprint
     pub fn new(algorithm: AlgorithmIdentifier, digest: Vec<u8>) -> Self {
@@ -113,6 +118,7 @@ impl Asn1MessageImprint {
 
 /// Time-stamp request
 /// RFC 3161 Section 2.4.1
+#[cfg(any(feature = "client", test))]
 #[derive(Clone, Debug, Eq, PartialEq, Sequence)]
 pub struct TimeStampReq {
     /// Version (must be 1)
@@ -135,6 +141,7 @@ fn default_false() -> bool {
     false
 }
 
+#[cfg(any(feature = "client", test))]
 impl TimeStampReq {
     /// Create a new timestamp request with an automatically generated nonce
     pub fn new(message_imprint: Asn1MessageImprint) -> Self {
