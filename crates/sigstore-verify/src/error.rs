@@ -1,6 +1,6 @@
 //! Error types for sigstore-verify
 //!
-//! [`Error`] says *why* verification failed in a form callers can match on:
+//! [`Error`](enum@Error) says *why* verification failed in a form callers can match on:
 //! a policy mismatch, an invalid signature, a certificate, transparency-log or
 //! timestamp problem, or a bundle that does not describe the artifact. The
 //! nested enums narrow the category further; their string payloads are
