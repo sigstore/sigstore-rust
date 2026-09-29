@@ -14,18 +14,27 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Raw hash tile returned by Rekor v2's C2SP tile endpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RekorV2Tile {
+    /// Tile level; level 0 holds leaf hashes.
     pub level: u32,
+    /// Tile index within its level.
     pub index: u64,
+    /// Number of hashes in a partial tile, or `None` for a full tile.
     pub width: Option<NonZeroU8>,
+    /// The concatenated 32-byte hashes.
     pub bytes: Vec<u8>,
 }
 
 /// Raw entry bundle returned by Rekor v2's C2SP tile endpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RekorV2EntryBundle {
+    /// Entry bundle index.
     pub index: u64,
+    /// Number of entries in a partial bundle, or `None` for a full bundle.
     pub width: Option<NonZeroU8>,
+    /// The length-prefixed entries.
     pub bytes: Vec<u8>,
 }
 

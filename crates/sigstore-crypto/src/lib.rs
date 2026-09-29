@@ -3,6 +3,8 @@
 //! This crate provides key generation, signing, and verification functionality
 //! using aws-lc-rs as the cryptographic backend.
 
+#![warn(missing_docs)]
+
 pub mod checkpoint;
 pub mod error;
 pub mod hash;

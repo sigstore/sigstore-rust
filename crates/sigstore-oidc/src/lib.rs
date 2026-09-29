@@ -3,6 +3,8 @@
 //! This crate handles identity token acquisition through various OIDC flows
 //! including interactive browser-based OAuth and ambient credential detection.
 
+#![warn(missing_docs)]
+
 pub mod error;
 pub mod oauth;
 pub mod templates;

@@ -16,11 +16,15 @@ use sigstore_types::{
 /// In v0.3 bundles, only a single certificate or a public key hint is allowed.
 /// Certificate chains are NOT permitted in v0.3 format.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum VerificationMaterialV03 {
     /// Single certificate (the common case for Fulcio-issued certs)
     Certificate(DerCertificate),
     /// Public key hint (for pre-existing keys)
-    PublicKey { hint: String },
+    PublicKey {
+        /// Identifies the key to the verifier; it is not the key itself
+        hint: String,
+    },
 }
 
 /// A Sigstore bundle in v0.3 format.

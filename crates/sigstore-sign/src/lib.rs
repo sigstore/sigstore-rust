@@ -24,6 +24,8 @@
 //! # }
 //! ```
 
+#![warn(missing_docs)]
+
 pub mod error;
 mod sign;
 

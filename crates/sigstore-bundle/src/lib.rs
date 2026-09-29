@@ -9,6 +9,8 @@
 //! a bundle (signatures, inclusion proofs, checkpoints, SETs, timestamps and
 //! certificates).
 
+#![warn(missing_docs)]
+
 pub mod builder;
 pub mod error;
 pub mod validation;

@@ -35,14 +35,17 @@ impl ArtifactDigest {
         }
     }
 
+    /// The hash algorithm.
     pub fn algorithm(&self) -> HashAlgorithm {
         self.algorithm
     }
 
+    /// The digest value.
     pub fn value(&self) -> &DigestBytes {
         &self.value
     }
 
+    /// The raw digest bytes.
     pub fn as_bytes(&self) -> &[u8] {
         self.value.as_bytes()
     }
@@ -71,14 +74,17 @@ pub enum Artifact<'a> {
 }
 
 impl<'a> Artifact<'a> {
+    /// The complete artifact bytes.
     pub fn from_blob(blob: &'a [u8]) -> Self {
         Self::Blob(blob)
     }
 
+    /// A pre-computed digest of the artifact.
     pub fn from_digest(digest: impl Into<ArtifactDigest>) -> Self {
         Self::Digest(digest.into())
     }
 
+    /// The artifact bytes, if they were supplied.
     pub fn blob(&self) -> Option<&[u8]> {
         match self {
             Self::Blob(blob) => Some(blob),
@@ -86,6 +92,7 @@ impl<'a> Artifact<'a> {
         }
     }
 
+    /// The pre-computed digest, if one was supplied instead of the bytes.
     pub fn digest(&self) -> Option<&ArtifactDigest> {
         match self {
             Self::Blob(_) => None,

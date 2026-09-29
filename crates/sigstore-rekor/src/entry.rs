@@ -449,6 +449,7 @@ pub(crate) struct HashedRekordSignatureV2 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum RekorV2KeyDetails {
+    /// ECDSA over P-256 with SHA-256, PKIX-encoded key.
     #[serde(rename = "PKIX_ECDSA_P256_SHA_256")]
     PkixEcdsaP256Sha256,
 }

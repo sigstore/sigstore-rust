@@ -3,6 +3,8 @@
 //! This crate implements the Time-Stamp Protocol as specified in RFC 3161,
 //! including request creation, response parsing, and timestamp verification.
 
+#![warn(missing_docs)]
+
 mod asn1;
 #[cfg(feature = "client")]
 mod client;

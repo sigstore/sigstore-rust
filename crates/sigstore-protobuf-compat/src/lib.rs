@@ -7,3 +7,5 @@
 //! JSON wire format those definitions specify. The tests in `tests/` enforce
 //! that against `sigstore_protobuf_specs`, the crate generated from
 //! <https://github.com/sigstore/protobuf-specs>.
+
+#![warn(missing_docs)]

@@ -36,38 +36,56 @@ pub enum RekorEntryBody {
 // HashedRekord v0.0.1
 // ============================================================================
 
+/// Body of a `hashedrekord` v0.0.1 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HashedRekordV001Body {
+    /// The entry-kind specific content.
     pub spec: HashedRekordV001Spec,
 }
 
+/// The `spec` of a `hashedrekord` v0.0.1 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HashedRekordV001Spec {
+    /// The signed artifact.
     pub data: HashedRekordV001Data,
+    /// The signature and the material to verify it.
     pub signature: HashedRekordV001Signature,
 }
 
+/// The artifact a `hashedrekord` v0.0.1 entry was made for.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HashedRekordV001Data {
+    /// Digest of the signed artifact.
     pub hash: HashValue,
 }
 
+/// A hash algorithm and hex-encoded digest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HashValue {
+    /// The hash algorithm.
     pub algorithm: HashAlgorithm,
     /// Hex-encoded hash value (used in v0.0.1)
     pub value: HexHash,
 }
 
+/// Signature and verification material of a `hashedrekord` v0.0.1 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct HashedRekordV001Signature {
     /// Base64-encoded signature
     pub content: SignatureBytes,
+    /// The key or certificate that verifies the signature.
     pub public_key: PublicKeyContent,
 }
 
+/// PEM verification material: a certificate or a public key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PublicKeyContent {
     /// Base64-encoded PEM public key (double-encoded: base64 of PEM text)
     pub content: PemContent,
@@ -101,24 +119,36 @@ impl PublicKeyContent {
 // HashedRekord v0.0.2
 // ============================================================================
 
+/// Body of a `hashedrekord` v0.0.2 (Rekor v2) entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HashedRekordV002Body {
+    /// The entry-kind specific content.
     pub spec: HashedRekordV002Spec,
 }
 
+/// The `spec` of a `hashedrekord` v0.0.2 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct HashedRekordV002Spec {
+    /// The `hashedRekordV002` content.
     pub hashed_rekord_v002: HashedRekordV002Data,
 }
 
+/// The artifact digest and signature of a `hashedrekord` v0.0.2 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HashedRekordV002Data {
+    /// The signed artifact.
     pub data: HashedRekordV002DataInner,
+    /// The signature and the material to verify it.
     pub signature: HashedRekordV002Signature,
 }
 
+/// The artifact digest of a `hashedrekord` v0.0.2 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HashedRekordV002DataInner {
     /// Algorithm used for the logged digest.
     pub algorithm: HashAlgorithm,
@@ -126,33 +156,44 @@ pub struct HashedRekordV002DataInner {
     pub digest: DigestBytes,
 }
 
+/// Signature and verifier of a `hashedrekord` v0.0.2 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HashedRekordV002Signature {
     /// Base64-encoded signature
     pub content: SignatureBytes,
+    /// The key that verifies the signature.
     pub verifier: HashedRekordV002Verifier,
 }
 
+/// The key that made a Rekor v2 signature.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct HashedRekordV002Verifier {
     /// Signature algorithm and key encoding authenticated by the log entry.
     pub key_details: RekorV2KeyDetails,
+    /// The signing certificate, for keyless signatures.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x509_certificate: Option<X509CertificateRaw>,
+    /// The key or certificate that verifies the signature.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_key: Option<PublicKeyRaw>,
 }
 
+/// A DER-encoded X.509 certificate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct X509CertificateRaw {
     /// DER-encoded certificate
     pub raw_bytes: DerCertificate,
 }
 
+/// A DER-encoded SubjectPublicKeyInfo public key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PublicKeyRaw {
     /// DER-encoded public key
     pub raw_bytes: DerPublicKey,
@@ -162,34 +203,51 @@ pub struct PublicKeyRaw {
 // DSSE v0.0.1
 // ============================================================================
 
+/// Body of a `dsse` v0.0.1 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DsseV001Body {
+    /// The entry-kind specific content.
     pub spec: DsseV001Spec,
 }
 
+/// The `spec` of a `dsse` v0.0.1 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct DsseV001Spec {
+    /// Hash of the complete DSSE envelope.
     pub envelope_hash: EnvelopeHash,
+    /// Hash of the DSSE payload.
     pub payload_hash: PayloadHashV001,
+    /// The envelope signatures.
     pub signatures: Vec<DsseV001Signature>,
 }
 
+/// Hash of a complete DSSE envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct EnvelopeHash {
+    /// The hash algorithm.
     pub algorithm: HashAlgorithm,
+    /// The digest value.
     pub value: String,
 }
 
+/// Hash of a DSSE payload in a `dsse` v0.0.1 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PayloadHashV001 {
+    /// The hash algorithm.
     pub algorithm: HashAlgorithm,
     /// Hash value (hex or base64-encoded depending on algorithm)
     pub value: String,
 }
 
+/// A signature over a DSSE envelope, with its verifier.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DsseV001Signature {
     /// Signature bytes
     pub signature: SignatureBytes,
@@ -214,32 +272,47 @@ impl DsseV001Signature {
 // DSSE v0.0.2
 // ============================================================================
 
+/// Body of a `dsse` v0.0.2 (Rekor v2) entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DsseV002Body {
+    /// The entry-kind specific content.
     pub spec: DsseV002Spec,
 }
 
+/// The `spec` of a `dsse` v0.0.2 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct DsseV002Spec {
+    /// The `dsseV002` content.
     pub dsse_v002: DsseV002Data,
 }
 
+/// Payload hash and signatures of a `dsse` v0.0.2 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct DsseV002Data {
+    /// Hash of the DSSE payload.
     pub payload_hash: PayloadHash,
+    /// The envelope signatures.
     pub signatures: Vec<DsseV002Signature>,
 }
 
+/// Hash of a DSSE payload in a `dsse` v0.0.2 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PayloadHash {
+    /// The hash algorithm.
     pub algorithm: HashAlgorithm,
     /// Hash digest (base64 on the wire)
     pub digest: DigestBytes,
 }
 
+/// A signature over a DSSE envelope in a `dsse` v0.0.2 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DsseV002Signature {
     /// Signature bytes
     pub content: SignatureBytes,
@@ -247,8 +320,10 @@ pub struct DsseV002Signature {
     pub verifier: DsseV002Verifier,
 }
 
+/// The key that made a `dsse` v0.0.2 signature.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct DsseV002Verifier {
     /// Key algorithm details (e.g., "PKIX_ECDSA_P256_SHA_256")
     pub key_details: String,
@@ -266,19 +341,28 @@ pub struct DsseV002Verifier {
 // Intoto v0.0.2
 // ============================================================================
 
+/// Body of an `intoto` v0.0.2 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct IntotoV002Body {
+    /// The entry-kind specific content.
     pub spec: IntotoV002Spec,
 }
 
+/// The `spec` of an `intoto` v0.0.2 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct IntotoV002Spec {
+    /// The logged content.
     pub content: IntotoV002Content,
 }
 
+/// The logged envelope and its hashes in an `intoto` v0.0.2 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct IntotoV002Content {
+    /// The logged DSSE envelope.
     pub envelope: IntotoEnvelope,
     /// Hash of the complete submitted DSSE envelope.
     pub hash: HashValue,
@@ -286,17 +370,23 @@ pub struct IntotoV002Content {
     pub payload_hash: HashValue,
 }
 
+/// The DSSE envelope recorded by an `intoto` v0.0.2 entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct IntotoEnvelope {
     /// DSSE payload type. Canonical log entries omit the proposed payload.
     pub payload_type: String,
+    /// The envelope signatures.
     pub signatures: Vec<IntotoSignature>,
 }
 
+/// A signature in an `intoto` v0.0.2 envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct IntotoSignature {
+    /// Optional key identifier hint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keyid: Option<String>,
     /// Signature bytes (double-encoded in Rekor).

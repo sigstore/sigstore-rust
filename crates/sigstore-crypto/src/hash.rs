@@ -61,10 +61,12 @@ impl ArtifactHasher {
         })
     }
 
+    /// Feed more artifact bytes.
     pub fn update(&mut self, data: &[u8]) {
         self.context.update(data);
     }
 
+    /// Finish hashing and return the digest.
     pub fn finalize(self) -> ArtifactDigest {
         ArtifactDigest::new(self.algorithm, self.context.finish().as_ref())
             .expect("backend digest length does not match the algorithm's documented length")

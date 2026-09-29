@@ -77,6 +77,8 @@
 //! # }
 //! ```
 
+#![warn(missing_docs)]
+
 pub mod error;
 pub mod signing_config;
 pub mod trusted_root;

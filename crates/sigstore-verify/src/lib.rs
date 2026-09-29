@@ -24,6 +24,8 @@
 //! # }
 //! ```
 
+#![warn(missing_docs)]
+
 mod artifact;
 pub mod error;
 mod verify;

@@ -23,6 +23,8 @@
 //! # }
 //! ```
 
+#![warn(missing_docs)]
+
 pub mod body;
 #[cfg(feature = "client")]
 pub mod client;

@@ -3,6 +3,8 @@
 //! This crate implements Merkle tree operations as specified in RFC 6962,
 //! including inclusion proof and consistency proof verification.
 
+#![warn(missing_docs)]
+
 pub mod error;
 pub mod proof;
 pub mod tree;

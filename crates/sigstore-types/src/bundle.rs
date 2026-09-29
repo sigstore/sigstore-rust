@@ -430,13 +430,18 @@ impl LogId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum KindVersion {
+    /// `hashedrekord` 0.0.1 (Rekor v1)
     HashedRekordV001,
+    /// `hashedrekord` 0.0.2 (Rekor v2)
     HashedRekordV002,
+    /// `dsse` 0.0.1 (Rekor v1)
     DsseV001,
+    /// `intoto` 0.0.2 (Rekor v1)
     IntotoV002,
 }
 
 impl KindVersion {
+    /// The entry kind, as in the bundle's `kindVersion.kind`.
     pub fn kind(self) -> &'static str {
         match self {
             Self::HashedRekordV001 | Self::HashedRekordV002 => "hashedrekord",
@@ -445,6 +450,7 @@ impl KindVersion {
         }
     }
 
+    /// The entry version, as in the bundle's `kindVersion.version`.
     pub fn version(self) -> &'static str {
         match self {
             Self::HashedRekordV001 | Self::DsseV001 => "0.0.1",
@@ -581,6 +587,7 @@ pub struct CheckpointData {
 }
 
 impl CheckpointData {
+    /// Parse a checkpoint note. An empty envelope means no checkpoint.
     pub fn new(envelope: impl Into<String>) -> Result<Self> {
         let envelope = envelope.into();
         let checkpoint = if envelope.is_empty() {
@@ -594,14 +601,17 @@ impl CheckpointData {
         })
     }
 
+    /// The checkpoint note as it appears in the bundle.
     pub fn envelope(&self) -> &str {
         &self.envelope
     }
 
+    /// The parsed checkpoint, if the envelope is not empty.
     pub fn checkpoint(&self) -> Option<&Checkpoint> {
         self.checkpoint.as_ref()
     }
 
+    /// Whether the bundle carries no checkpoint.
     pub fn is_empty(&self) -> bool {
         self.checkpoint.is_none()
     }

@@ -3,6 +3,8 @@
 //! This crate provides the fundamental data structures used throughout the Sigstore
 //! ecosystem, including bundle formats, transparency log entries, and trust roots.
 
+#![warn(missing_docs)]
+
 pub mod artifact;
 pub mod bundle;
 pub mod checkpoint;

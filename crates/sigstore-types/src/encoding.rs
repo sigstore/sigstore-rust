@@ -381,18 +381,22 @@ pub struct EntryUuid(String);
 
 impl EntryUuid {
     /// Wrap a string.
+    /// Wrap a entry UUID.
     pub fn new(s: impl Into<String>) -> Self {
         EntryUuid(s.into())
     }
 
+    /// The entry UUID as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
+    /// The entry UUID as an owned string.
     pub fn into_string(self) -> String {
         self.0
     }
 
+    /// Whether the entry UUID is empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -519,18 +523,22 @@ pub struct KeyId(String);
 
 impl KeyId {
     /// Wrap a string.
+    /// Wrap a key ID.
     pub fn new(s: impl Into<String>) -> Self {
         KeyId(s.into())
     }
 
+    /// The key ID as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
+    /// The key ID as an owned string.
     pub fn into_string(self) -> String {
         self.0
     }
 
+    /// Whether the key ID is empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
