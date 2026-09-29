@@ -39,6 +39,6 @@ pub use sigstore_trust_root as trust_root;
 pub use sigstore_tsa as tsa;
 pub use sigstore_types as types;
 
-pub use error::{Error, Result};
+pub use error::{ConfigError, Error, Result, Service};
 pub use sign::{Attestation, Signer, SigningContext, SigningServices};
 pub use sigstore_trust_root::SigstoreInstance;

@@ -2,7 +2,7 @@
 //!
 //! This module provides the main entry point for signing artifacts with Sigstore.
 
-use crate::error::{Error, Result};
+use crate::error::{ConfigError, Error, Result, Service};
 use futures_io::AsyncRead;
 use sigstore_bundle::BundleV03;
 use sigstore_crypto::{
@@ -105,7 +105,7 @@ impl SigningServices {
     pub fn embedded(instance: SigstoreInstance) -> Result<Self> {
         let config = instance
             .embedded_signing_config()?
-            .ok_or_else(|| Error::Config(format!("{instance:?} publishes no signing config")))?;
+            .ok_or(ConfigError::NoSigningConfig(instance))?;
         Self::from_tuf_config(&config)
     }
 
@@ -196,12 +196,12 @@ impl SigningServices {
         // cannot satisfy before discarding the TUF service-selection metadata.
         for (service, config, eligible) in [
             (
-                "Rekor",
+                Service::Rekor,
                 &tuf_config.rekor_tlog_config,
                 tuf_config.eligible_rekor_urls(force_major),
             ),
             (
-                "TSA",
+                Service::Tsa,
                 &tuf_config.tsa_config,
                 tuf_config.eligible_tsa_urls(),
             ),
@@ -212,31 +212,25 @@ impl SigningServices {
         let fulcio_url = tuf_config
             .fulcio_url()
             .map(|e| e.url.clone())
-            .ok_or_else(|| Error::Config("Missing Fulcio URL in TUF config".to_string()))?;
+            .ok_or(ConfigError::MissingService(Service::Fulcio))?;
 
         let (rekor_url, rekor_api_version) = if let Some(rekor) = tuf_config.rekor_url(force_major)
         {
-            let version =
-                RekorApiVersion::from_major(rekor.major_api_version).ok_or_else(|| {
-                    Error::Config(format!(
-                        "unsupported Rekor API version {}",
-                        rekor.major_api_version
-                    ))
-                })?;
+            let version = RekorApiVersion::from_major(rekor.major_api_version).ok_or(
+                ConfigError::UnsupportedRekorVersion(rekor.major_api_version),
+            )?;
             (rekor.url.clone(), version)
         } else if let Some(version) = force_rekor_version {
-            return Err(Error::Config(format!(
-                "No Rekor {version:?} endpoint in TUF config"
-            )));
+            return Err(ConfigError::MissingRekorVersion(version).into());
         } else {
-            return Err(Error::Config("Missing Rekor URL in TUF config".to_string()));
+            return Err(ConfigError::MissingService(Service::Rekor).into());
         };
 
         let tsa_url = Some(
             tuf_config
                 .tsa_url()
                 .map(|e| e.url.clone())
-                .ok_or_else(|| Error::Config("Missing eligible TSA URL in TUF config".into()))?,
+                .ok_or(ConfigError::MissingService(Service::Tsa))?,
         );
         let oidc_url = tuf_config.oidc_url().map(|e| e.url.clone());
 
@@ -267,17 +261,21 @@ impl SigningServices {
 /// endpoints belong to a single operator. UNDEFINED and unknown selectors are
 /// rejected rather than guessed.
 fn check_single_service_requirement(
-    service: &str,
+    service: Service,
     config: &sigstore_trust_root::ServiceConfiguration,
     eligible: &[&sigstore_trust_root::ServiceEndpoint],
 ) -> Result<()> {
+    let unsatisfiable = || {
+        Error::from(ConfigError::UnsatisfiableSelector {
+            service,
+            selector: config.selector,
+            count: config.count,
+        })
+    };
     match config.selector {
         ServiceSelector::Any => Ok(()),
         ServiceSelector::Exact if config.count == Some(1) => Ok(()),
-        ServiceSelector::Exact => Err(Error::Config(format!(
-            "{service} EXACT selector requires count 1 for this signer; got {:?}",
-            config.count
-        ))),
+        ServiceSelector::Exact => Err(unsatisfiable()),
         ServiceSelector::All => {
             // Endpoints without an operator cannot be shown to share one.
             let mut operators = eligible.iter().map(|e| e.operator.as_deref());
@@ -289,20 +287,10 @@ fn check_single_service_requirement(
             if single_operator {
                 Ok(())
             } else {
-                Err(Error::Config(format!(
-                    "{service} ALL selector requires submitting to {} services; \
-                     this signer supports one",
-                    eligible.len()
-                )))
+                Err(unsatisfiable())
             }
         }
-        ServiceSelector::Undefined => Err(Error::Config(format!(
-            "{service} service selector is undefined"
-        ))),
-        _ => Err(Error::Config(format!(
-            "{service} service selector {:?} is not supported by this signer",
-            config.selector
-        ))),
+        _ => Err(unsatisfiable()),
     }
 }
 
@@ -312,17 +300,23 @@ fn validate_configuration(
     tsa: Option<&str>,
 ) -> Result<()> {
     if scheme != SigningScheme::EcdsaP256Sha256 {
-        return Err(Error::Config(format!(
-            "signing scheme {} is not supported",
-            scheme.name()
-        )));
+        return Err(ConfigError::UnsupportedScheme(scheme).into());
     }
     if rekor == RekorApiVersion::V2 && tsa.is_none() {
-        return Err(Error::Config(
-            "Rekor v2 requires an RFC 3161 timestamp authority".into(),
-        ));
+        return Err(ConfigError::TimestampAuthorityRequired.into());
     }
     Ok(())
+}
+
+/// Convert a Rekor v1 response into a bundle entry. A response that does
+/// not convert is Rekor's fault, so it is reported as a Rekor error.
+fn to_bundle_entry(
+    entry: &sigstore_rekor::LogEntry,
+    kind_version: KindVersion,
+) -> Result<TransparencyLogEntry> {
+    entry
+        .to_bundle_entry(kind_version)
+        .map_err(|e| sigstore_rekor::Error::InvalidResponse(e.to_string()).into())
 }
 
 /// Entry point for signing: the services to use and how to reach them.
@@ -428,7 +422,7 @@ impl SigningContext {
         let oidc_url = self
             .services
             .oidc_url()
-            .ok_or_else(|| Error::Config("no OIDC provider is configured".to_string()))?;
+            .ok_or(ConfigError::MissingService(Service::Oidc))?;
         let config = OAuthConfig::dex(oidc_url);
         let client = match &self.http_client {
             Some(http) => OAuthClient::with_http_client(config, http.clone()),
@@ -482,9 +476,7 @@ impl Signer {
         if let Some(http) = &self.http_client {
             builder = builder.with_http_client(http.clone());
         }
-        builder
-            .build()
-            .map_err(|e| Error::Signing(format!("Failed to create TSA client: {}", e)))
+        Ok(builder.build()?)
     }
 
     /// Sign an artifact and return a Sigstore bundle (hashedrekord format)
@@ -531,16 +523,15 @@ impl Signer {
             }
             Artifact::Digest(digest) => {
                 if digest.algorithm() != HashAlgorithm::Sha2256 {
-                    return Err(Error::Signing(format!(
+                    return Err(Error::UnsupportedArtifact(format!(
                         "hashedrekord signing requires a SHA-256 artifact digest, got {}",
                         digest.algorithm()
                     )));
                 }
-                Sha256Hash::try_from(digest.as_bytes())
-                    .map_err(|e| Error::Signing(e.to_string()))?
+                Sha256Hash::try_from(digest.as_bytes())?
             }
             other => {
-                return Err(Error::Signing(format!(
+                return Err(Error::UnsupportedArtifact(format!(
                     "unsupported artifact input: {other:?}"
                 )))
             }
@@ -612,13 +603,8 @@ impl Signer {
     /// Generate an ephemeral key pair based on the configured signing scheme
     fn generate_ephemeral_keypair(&self) -> Result<KeyPair> {
         match self.signing_scheme {
-            SigningScheme::EcdsaP256Sha256 => KeyPair::generate_ecdsa_p256().map_err(|e| {
-                Error::Signing(format!("Failed to generate ECDSA P-256 key pair: {}", e))
-            }),
-            _ => Err(Error::Signing(format!(
-                "Signing scheme {:?} not yet supported",
-                self.signing_scheme
-            ))),
+            SigningScheme::EcdsaP256Sha256 => Ok(KeyPair::generate_ecdsa_p256()?),
+            scheme => Err(ConfigError::UnsupportedScheme(scheme).into()),
         }
     }
 
@@ -630,8 +616,7 @@ impl Signer {
         let fulcio = self.fulcio_client()?;
         let cert_response = fulcio
             .create_signing_certificate(&self.identity_token, key_pair)
-            .await
-            .map_err(|e| Error::Signing(format!("Failed to get certificate from Fulcio: {}", e)))?;
+            .await?;
 
         // Get the leaf certificate (v0.3 bundles use single cert, not chain)
         Ok(cert_response.leaf_certificate().clone())
@@ -648,13 +633,8 @@ impl Signer {
             RekorApiVersion::V1 => {
                 let rekor = self.rekor_client()?;
                 let request = HashedRekord::new(artifact_hash, signature, certificate);
-                let entry = rekor
-                    .create_entry(request)
-                    .await
-                    .map_err(|e| Error::Signing(format!("Failed to create Rekor entry: {e}")))?;
-                entry
-                    .to_bundle_entry(KindVersion::HashedRekordV001)
-                    .map_err(|e| Error::Signing(format!("invalid Rekor response: {e}")))
+                let entry = rekor.create_entry(request).await?;
+                to_bundle_entry(&entry, KindVersion::HashedRekordV001)
             }
             RekorApiVersion::V2 => {
                 let rekor = self.rekor_v2_client()?;
@@ -664,14 +644,9 @@ impl Signer {
                     certificate,
                     self.rekor_v2_key_details()?,
                 );
-                rekor
-                    .create_entry(request)
-                    .await
-                    .map_err(|e| Error::Signing(format!("Failed to create Rekor entry: {e}")))
+                Ok(rekor.create_entry(request).await?)
             }
-            other => Err(Error::Config(format!(
-                "unsupported Rekor API version {other:?}"
-            ))),
+            other => Err(ConfigError::UnsupportedRekorVersion(other.major()).into()),
         }
     }
 
@@ -684,7 +659,7 @@ impl Signer {
         let tsa = self.tsa_client(tsa_url)?;
         tsa.timestamp_signature(signature)
             .await
-            .map_err(|e| Error::Signing(format!("Failed to get timestamp: {}", e)))
+            .map_err(Error::from)
     }
 
     /// Sign an attestation (DSSE envelope with in-toto statement)
@@ -719,8 +694,7 @@ impl Signer {
     /// ```
     pub async fn sign_attestation(&self, attestation: Attestation) -> Result<Bundle> {
         let statement = attestation.build_statement();
-        let statement_json = serde_json::to_vec(&statement)
-            .map_err(|e| Error::Signing(format!("Failed to serialize statement: {}", e)))?;
+        let statement_json = serde_json::to_vec(&statement).map_err(Error::InvalidStatement)?;
 
         self.sign_raw_statement(&statement_json).await
     }
@@ -741,16 +715,12 @@ impl Signer {
     /// (metadata, not artifact contents).
     pub async fn sign_raw_statement(&self, statement_bytes: &[u8]) -> Result<Bundle> {
         self.validate_configuration()?;
+        // Reject an invalid statement before asking Fulcio for a certificate.
+        serde_json::from_slice::<Statement>(statement_bytes).map_err(Error::InvalidStatement)?;
+
         // Generate ephemeral key, get a signing certificate for it
         let key_pair = self.generate_ephemeral_keypair()?;
         let leaf_cert_der = self.request_certificate(&key_pair).await?;
-
-        // validate that input is a valid statement
-        if serde_json::from_slice::<Statement>(statement_bytes).is_err() {
-            return Err(Error::Signing(
-                "Provided statement is not a valid in-toto Statement".to_string(),
-            ));
-        }
 
         // Copy the payload and hash its PAE in one cooperative pass, without
         // allocating a second, full-size PAE buffer.
@@ -797,12 +767,8 @@ impl Signer {
             RekorApiVersion::V1 => {
                 let rekor = self.rekor_client()?;
                 let request = DsseEntry::new(envelope, certificate);
-                let entry = rekor.create_dsse_entry(request).await.map_err(|e| {
-                    Error::Signing(format!("Failed to create DSSE Rekor entry: {e}"))
-                })?;
-                entry
-                    .to_bundle_entry(KindVersion::DsseV001)
-                    .map_err(|e| Error::Signing(format!("invalid Rekor response: {e}")))
+                let entry = rekor.create_dsse_entry(request).await?;
+                to_bundle_entry(&entry, KindVersion::DsseV001)
             }
             RekorApiVersion::V2 => {
                 let rekor = self.rekor_v2_client()?;
@@ -815,13 +781,9 @@ impl Signer {
                     certificate,
                     self.rekor_v2_key_details()?,
                 );
-                rekor.create_entry(request).await.map_err(|e| {
-                    Error::Signing(format!("Failed to create Rekor entry for DSSE: {e}"))
-                })
+                Ok(rekor.create_entry(request).await?)
             }
-            other => Err(Error::Config(format!(
-                "unsupported Rekor API version {other:?}"
-            ))),
+            other => Err(ConfigError::UnsupportedRekorVersion(other.major()).into()),
         }
     }
 
@@ -836,9 +798,7 @@ impl Signer {
     fn rekor_v2_key_details(&self) -> Result<RekorV2KeyDetails> {
         match self.signing_scheme {
             SigningScheme::EcdsaP256Sha256 => Ok(RekorV2KeyDetails::PkixEcdsaP256Sha256),
-            scheme => Err(Error::Config(format!(
-                "signing scheme {scheme:?} has no unambiguous Rekor v2 keyDetails value"
-            ))),
+            scheme => Err(ConfigError::UnsupportedScheme(scheme).into()),
         }
     }
 }
@@ -957,6 +917,7 @@ mod tests {
     fn tuf_service_requirements_are_not_silently_reduced() {
         let baseline = TufSigningConfig::from_json(SIGSTORE_PRODUCTION_SIGNING_CONFIG).unwrap();
         for tsa in [false, true] {
+            let expected = if tsa { Service::Tsa } else { Service::Rekor };
             for count in [None, Some(0), Some(1), Some(2), Some(u32::MAX)] {
                 let mut tuf = baseline.clone();
                 // Even enough distinct operators cannot be represented by this signer.
@@ -984,8 +945,15 @@ mod tests {
                         count == Some(1),
                         "tsa={tsa}, count={count:?}"
                     );
-                    if let Err(Error::Config(message)) = result {
-                        assert!(message.contains(if tsa { "TSA" } else { "Rekor" }));
+                    if let Err(error) = result {
+                        assert!(
+                            matches!(
+                                error,
+                                Error::Config(ConfigError::UnsatisfiableSelector { service, .. })
+                                    if service == expected
+                            ),
+                            "{error}"
+                        );
                     }
                 }
                 assert_eq!(
@@ -1000,7 +968,7 @@ mod tests {
     fn tuf_all_and_undefined_selectors_are_not_silently_reduced() {
         let baseline = TufSigningConfig::from_json(SIGSTORE_PRODUCTION_SIGNING_CONFIG).unwrap();
         for tsa in [false, true] {
-            let service = if tsa { "TSA" } else { "Rekor" };
+            let expected = if tsa { Service::Tsa } else { Service::Rekor };
             let with_selector = |selector, second_operator: Option<&str>| {
                 let mut tuf = baseline.clone();
                 let (requirement, endpoints) = if tsa {
@@ -1029,7 +997,11 @@ mod tests {
             ] {
                 let error = with_selector(selector, second).unwrap_err();
                 assert!(
-                    matches!(&error, Error::Config(message) if message.contains(service)),
+                    matches!(
+                        &error,
+                        Error::Config(ConfigError::UnsatisfiableSelector { service, selector: s, .. })
+                            if *service == expected && *s == selector
+                    ),
                     "{selector:?}: {error}"
                 );
             }
@@ -1071,8 +1043,12 @@ mod tests {
                         }
                     }
                     let error = SigningServices::from_tuf_config(&tuf).unwrap_err();
-                    assert!(matches!(error, Error::Config(message)
-                        if message.contains(if tsa { "TSA" } else { "Rekor" })));
+                    let expected = if tsa { Service::Tsa } else { Service::Rekor };
+                    assert!(
+                        matches!(error, Error::Config(ConfigError::MissingService(service))
+                            if service == expected),
+                        "{unavailable}: {error}"
+                    );
                 }
             }
         }
@@ -1139,7 +1115,10 @@ mod tests {
             SigningServices::from_tuf_config_with_rekor_version(&custom, Some(RekorApiVersion::V2))
                 .unwrap_err();
         assert!(
-            error.to_string().contains("No Rekor V2 endpoint"),
+            matches!(
+                error,
+                Error::Config(ConfigError::MissingRekorVersion(RekorApiVersion::V2))
+            ),
             "{error}"
         );
     }
@@ -1158,13 +1137,30 @@ mod tests {
         };
         let signer = SigningContext::new(config).signer(IdentityToken::from_jwt(&jwt).unwrap());
         let mut reader = std::io::Cursor::new(b"do not read");
-        assert!(signer
-            .sign_reader(&mut reader)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("not supported"));
+        let error = signer.sign_reader(&mut reader).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Config(ConfigError::UnsupportedScheme(SigningScheme::Ed25519))
+            ),
+            "{error}"
+        );
         assert_eq!(reader.position(), 0);
+    }
+
+    #[tokio::test]
+    async fn invalid_statement_is_rejected_before_requesting_a_certificate() {
+        use base64::Engine;
+        let jwt = format!(
+            "header.{}.signature",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(br#"{"iss":"test","sub":"test","exp":9999999999}"#)
+        );
+        // Nothing listens here: reaching Fulcio would fail with Error::Fulcio.
+        let config = SigningServices::new("http://127.0.0.1:1", "http://127.0.0.1:1");
+        let signer = SigningContext::new(config).signer(IdentityToken::from_jwt(&jwt).unwrap());
+        let error = signer.sign_raw_statement(b"not json").await.unwrap_err();
+        assert!(matches!(error, Error::InvalidStatement(_)), "{error}");
     }
 
     #[test]
