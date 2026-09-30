@@ -48,7 +48,7 @@ spki = { version = "0.7", features = ["alloc"] }
 # To upgrade `const-oid`, first `spki` needs to be upgraded
 const-oid = "0.9"
 x509-cert = { version = "0.2", features = ["builder", "sct"] }
-tls_codec = { version = "0.4", default-features = false, features = ["derive"] }
+tls_codec = { version = "0.5", default-features = false, features = ["derive"] }
 
 # RFC 3161 timestamp verification
 cms = { version = "0.2", default-features = false }
