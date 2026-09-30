@@ -73,7 +73,7 @@ zeroize = "1"
 
 # Testing
 hex = "0.4"
-rstest = { version = "0.26", default-features = false }
+rstest = { version = "0.27", default-features = false }
 regex = "1.12"
 insta = "1.48"
 
