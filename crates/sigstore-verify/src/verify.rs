@@ -4,6 +4,7 @@
 
 use crate::artifact::{ArtifactRequirements, PreparedArtifact};
 use crate::error::{Error, Result};
+use crate::verify_impl::helpers::SigningCertificateChain;
 use sigstore_bundle::validate_bundle_with_options;
 use sigstore_bundle::ValidationOptions;
 use sigstore_crypto::{parse_certificate_info, KeyAlgorithm, SigningScheme, SubjectAltName};
@@ -605,10 +606,15 @@ impl Verifier {
         //      system therefore guarantees the issuer is available whenever SCT
         //      verification runs.
         if let CertificatePolicy::Verify { verify_sct } = policy.certificate {
+            let chain =
+                SigningCertificateChain::from_material(&bundle.verification_material.content)
+                    .ok_or_else(|| {
+                        Error::InvalidBundle("bundle has no signing certificate".into())
+                    })?;
             let mut issuer_spki = None;
             for &validation_time in &validation_times {
                 issuer_spki = Some(crate::verify_impl::helpers::verify_certificate_chain(
-                    &bundle.verification_material.content,
+                    chain,
                     validation_time,
                     &self.fulcio_anchors,
                 )?);

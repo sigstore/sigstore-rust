@@ -8,9 +8,10 @@ use const_oid::db::rfc5912::ID_KP_CODE_SIGNING;
 use rustls_pki_types::{CertificateDer, UnixTime};
 use sigstore_crypto::CertificateInfo;
 use sigstore_trust_root::{TrustedRoot, TsaAuthority};
-use sigstore_types::bundle::VerificationMaterialContent;
+use sigstore_types::bundle::{VerificationMaterialContent, X509Certificate};
 use sigstore_types::{
-    Bundle, DerPublicKey, KindVersion, SignatureBytes, SignatureContent, TimestampToken,
+    Bundle, DerCertificate, DerPublicKey, KindVersion, SignatureBytes, SignatureContent,
+    TimestampToken,
 };
 use webpki::{EndEntityCert, KeyUsage, ALL_VERIFICATION_ALGS};
 
@@ -254,6 +255,36 @@ pub fn validate_certificate_time(
     Ok(())
 }
 
+/// The signing certificate of a bundle and the intermediates shipped with it.
+///
+/// Only certificate-based verification material produces a chain, so
+/// public-key bundles cannot reach chain verification.
+#[derive(Clone, Copy)]
+pub(crate) struct SigningCertificateChain<'a> {
+    leaf: &'a DerCertificate,
+    intermediates: &'a [X509Certificate],
+}
+
+impl<'a> SigningCertificateChain<'a> {
+    /// Returns `None` when the material carries no certificate (a public key).
+    pub(crate) fn from_material(material: &'a VerificationMaterialContent) -> Option<Self> {
+        match material {
+            VerificationMaterialContent::Certificate(cert) => Some(Self {
+                leaf: &cert.raw_bytes,
+                intermediates: &[],
+            }),
+            VerificationMaterialContent::X509CertificateChain { certificates } => {
+                let (leaf, intermediates) = certificates.split_first()?;
+                Some(Self {
+                    leaf: &leaf.raw_bytes,
+                    intermediates,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Verify the certificate chain to the Fulcio root of trust
 ///
 /// This function verifies that the signing certificate chains to a trusted
@@ -267,38 +298,10 @@ pub fn validate_certificate_time(
 /// leaf, so it disambiguates Fulcio intermediates that share a subject name but
 /// have different keys (as in Sigstore staging's multi-region deployment).
 pub fn verify_certificate_chain(
-    verification_material: &VerificationMaterialContent,
+    chain: SigningCertificateChain<'_>,
     validation_time: jiff::Timestamp,
     fulcio_anchors: &[FulcioAnchor],
 ) -> Result<DerPublicKey> {
-    // Extract the end-entity certificate and any intermediates from the bundle
-    let (ee_cert_der, intermediate_ders) = match verification_material {
-        VerificationMaterialContent::Certificate(cert) => {
-            (cert.raw_bytes.as_bytes().to_vec(), Vec::new())
-        }
-        VerificationMaterialContent::X509CertificateChain { certificates } => {
-            if certificates.is_empty() {
-                return Err(Error::InvalidBundle("no certificates in chain".to_string()));
-            }
-            let ee = certificates[0].raw_bytes.as_bytes().to_vec();
-            let intermediates: Vec<Vec<u8>> = certificates[1..]
-                .iter()
-                .map(|c| c.raw_bytes.as_bytes().to_vec())
-                .collect();
-            (ee, intermediates)
-        }
-        VerificationMaterialContent::PublicKey(_) => {
-            return Err(Error::UnsupportedBundle(
-                "public key verification not yet supported".to_string(),
-            ));
-        }
-        _ => {
-            return Err(Error::UnsupportedBundle(
-                "unsupported bundle verification material".to_string(),
-            ))
-        }
-    };
-
     // Only anchors authorized at this authenticated signing time may terminate
     // the verified path. An unrelated authority cannot lend its validity window.
     let trust_anchors: Vec<_> = fulcio_anchors
@@ -315,13 +318,14 @@ pub fn verify_certificate_chain(
     }
 
     // Convert intermediate certificates to CertificateDer
-    let intermediate_certs: Vec<CertificateDer<'static>> = intermediate_ders
-        .into_iter()
-        .map(|der| CertificateDer::from(der).into_owned())
+    let intermediate_certs: Vec<CertificateDer<'_>> = chain
+        .intermediates
+        .iter()
+        .map(|c| CertificateDer::from(c.raw_bytes.as_bytes()))
         .collect();
 
     // Parse the end-entity certificate for webpki
-    let ee_cert_der_ref = CertificateDer::from(ee_cert_der.as_slice());
+    let ee_cert_der_ref = CertificateDer::from(chain.leaf.as_bytes());
     let end_entity_cert = EndEntityCert::try_from(&ee_cert_der_ref).map_err(|e| {
         Error::cert_malformed(format!("failed to parse end-entity certificate: {}", e))
     })?;
@@ -472,18 +476,17 @@ mod tests {
         // verification uses it. Before the fix, SCT verification returned
         // Err("SCT signature verification failed: ... signature invalid").
         let verifier = crate::Verifier::new(&trusted_root).unwrap();
+        let chain = SigningCertificateChain::from_material(material)
+            .expect("fixture must have a signing certificate");
         let issuer_spki =
-            verify_certificate_chain(material, validation_time, &verifier.fulcio_anchors)
+            verify_certificate_chain(chain, validation_time, &verifier.fulcio_anchors)
                 .expect("certificate chain should verify against the staging root");
-        let cert = match material {
-            VerificationMaterialContent::Certificate(cert) => &cert.raw_bytes,
-            VerificationMaterialContent::X509CertificateChain { certificates } => {
-                &certificates[0].raw_bytes
-            }
-            _ => panic!("fixture must have a signing certificate"),
-        };
-        super::super::sct::verify_sct(cert.as_bytes(), issuer_spki.as_bytes(), &verifier.ct_keys)
-            .expect("SCT verification should succeed once the correct issuer is selected");
+        super::super::sct::verify_sct(
+            chain.leaf.as_bytes(),
+            issuer_spki.as_bytes(),
+            &verifier.ct_keys,
+        )
+        .expect("SCT verification should succeed once the correct issuer is selected");
     }
 
     /// Tests for TOB-SIGSTORE-11: an RFC 3161 timestamp must be temporally
