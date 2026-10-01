@@ -210,7 +210,7 @@ impl SigningConfig {
             .collect();
 
         // Sort by version descending (highest version first)
-        endpoints.sort_by(|a, b| b.major_api_version.cmp(&a.major_api_version));
+        endpoints.sort_by_key(|e| std::cmp::Reverse(e.major_api_version));
         endpoints
     }
 
