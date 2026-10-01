@@ -57,9 +57,9 @@ requires an identity/issuer restriction or `--allow-any-identity`.
 ## Usage
 
 ```rust
-use sigstore_verify::{verify, Verifier, VerificationPolicy};
+use sigstore_verify::{verify, PublicKeyVerificationPolicy, Verifier, VerificationPolicy};
 use sigstore_trust_root::{TrustedRoot, TufConfig};
-use sigstore_types::{Artifact, Bundle, Sha256Hash};
+use sigstore_types::{Artifact, Bundle, DerPublicKey, Sha256Hash};
 
 let bundle: Bundle = serde_json::from_str(bundle_json)?;
 let policy = VerificationPolicy::any_identity();
@@ -86,9 +86,9 @@ let result = verifier.verify_reader(file, &bundle, &policy)?;
 // Runtime-independent futures_io::AsyncRead is also supported
 let result = verifier.verify_async_reader(async_reader, &bundle, &policy).await?;
 
-// Managed-key bundles use the `verify_with_key*` family with the same
-// three input shapes: `verify_with_key`, `verify_with_key_reader`,
-// `verify_with_key_async_reader`.
+// Managed-key bundles use the same entry points; the key is part of the policy
+let key_policy = PublicKeyVerificationPolicy::new(DerPublicKey::from_pem(&key_pem)?);
+let result = verifier.verify(artifact_bytes.as_slice(), &bundle, &key_policy)?;
 ```
 
 For Tokio readers, enable `tokio-util`'s `compat` feature and use

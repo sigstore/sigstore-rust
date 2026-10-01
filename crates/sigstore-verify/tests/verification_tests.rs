@@ -1761,11 +1761,10 @@ fn managed_dsse_verifier_is_bound_even_when_tlog_verification_is_skipped() {
             KindVersion::DsseV001,
             CanonicalizedBody::new(serde_json::to_vec(&body).unwrap()),
         )];
-        let result = Verifier::new(&production_root()).unwrap().verify_with_key(
+        let result = Verifier::new(&production_root()).unwrap().verify(
             b"artifact",
             &bundle,
-            &public_key,
-            &PublicKeyVerificationPolicy::default().skip_tlog_unsafe(),
+            &PublicKeyVerificationPolicy::new(public_key.clone()).skip_tlog_unsafe(),
         );
         assert_eq!(result.is_ok(), valid, "{result:?}");
     }
@@ -1777,8 +1776,6 @@ fn managed_key_public_key() -> sigstore_types::DerPublicKey {
 
 #[test]
 fn test_verify_with_key_treats_public_key_hint_as_opaque() {
-    use sigstore_verify::verify_with_key;
-
     for hint in [
         "opaque-key-name",
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
@@ -1786,11 +1783,10 @@ fn test_verify_with_key_treats_public_key_hint_as_opaque() {
         let mut json: serde_json::Value = serde_json::from_str(MANAGED_KEY_BUNDLE).unwrap();
         json["verificationMaterial"]["publicKey"]["hint"] = serde_json::json!(hint);
         let bundle = Bundle::from_json(&serde_json::to_string(&json).unwrap()).unwrap();
-        let result = verify_with_key(
+        let result = verify(
             MANAGED_KEY_ARTIFACT,
             &bundle,
-            &managed_key_public_key(),
-            &PublicKeyVerificationPolicy::default(),
+            &PublicKeyVerificationPolicy::new(managed_key_public_key()),
             &production_root(),
         );
 
@@ -1808,11 +1804,10 @@ fn test_verifier_with_key_accepts_digest_and_reports_integrated_time() {
     let verifier = Verifier::new(&production_root()).unwrap();
 
     let result = verifier
-        .verify_with_key(
+        .verify(
             sigstore_crypto::sha256(MANAGED_KEY_ARTIFACT),
             &bundle,
-            &managed_key_public_key(),
-            &PublicKeyVerificationPolicy::default(),
+            &PublicKeyVerificationPolicy::new(managed_key_public_key()),
         )
         .unwrap();
 
@@ -1853,11 +1848,10 @@ fn test_verifier_with_key_rejects_foreign_timestamp() {
     let verifier = Verifier::new(&production_root()).unwrap();
 
     let error = verifier
-        .verify_with_key(
+        .verify(
             MANAGED_KEY_ARTIFACT,
             &bundle,
-            &managed_key_public_key(),
-            &PublicKeyVerificationPolicy::default(),
+            &PublicKeyVerificationPolicy::new(managed_key_public_key()),
         )
         .unwrap_err();
     assert!(
@@ -1872,11 +1866,10 @@ fn test_verifier_with_key_from_sync_reader() {
 
     Verifier::new(&production_root())
         .unwrap()
-        .verify_with_key_reader(
+        .verify_reader(
             std::io::Cursor::new(MANAGED_KEY_ARTIFACT),
             &bundle,
-            &managed_key_public_key(),
-            &PublicKeyVerificationPolicy::default(),
+            &PublicKeyVerificationPolicy::new(managed_key_public_key()),
         )
         .unwrap();
 }
@@ -1887,11 +1880,10 @@ async fn test_verifier_with_key_from_async_reader() {
 
     Verifier::new(&production_root())
         .unwrap()
-        .verify_with_key_async_reader(
+        .verify_async_reader(
             futures::io::Cursor::new(MANAGED_KEY_ARTIFACT),
             &bundle,
-            &managed_key_public_key(),
-            &PublicKeyVerificationPolicy::default(),
+            &PublicKeyVerificationPolicy::new(managed_key_public_key()),
         )
         .await
         .unwrap();
@@ -1899,16 +1891,13 @@ async fn test_verifier_with_key_from_async_reader() {
 
 #[test]
 fn test_verify_with_key_can_skip_tlog_inclusion() {
-    use sigstore_verify::verify_with_key;
-
     let mut bundle = Bundle::from_json(MANAGED_KEY_BUNDLE).unwrap();
     bundle.verification_material.tlog_entries[0].inclusion_proof = None;
 
-    verify_with_key(
+    verify(
         MANAGED_KEY_ARTIFACT,
         &bundle,
-        &managed_key_public_key(),
-        &PublicKeyVerificationPolicy::default().skip_tlog_unsafe(),
+        &PublicKeyVerificationPolicy::new(managed_key_public_key()).skip_tlog_unsafe(),
         &production_root(),
     )
     .unwrap();
@@ -1916,14 +1905,11 @@ fn test_verify_with_key_can_skip_tlog_inclusion() {
 
 #[test]
 fn test_verify_with_key_rejects_certificate_bundle() {
-    use sigstore_verify::verify_with_key;
-
     let bundle = Bundle::from_json(CONDA_ATTESTATION_BUNDLE).unwrap();
-    let result = verify_with_key(
+    let result = verify(
         CONDA_PACKAGE,
         &bundle,
-        &managed_key_public_key(),
-        &PublicKeyVerificationPolicy::default(),
+        &PublicKeyVerificationPolicy::new(managed_key_public_key()),
         &production_root(),
     );
 
@@ -1933,7 +1919,7 @@ fn test_verify_with_key_rejects_certificate_bundle() {
         .contains("bundle contains a certificate but public-key verification was requested"));
 }
 
-/// verify_with_key must reject bundles whose transparency log entry disagrees
+/// Public-key verification must reject bundles whose transparency log entry disagrees
 /// with the bundle content (CVE-2022-36056 class), like Verifier::verify does.
 #[test]
 fn test_verify_with_key_fails_with_mismatched_log_entry_kind() {
