@@ -14,6 +14,16 @@
       "rangeStrategy": "replace"
     },
     {
+      "description": "der/spki/const-oid/x509-cert/tls_codec must be upgraded together with cms. Hold the new versions until cms 0.3 is stable; a cms 0.3 PR in this group is the signal to drop these allowedVersions.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["cms", "const-oid", "der", "spki", "tls_codec", "x509-cert"],
+      "groupName": "rustcrypto x509"
+    },
+    { "matchManagers": ["cargo"], "matchPackageNames": ["const-oid"], "allowedVersions": "<0.10" },
+    { "matchManagers": ["cargo"], "matchPackageNames": ["der", "spki"], "allowedVersions": "<0.8" },
+    { "matchManagers": ["cargo"], "matchPackageNames": ["tls_codec"], "allowedVersions": "<0.5" },
+    { "matchManagers": ["cargo"], "matchPackageNames": ["x509-cert"], "allowedVersions": "<0.3" },
+    {
       "matchManagers": ["github-actions"],
       "extends": ["schedule:weekly"],
       "groupName": "github-actions",
