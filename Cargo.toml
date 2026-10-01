@@ -37,7 +37,7 @@ thiserror = "2.0"
 aws-lc-rs = { version = "1.18" }
 sha2 = "0.10"
 digest = "0.11"
-signature = "2.2"
+signature = "3.0"
 rand_core = { version = "0.10.0" }
 rand = "0.9.4"
 
