@@ -84,6 +84,28 @@ impl PublicKeyVerificationPolicy {
 /// Implemented by [`VerificationPolicy`] for keyless (certificate) bundles and
 /// by [`PublicKeyVerificationPolicy`] for managed-key bundles. The trait is
 /// sealed: it cannot be implemented outside this crate.
+///
+/// The entry points also accept a `&dyn Policy`, so code that picks the kind
+/// of policy at runtime can still make a single verification call:
+///
+/// ```no_run
+/// use sigstore_verify::{Policy, PublicKeyVerificationPolicy, VerificationPolicy, Verifier};
+/// # fn example(
+/// #     verifier: &Verifier,
+/// #     bundle: &sigstore_types::Bundle,
+/// #     public_key: Option<sigstore_types::DerPublicKey>,
+/// # ) -> sigstore_verify::Result<()> {
+/// let policy: Box<dyn Policy> = match public_key {
+///     Some(key) => Box::new(PublicKeyVerificationPolicy::new(key)),
+///     None => Box::new(VerificationPolicy::new(
+///         "user@example.com",
+///         "https://accounts.google.com",
+///     )),
+/// };
+/// verifier.verify(b"artifact", bundle, policy.as_ref())?;
+/// # Ok(())
+/// # }
+/// ```
 pub trait Policy: sealed::Sealed {}
 
 impl Policy for VerificationPolicy {}
@@ -512,44 +534,57 @@ impl Verifier {
         })
     }
 
-    /// Verify an artifact against a bundle
+    /// Verify an artifact against a bundle.
     ///
-    /// The artifact can be provided as raw bytes or as a pre-computed SHA-256 digest.
-    /// When using a pre-computed digest, the raw bytes are not needed, which is useful
-    /// for large files or when the digest is already known (e.g., from a registry).
+    /// The artifact can be provided as raw bytes or as a pre-computed digest.
+    /// A digest is useful for large files or when it is already known (e.g.,
+    /// from a registry). To stream the artifact instead, use
+    /// [`Verifier::verify_reader`] or [`Verifier::verify_async_reader`].
+    ///
+    /// `policy` decides what kind of bundle is accepted and how it is checked:
+    ///
+    /// - A [`VerificationPolicy`] verifies a keyless bundle, whose signing
+    ///   certificate was issued by Fulcio.
+    /// - A [`PublicKeyVerificationPolicy`] verifies a managed-key bundle
+    ///   against the public key it holds.
+    ///
+    /// A bundle of the other kind is rejected.
     ///
     /// # Example
     ///
     /// ```no_run
-    /// use sigstore_verify::{Verifier, VerificationPolicy};
+    /// use sigstore_verify::{PublicKeyVerificationPolicy, Verifier, VerificationPolicy};
     /// use sigstore_trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
-    /// use sigstore_types::{Artifact, Bundle, Sha256Hash};
+    /// use sigstore_types::{Bundle, DerPublicKey, Sha256Hash};
     ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let trusted_root = TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)?;
     /// let verifier = Verifier::new(&trusted_root)?;
     /// let bundle: Bundle = todo!();
-    /// let policy = VerificationPolicy::any_identity();
     ///
-    /// // Option 1: Verify with raw bytes
-    /// let artifact_bytes = b"hello world";
-    /// verifier.verify(artifact_bytes.as_slice(), &bundle, &policy)?;
-    ///
-    /// // Option 2: Verify with pre-computed digest (no raw bytes needed!)
+    /// // A keyless bundle, from raw bytes or from a pre-computed digest
+    /// let policy = VerificationPolicy::new("user@example.com", "https://accounts.google.com");
+    /// verifier.verify(b"hello world", &bundle, &policy)?;
     /// let digest = Sha256Hash::from_hex("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9")?;
     /// verifier.verify(digest, &bundle, &policy)?;
+    ///
+    /// // A managed-key bundle
+    /// let public_key = DerPublicKey::from_pem(&std::fs::read_to_string("key.pub")?)?;
+    /// verifier.verify(b"hello world", &bundle, &PublicKeyVerificationPolicy::new(public_key))?;
     /// # Ok(())
     /// # }
     /// ```
     ///
-    /// In order to verify an artifact, we need to achieve the following:
+    /// # Verification steps
+    ///
+    /// With a [`VerificationPolicy`]:
     ///
     /// 0. Establish the verified times for the signature.
     /// 1. Verify that the signing certificate chains to the root of trust
     ///    and is valid at every verified signing time.
     /// 2. Verify the signing certificate's SCT.
     /// 3. Verify that the signing certificate conforms to the Sigstore
-    ///    X.509 profile as well as the passed-in `VerificationPolicy`.
+    ///    X.509 profile as well as the policy's identity and issuer.
     /// 4. Verify the inclusion proof and signed checkpoint for the log
     ///    entry.
     /// 5. Verify the inclusion promise for the log entry, if present.
@@ -559,11 +594,19 @@ impl Verifier {
     ///    public key.
     /// 8. Verify the transparency log entry's consistency against the other
     ///    materials, to prevent variants of CVE-2022-36056.
+    ///
+    /// The policy can skip steps 1–2 and 4–6 (see its `skip_*` methods).
+    ///
+    /// With a [`PublicKeyVerificationPolicy`], there is no certificate, so
+    /// steps 1–3 and 6 do not apply. The inclusion proof, checkpoint and
+    /// inclusion promise are verified (unless skipped), any RFC 3161
+    /// timestamps must verify, the signature is verified with the policy's
+    /// key, and the log entry's consistency is checked as in step 8.
     pub fn verify<'a>(
         &self,
         artifact: impl Into<Artifact<'a>>,
         bundle: &Bundle,
-        policy: &impl Policy,
+        policy: &(impl Policy + ?Sized),
     ) -> Result<VerificationResult> {
         let (prepared, requirements) = prepare(bundle, policy.kind())?;
         self.verify_prepared(
@@ -576,13 +619,16 @@ impl Verifier {
 
     /// Verify an artifact read synchronously to EOF in constant memory.
     ///
+    /// Accepts the same policies, and performs the same checks, as
+    /// [`Verifier::verify`]. Bundle-only checks run before any input is read.
+    ///
     /// Reads happen on the calling thread. Async applications should use
     /// [`Verifier::verify_async_reader`] to avoid blocking an executor.
     pub fn verify_reader(
         &self,
         reader: impl std::io::Read,
         bundle: &Bundle,
-        policy: &impl Policy,
+        policy: &(impl Policy + ?Sized),
     ) -> Result<VerificationResult> {
         let (prepared, requirements) = prepare(bundle, policy.kind())?;
         self.verify_prepared(
@@ -594,11 +640,14 @@ impl Verifier {
     }
 
     /// Verify an artifact read asynchronously to EOF in constant memory.
+    ///
+    /// Accepts the same policies, and performs the same checks, as
+    /// [`Verifier::verify`]. Bundle-only checks run before any input is read.
     pub async fn verify_async_reader(
         &self,
         reader: impl futures_io::AsyncRead + Unpin,
         bundle: &Bundle,
-        policy: &impl Policy,
+        policy: &(impl Policy + ?Sized),
     ) -> Result<VerificationResult> {
         let (prepared, requirements) = prepare(bundle, policy.kind())?;
         self.verify_prepared(
@@ -1097,7 +1146,7 @@ fn verify_message_signature_crypto(
 pub fn verify<'a>(
     artifact: impl Into<Artifact<'a>>,
     bundle: &Bundle,
-    policy: &impl Policy,
+    policy: &(impl Policy + ?Sized),
     trusted_root: &TrustedRoot,
 ) -> Result<VerificationResult> {
     Verifier::new(trusted_root)?.verify(artifact, bundle, policy)

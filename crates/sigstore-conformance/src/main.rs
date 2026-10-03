@@ -8,8 +8,8 @@
 use sigstore_oidc::IdentityToken;
 use sigstore_sign::{SigningContext, SigningServices};
 use sigstore_trust_root::{SigningConfig as TufSigningConfig, SigstoreInstance, TrustedRoot};
-use sigstore_types::{Bundle, Sha256Hash};
-use sigstore_verify::{verify, PublicKeyVerificationPolicy, VerificationPolicy};
+use sigstore_types::{Artifact, Bundle, DerPublicKey, Sha256Hash};
+use sigstore_verify::{verify, Policy, PublicKeyVerificationPolicy, VerificationPolicy};
 
 use std::env;
 use std::fs;
@@ -209,17 +209,6 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let bundle_path = bundle_path.ok_or("Missing required --bundle")?;
     let artifact_or_digest = artifact_or_digest.ok_or("Missing artifact or digest")?;
 
-    // Check if using key-based or certificate-based verification
-    let use_key_verification = key_path.is_some();
-    if !use_key_verification {
-        // Certificate-based verification requires identity and issuer
-        if certificate_identity.is_none() || certificate_oidc_issuer.is_none() {
-            return Err(
-                "Either --key or both --certificate-identity and --certificate-oidc-issuer must be provided".into(),
-            );
-        }
-    }
-
     // An explicit root takes precedence over the selected instance.
     let trusted_root = if let Some(root_path) = trusted_root_path {
         TrustedRoot::from_file(&root_path)?
@@ -235,25 +224,30 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let bundle_json = fs::read_to_string(&bundle_path)?;
     let bundle = Bundle::from_json(&bundle_json)?;
 
-    // Handle key-based verification
-    if let Some(key_path) = key_path {
-        use sigstore_types::DerPublicKey;
+    // A managed-key bundle is verified against the supplied key, a keyless
+    // one against the expected certificate identity.
+    let policy: Box<dyn Policy> = match key_path {
+        Some(key_path) => {
+            let key_pem = fs::read_to_string(&key_path)?;
+            let public_key = DerPublicKey::from_pem(&key_pem)
+                .map_err(|e| format!("Failed to parse public key: {}", e))?;
+            Box::new(PublicKeyVerificationPolicy::new(public_key))
+        }
+        None => {
+            let (Some(identity), Some(issuer)) = (certificate_identity, certificate_oidc_issuer)
+            else {
+                return Err("Either --key or both --certificate-identity and --certificate-oidc-issuer must be provided".into());
+            };
+            Box::new(VerificationPolicy::new(identity, issuer))
+        }
+    };
 
-        // Load public key from PEM file
-        let key_pem = fs::read_to_string(&key_path)?;
-        let public_key = DerPublicKey::from_pem(&key_pem)
-            .map_err(|e| format!("Failed to parse public key: {}", e))?;
-        let policy = PublicKeyVerificationPolicy::new(public_key);
-
-        // Verify using the public key
-        if artifact_or_digest.starts_with("sha256:") {
-            // It's a digest
-            let digest_hex = artifact_or_digest
-                .strip_prefix("sha256:")
-                .ok_or("Invalid digest format")?;
+    // The artifact is either a `sha256:<hex>` digest or a file path.
+    let artifact_data;
+    let artifact: Artifact<'_> = match artifact_or_digest.strip_prefix("sha256:") {
+        Some(digest_hex) => {
             let digest_bytes =
                 hex::decode(digest_hex).map_err(|e| format!("Invalid hex digest: {}", e))?;
-
             if digest_bytes.len() != 32 {
                 return Err(format!(
                     "Invalid SHA256 digest length: expected 32 bytes, got {}",
@@ -261,63 +255,16 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .into());
             }
-
-            let artifact_digest = Sha256Hash::try_from(digest_bytes.as_slice())
-                .map_err(|e| format!("Invalid digest: {}", e))?;
-
-            verify(artifact_digest, &bundle, &policy, &trusted_root)?;
-        } else {
-            // It's a file path
-            let artifact_data = fs::read(&artifact_or_digest)?;
-            verify(&artifact_data, &bundle, &policy, &trusted_root)?;
+            Sha256Hash::try_from(digest_bytes.as_slice())
+                .map_err(|e| format!("Invalid digest: {}", e))?
+                .into()
         }
-
-        return Ok(());
-    }
-
-    // Certificate-based verification
-    let certificate_identity = certificate_identity.unwrap();
-    let certificate_oidc_issuer = certificate_oidc_issuer.unwrap();
-
-    // Create verification policy
-    let policy = VerificationPolicy::any_identity()
-        .require_identity(certificate_identity)
-        .require_issuer(certificate_oidc_issuer);
-
-    // Check if artifact_or_digest is a digest or file
-    if artifact_or_digest.starts_with("sha256:") {
-        // It's a digest - verify the bundle without the artifact file
-        let digest_hex = artifact_or_digest
-            .strip_prefix("sha256:")
-            .ok_or("Invalid digest format")?;
-
-        // Decode hex digest
-        let digest_bytes =
-            hex::decode(digest_hex).map_err(|e| format!("Invalid hex digest: {}", e))?;
-
-        if digest_bytes.len() != 32 {
-            return Err(format!(
-                "Invalid SHA256 digest length: expected 32 bytes, got {}",
-                digest_bytes.len()
-            )
-            .into());
+        None => {
+            artifact_data = fs::read(&artifact_or_digest)?;
+            Artifact::from_blob(&artifact_data)
         }
+    };
 
-        // Convert digest bytes to Sha256Hash for verification
-        let artifact_digest = Sha256Hash::try_from(digest_bytes.as_slice())
-            .map_err(|e| format!("Invalid digest: {}", e))?;
-
-        // Verify the signature with trusted root using the digest directly
-        verify(artifact_digest, &bundle, &policy, &trusted_root)?;
-
-        Ok(())
-    } else {
-        // It's a file path
-        let artifact_data = fs::read(&artifact_or_digest)?;
-
-        // Verify with trusted root
-        verify(&artifact_data, &bundle, &policy, &trusted_root)?;
-
-        Ok(())
-    }
+    verify(artifact, &bundle, policy.as_ref(), &trusted_root)?;
+    Ok(())
 }
