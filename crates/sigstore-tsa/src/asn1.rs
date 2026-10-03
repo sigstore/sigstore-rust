@@ -11,7 +11,7 @@ use der::{
     Sequence,
 };
 #[cfg(any(feature = "client", test))]
-use rand::Rng;
+use rand::RngExt;
 use sigstore_types::HashAlgorithm;
 use x509_cert::{ext::pkix::name::GeneralName, ext::Extensions};
 
