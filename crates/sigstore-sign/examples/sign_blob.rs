@@ -40,7 +40,7 @@
 //!         run: cargo run -p sigstore-sign --example sign_blob -- artifact.txt -o artifact.sigstore.json
 //! ```
 
-use sigstore_oidc::{get_identity_token, IdentityToken};
+use sigstore_oidc::{authenticate, IdentityToken};
 use sigstore_rekor::RekorApiVersion;
 use sigstore_sign::{SigningContext, SigningServices};
 
@@ -192,11 +192,11 @@ async fn main() {
         } else {
             RekorApiVersion::V1
         };
-        SigningServices::from_tuf_config(&tuf_config)
+        SigningServices::from_signing_config(&tuf_config)
             .expect("Missing required endpoints in TUF config")
             .with_rekor(url, version)
     } else {
-        SigningServices::from_tuf_config_with_rekor_version(
+        SigningServices::from_signing_config_with_rekor_version(
             &tuf_config,
             use_v2.then_some(RekorApiVersion::V2),
         )
@@ -335,7 +335,7 @@ async fn get_token(
     println!();
 
     let oidc_url = oidc_url.ok_or("the signing config lists no OIDC provider")?;
-    get_identity_token(oidc_url)
+    authenticate(oidc_url)
         .await
         .map_err(|e| format!("OAuth failed: {}", e))
 }

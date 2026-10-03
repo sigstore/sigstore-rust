@@ -12,9 +12,9 @@ default = ["tuf", "rustls"]
 rustls = ["sigstore-tuf?/rustls"]
 native-tls = ["sigstore-tuf?/native-tls"]
 tuf = [
-  "sigstore-tuf",
-  "tokio",
-  "directories",
+  "dep:sigstore-tuf",
+  "dep:tokio",
+  "dep:directories",
 ]
 
 [dependencies]

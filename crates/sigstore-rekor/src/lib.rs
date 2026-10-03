@@ -34,7 +34,10 @@ pub mod hex_encoded;
 
 pub use body::RekorEntryBody;
 #[cfg(feature = "client")]
-pub use client::{RekorClient, RekorClientBuilder, RekorV2Client, RekorV2EntryBundle, RekorV2Tile};
+pub use client::{
+    RekorClient, RekorClientBuilder, RekorV2Client, RekorV2ClientBuilder, RekorV2EntryBundle,
+    RekorV2Tile,
+};
 pub use entry::{
     DsseEntry, HashedRekord, HashedRekordV2, LogEntry, RekorApiVersion, RekorV2KeyDetails,
     SearchIndex,
@@ -42,6 +45,6 @@ pub use entry::{
 pub use error::{Error, Result};
 pub use hex_encoded::{HexHash, HexLogId};
 /// The HTTP client crate used by [`RekorClientBuilder::with_http_client`] and
-/// [`RekorV2Client::with_http_client`].
+/// [`RekorV2ClientBuilder::with_http_client`].
 #[cfg(feature = "client")]
 pub use reqwest;

@@ -39,7 +39,7 @@
 //!     crates/sigstore-verify/test_data/bundles/signed-package-2.1.0-hb0f4dca_0.conda
 //! ```
 
-use sigstore_oidc::{get_identity_token, IdentityToken};
+use sigstore_oidc::{authenticate, IdentityToken};
 use sigstore_sign::{Attestation, SigningContext, SigningServices};
 
 use std::env;
@@ -149,7 +149,7 @@ async fn main() {
             .await
             .expect("Failed to fetch production config via TUF")
     };
-    let config = SigningServices::from_tuf_config(&tuf_config)
+    let config = SigningServices::from_signing_config(&tuf_config)
         .expect("Missing required endpoints in TUF config");
 
     println!("  Fulcio URL: {}", config.fulcio_url());
@@ -265,7 +265,7 @@ async fn get_token(
     println!();
 
     let oidc_url = oidc_url.ok_or("the signing config lists no OIDC provider")?;
-    get_identity_token(oidc_url)
+    authenticate(oidc_url)
         .await
         .map_err(|e| format!("OAuth failed: {}", e))
 }

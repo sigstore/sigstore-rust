@@ -102,11 +102,11 @@ impl SigningServices {
     /// Embedded snapshots go stale as instances add or retire services;
     /// prefer [`SigningContext::for_instance`], which fetches the current
     /// signing config through TUF.
-    pub fn embedded(instance: SigstoreInstance) -> Result<Self> {
+    pub fn from_embedded(instance: SigstoreInstance) -> Result<Self> {
         let config = instance
             .embedded_signing_config()?
             .ok_or(ConfigError::NoSigningConfig(instance))?;
-        Self::from_tuf_config(&config)
+        Self::from_signing_config(&config)
     }
 
     /// Submit to this Rekor log, which speaks the given API version.
@@ -162,7 +162,8 @@ impl SigningServices {
         self.signing_scheme
     }
 
-    /// Create configuration from a TUF signing config
+    /// Create configuration from a Sigstore signing config, for example one
+    /// fetched with [`TufSigningConfig::from_tuf`].
     ///
     /// This extracts the best available endpoints from the signing config,
     /// preferring higher API versions when available. Requires an eligible Rekor
@@ -171,23 +172,24 @@ impl SigningServices {
     ///
     /// # Arguments
     ///
-    /// * `tuf_config` - The signing config from TUF
-    pub fn from_tuf_config(tuf_config: &TufSigningConfig) -> Result<Self> {
-        Self::from_tuf_config_with_rekor_version(tuf_config, None)
+    /// * `signing_config` - The signing config to select services from
+    pub fn from_signing_config(signing_config: &TufSigningConfig) -> Result<Self> {
+        Self::from_signing_config_with_rekor_version(signing_config, None)
     }
 
-    /// Create configuration from a TUF signing config with optional forced Rekor version
+    /// Create configuration from a Sigstore signing config with optional forced
+    /// Rekor version
     ///
-    /// The Rekor endpoint is always selected from `tuf_config`, so the chosen
+    /// The Rekor endpoint is always selected from `signing_config`, so the chosen
     /// instance (production, staging, or custom) is preserved.
     ///
     /// # Arguments
     ///
-    /// * `tuf_config` - The signing config from TUF
+    /// * `signing_config` - The signing config to select services from
     /// * `force_rekor_version` - If Some, select a Rekor endpoint with this API
-    ///   version from `tuf_config`; returns an error if none is available.
-    pub fn from_tuf_config_with_rekor_version(
-        tuf_config: &TufSigningConfig,
+    ///   version from `signing_config`; returns an error if none is available.
+    pub fn from_signing_config_with_rekor_version(
+        signing_config: &TufSigningConfig,
         force_rekor_version: Option<RekorApiVersion>,
     ) -> Result<Self> {
         let force_major = force_rekor_version.map(RekorApiVersion::major);
@@ -197,42 +199,42 @@ impl SigningServices {
         for (service, config, eligible) in [
             (
                 Service::Rekor,
-                &tuf_config.rekor_tlog_config,
-                tuf_config.eligible_rekor_urls(force_major),
+                &signing_config.rekor_tlog_config,
+                signing_config.eligible_rekor_urls(force_major),
             ),
             (
                 Service::Tsa,
-                &tuf_config.tsa_config,
-                tuf_config.eligible_tsa_urls(),
+                &signing_config.tsa_config,
+                signing_config.eligible_tsa_urls(),
             ),
         ] {
             check_single_service_requirement(service, config, &eligible)?;
         }
 
-        let fulcio_url = tuf_config
+        let fulcio_url = signing_config
             .fulcio_url()
             .map(|e| e.url.clone())
             .ok_or(ConfigError::MissingService(Service::Fulcio))?;
 
-        let (rekor_url, rekor_api_version) = if let Some(rekor) = tuf_config.rekor_url(force_major)
-        {
-            let version = RekorApiVersion::from_major(rekor.major_api_version).ok_or(
-                ConfigError::UnsupportedRekorVersion(rekor.major_api_version),
-            )?;
-            (rekor.url.clone(), version)
-        } else if let Some(version) = force_rekor_version {
-            return Err(ConfigError::MissingRekorVersion(version).into());
-        } else {
-            return Err(ConfigError::MissingService(Service::Rekor).into());
-        };
+        let (rekor_url, rekor_api_version) =
+            if let Some(rekor) = signing_config.rekor_url(force_major) {
+                let version = RekorApiVersion::from_major(rekor.major_api_version).ok_or(
+                    ConfigError::UnsupportedRekorVersion(rekor.major_api_version),
+                )?;
+                (rekor.url.clone(), version)
+            } else if let Some(version) = force_rekor_version {
+                return Err(ConfigError::MissingRekorVersion(version).into());
+            } else {
+                return Err(ConfigError::MissingService(Service::Rekor).into());
+            };
 
         let tsa_url = Some(
-            tuf_config
+            signing_config
                 .tsa_url()
                 .map(|e| e.url.clone())
                 .ok_or(ConfigError::MissingService(Service::Tsa))?,
         );
-        let oidc_url = tuf_config.oidc_url().map(|e| e.url.clone());
+        let oidc_url = signing_config.oidc_url().map(|e| e.url.clone());
 
         Ok(Self {
             fulcio_url,
@@ -373,15 +375,15 @@ impl SigningContext {
     #[cfg(feature = "tuf")]
     pub async fn from_tuf(config: sigstore_trust_root::TufConfig) -> Result<Self> {
         let signing_config = TufSigningConfig::from_tuf(config).await?;
-        Ok(Self::new(SigningServices::from_tuf_config(
+        Ok(Self::new(SigningServices::from_signing_config(
             &signing_config,
         )?))
     }
 
     /// Sign with a well-known instance's embedded signing config snapshot,
-    /// without network access to TUF. See [`SigningServices::embedded`].
+    /// without network access to TUF. See [`SigningServices::from_embedded`].
     pub fn from_embedded(instance: SigstoreInstance) -> Result<Self> {
-        Ok(Self::new(SigningServices::embedded(instance)?))
+        Ok(Self::new(SigningServices::from_embedded(instance)?))
     }
 
     /// Talk to Fulcio, Rekor, the TSA and the OIDC provider through a
@@ -428,7 +430,7 @@ impl SigningContext {
             Some(http) => OAuthClient::with_http_client(config, http.clone()),
             None => OAuthClient::new(config)?,
         };
-        let token = client.auth(DefaultAuthCallback).await?;
+        let token = client.authenticate(DefaultAuthCallback).await?;
         Ok(self.signer(token))
     }
 }
@@ -465,10 +467,11 @@ impl Signer {
     }
 
     fn rekor_v2_client(&self) -> Result<RekorV2Client> {
-        Ok(match &self.http_client {
-            Some(http) => RekorV2Client::with_http_client(&self.rekor_url, http.clone()),
-            None => RekorV2Client::new(&self.rekor_url)?,
-        })
+        let mut builder = RekorV2Client::builder(&self.rekor_url);
+        if let Some(http) = &self.http_client {
+            builder = builder.with_http_client(http.clone());
+        }
+        Ok(builder.build()?)
     }
 
     fn tsa_client(&self, tsa_url: &str) -> Result<TimestampClient> {
@@ -892,12 +895,12 @@ mod tests {
 
     #[test]
     fn embedded_services_come_from_the_instance() {
-        let production = SigningServices::embedded(SigstoreInstance::PublicGood).unwrap();
+        let production = SigningServices::from_embedded(SigstoreInstance::PublicGood).unwrap();
         assert_eq!(production.fulcio_url(), "https://fulcio.sigstore.dev");
         assert!(production.tsa_url().is_some() && production.oidc_url().is_some());
-        let staging = SigningServices::embedded(SigstoreInstance::Staging).unwrap();
+        let staging = SigningServices::from_embedded(SigstoreInstance::Staging).unwrap();
         assert!(staging.fulcio_url().contains("sigstage.dev"));
-        assert!(SigningServices::embedded(SigstoreInstance::GitHub).is_err());
+        assert!(SigningServices::from_embedded(SigstoreInstance::GitHub).is_err());
 
         let explicit = SigningServices::new("https://fulcio.example", "https://rekor.example");
         assert_eq!(explicit.rekor_api_version(), RekorApiVersion::V1);
@@ -931,7 +934,8 @@ mod tests {
                 requirement.count = count;
                 // Neither conversion entry point may discard the requirement.
                 for version in [None, Some(RekorApiVersion::V1)] {
-                    let result = SigningServices::from_tuf_config_with_rekor_version(&tuf, version);
+                    let result =
+                        SigningServices::from_signing_config_with_rekor_version(&tuf, version);
                     assert_eq!(
                         result.is_ok(),
                         count == Some(1),
@@ -949,7 +953,7 @@ mod tests {
                     }
                 }
                 assert_eq!(
-                    SigningServices::from_tuf_config(&tuf).is_ok(),
+                    SigningServices::from_signing_config(&tuf).is_ok(),
                     count == Some(1)
                 );
             }
@@ -975,7 +979,7 @@ mod tests {
                     second.operator = Some(operator.into());
                     endpoints.push(second);
                 }
-                SigningServices::from_tuf_config(&tuf)
+                SigningServices::from_signing_config(&tuf)
             };
 
             // ALL is satisfiable by one submission when a single operator runs
@@ -1034,7 +1038,7 @@ mod tests {
                             }
                         }
                     }
-                    let error = SigningServices::from_tuf_config(&tuf).unwrap_err();
+                    let error = SigningServices::from_signing_config(&tuf).unwrap_err();
                     let expected = if tsa { Service::Tsa } else { Service::Rekor };
                     assert!(
                         matches!(error, Error::Config(ConfigError::MissingService(service))
@@ -1064,7 +1068,7 @@ mod tests {
     fn forced_rekor_version_keeps_tuf_selected_instance() {
         let staging = TufSigningConfig::from_json(SIGSTORE_STAGING_SIGNING_CONFIG).unwrap();
 
-        let v2 = SigningServices::from_tuf_config_with_rekor_version(
+        let v2 = SigningServices::from_signing_config_with_rekor_version(
             &staging,
             Some(RekorApiVersion::V2),
         )
@@ -1073,7 +1077,7 @@ mod tests {
         assert!(v2.rekor_url.contains("sigstage.dev"), "{}", v2.rekor_url);
         assert_ne!(v2.rekor_url, "https://log2025-1.rekor.sigstore.dev");
 
-        let v1 = SigningServices::from_tuf_config_with_rekor_version(
+        let v1 = SigningServices::from_signing_config_with_rekor_version(
             &staging,
             Some(RekorApiVersion::V1),
         )
@@ -1098,14 +1102,18 @@ mod tests {
         )
         .unwrap();
 
-        let v1 =
-            SigningServices::from_tuf_config_with_rekor_version(&custom, Some(RekorApiVersion::V1))
-                .unwrap();
+        let v1 = SigningServices::from_signing_config_with_rekor_version(
+            &custom,
+            Some(RekorApiVersion::V1),
+        )
+        .unwrap();
         assert_eq!(v1.rekor_url, "https://rekor.example");
 
-        let error =
-            SigningServices::from_tuf_config_with_rekor_version(&custom, Some(RekorApiVersion::V2))
-                .unwrap_err();
+        let error = SigningServices::from_signing_config_with_rekor_version(
+            &custom,
+            Some(RekorApiVersion::V2),
+        )
+        .unwrap_err();
         assert!(
             matches!(
                 error,

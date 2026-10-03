@@ -202,17 +202,12 @@ impl RekorV2Client {
     /// Create a Rekor v2 client with a default HTTP client (30-second
     /// timeout, `sigstore-rust/<version>` user agent).
     pub fn new(url: impl Into<String>) -> Result<Self> {
-        Ok(Self::with_http_client(url, default_http_client()?))
+        Self::builder(url).build()
     }
 
-    /// Create a Rekor v2 client that uses a caller-configured HTTP client.
-    ///
-    /// Rekor v2 writes wait for log inclusion; allow at least 20 seconds.
-    pub fn with_http_client(url: impl Into<String>, client: reqwest::Client) -> Self {
-        Self {
-            url: url.into().trim_end_matches('/').to_string(),
-            client,
-        }
+    /// Create a builder for configuring the client
+    pub fn builder(url: impl Into<String>) -> RekorV2ClientBuilder {
+        RekorV2ClientBuilder::new(url)
     }
 
     /// The Rekor v2 log URL this client talks to.
@@ -348,6 +343,48 @@ impl RekorClientBuilder {
             None => default_http_client()?,
         };
         Ok(RekorClient {
+            url: self.url,
+            client,
+        })
+    }
+}
+
+/// Builder for [`RekorV2Client`]
+#[must_use]
+#[derive(Debug)]
+pub struct RekorV2ClientBuilder {
+    url: String,
+    http_client: Option<reqwest::Client>,
+}
+
+impl RekorV2ClientBuilder {
+    /// Create a new builder with the given URL
+    pub fn new(url: impl Into<String>) -> Self {
+        let url = url.into();
+        Self {
+            url: url.trim_end_matches('/').to_string(),
+            http_client: None,
+        }
+    }
+
+    /// Use a caller-configured HTTP client (timeouts, proxies, TLS roots,
+    /// user agent).
+    ///
+    /// Rekor v2 writes wait for log inclusion; allow at least 20 seconds.
+    /// Without a client, one with a 30-second request timeout and a
+    /// `sigstore-rust/<version>` user agent is used.
+    pub fn with_http_client(mut self, http_client: reqwest::Client) -> Self {
+        self.http_client = Some(http_client);
+        self
+    }
+
+    /// Build the client
+    pub fn build(self) -> Result<RekorV2Client> {
+        let client = match self.http_client {
+            Some(client) => client,
+            None => default_http_client()?,
+        };
+        Ok(RekorV2Client {
             url: self.url,
             client,
         })

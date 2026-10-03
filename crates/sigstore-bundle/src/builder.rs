@@ -165,19 +165,19 @@ impl TlogEntryBuilder {
     }
 
     /// Set the log index.
-    pub fn log_index(mut self, index: LogIndex) -> Self {
+    pub fn with_log_index(mut self, index: LogIndex) -> Self {
         self.log_index = index;
         self
     }
 
     /// Set the integrated time.
-    pub fn integrated_time(mut self, time: jiff::Timestamp) -> Self {
+    pub fn with_integrated_time(mut self, time: jiff::Timestamp) -> Self {
         self.integrated_time = Some(time);
         self
     }
 
     /// Set the inclusion promise (Signed Entry Timestamp).
-    pub fn inclusion_promise(mut self, signed_entry_timestamp: SignedTimestamp) -> Self {
+    pub fn with_inclusion_promise(mut self, signed_entry_timestamp: SignedTimestamp) -> Self {
         self.inclusion_promise = Some(InclusionPromise::new(signed_entry_timestamp));
         self
     }
@@ -190,7 +190,7 @@ impl TlogEntryBuilder {
     /// * `tree_size` - The tree size
     /// * `hashes` - The proof hashes
     /// * `checkpoint` - The parsed checkpoint (see [`CheckpointData::new`])
-    pub fn inclusion_proof(
+    pub fn with_inclusion_proof(
         mut self,
         log_index: LogIndex,
         root_hash: Sha256Hash,
