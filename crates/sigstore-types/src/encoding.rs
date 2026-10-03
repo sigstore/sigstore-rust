@@ -380,8 +380,7 @@ base64_newtype!(
 pub struct EntryUuid(String);
 
 impl EntryUuid {
-    /// Wrap a string.
-    /// Wrap a entry UUID.
+    /// Wrap an entry UUID.
     pub fn new(s: impl Into<String>) -> Self {
         EntryUuid(s.into())
     }
@@ -522,7 +521,6 @@ base64_newtype!(
 pub struct KeyId(String);
 
 impl KeyId {
-    /// Wrap a string.
     /// Wrap a key ID.
     pub fn new(s: impl Into<String>) -> Self {
         KeyId(s.into())
