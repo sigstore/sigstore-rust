@@ -27,10 +27,10 @@ Ambient OIDC credentials are detected in CI systems like GitHub: See [ambient-id
 ## Usage
 
 ```rust
-use sigstore_oidc::{get_identity_token, IdentityToken};
+use sigstore_oidc::{authenticate, IdentityToken};
 
 // Opens browser (with `browser` feature) or prompts for manual code entry
-let token = get_identity_token("https://oauth2.sigstore.dev/auth").await?;
+let token = authenticate("https://oauth2.sigstore.dev/auth").await?;
 ```
 
 The `sigstore-sign` crate provides end-to-end signing examples:

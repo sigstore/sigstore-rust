@@ -289,13 +289,13 @@ impl OAuthClient {
     /// 1. If `browser` feature is enabled, attempts to open the browser
     /// 2. If browser opens successfully, waits for the redirect callback
     /// 3. If browser fails or feature is disabled, falls back to OOB mode
-    pub async fn auth(&self, callback: impl AuthCallback) -> Result<IdentityToken> {
-        self.auth_with_options(callback, AuthOptions::default())
+    pub async fn authenticate(&self, callback: impl AuthCallback) -> Result<IdentityToken> {
+        self.authenticate_with_options(callback, AuthOptions::default())
             .await
     }
 
     /// Perform authentication with custom options
-    pub async fn auth_with_options(
+    pub async fn authenticate_with_options(
         &self,
         callback: impl AuthCallback,
         options: AuthOptions,
@@ -568,11 +568,11 @@ impl OAuthClient {
 /// # Example
 ///
 /// ```no_run
-/// use sigstore_oidc::get_identity_token;
+/// use sigstore_oidc::authenticate;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let token = get_identity_token("https://oauth2.sigstore.dev/auth").await?;
+///     let token = authenticate("https://oauth2.sigstore.dev/auth").await?;
 ///     println!("Got token for: {}", token.subject());
 ///     Ok(())
 /// }
@@ -581,9 +581,9 @@ impl OAuthClient {
 /// `oidc_url` is a Dex issuer URL, such as the OIDC URL of a Sigstore
 /// instance's signing config (see [`OAuthConfig::dex`]). To customize the
 /// callback, endpoints or options, use [`OAuthClient`] directly.
-pub async fn get_identity_token(oidc_url: &str) -> Result<IdentityToken> {
+pub async fn authenticate(oidc_url: &str) -> Result<IdentityToken> {
     OAuthClient::new(OAuthConfig::dex(oidc_url))?
-        .auth(DefaultAuthCallback)
+        .authenticate(DefaultAuthCallback)
         .await
 }
 
