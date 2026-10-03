@@ -25,11 +25,11 @@ impl FsRepo {
     fn read(dir: &Path, name: &str, max_length: u64) -> sigstore_tuf::Result<Option<Vec<u8>>> {
         match std::fs::read(dir.join(name)) {
             Ok(bytes) if bytes.len() as u64 > max_length => {
-                Err(Error::Transport(format!("{name} exceeds {max_length}")))
+                Err(Error::transport(format!("{name} exceeds {max_length}")))
             }
             Ok(bytes) => Ok(Some(bytes)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(Error::Transport(e.to_string())),
+            Err(e) => Err(Error::transport_with_source("read failed", e)),
         }
     }
 }
@@ -91,7 +91,7 @@ async fn full_refresh_and_read_targets() {
 
     // `custom` metadata round-trips.
     let info = updater
-        .get_targetinfo("file1.txt", now())
+        .get_target_info("file1.txt", now())
         .await
         .unwrap()
         .unwrap();
@@ -120,7 +120,7 @@ async fn resolves_target_through_delegation() {
         "file3.txt should not be in top-level targets"
     );
     let info = updater
-        .get_targetinfo("file3.txt", now())
+        .get_target_info("file3.txt", now())
         .await
         .unwrap()
         .expect("delegation walk should resolve file3.txt via role1");

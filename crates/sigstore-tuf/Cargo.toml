@@ -1,19 +1,19 @@
 [package]
 name = "sigstore-tuf"
 description = "A pure-Rust implementation of The Update Framework (TUF), aligned with Sigstore and interoperable with tuf-on-ci / securesystemslib repositories (e.g. GitHub's)"
-version = "0.14.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
 [features]
-default = ["fetch", "rustls"]
-# Network transport (async HTTP) for fetching remote TUF metadata and targets.
-fetch = ["reqwest", "url"]
+default = ["rustls"]
+# HTTP transport (`HttpRepository`) for fetching remote TUF metadata and targets.
+client = ["dep:reqwest", "dep:url"]
 # TLS backend selection (matches the rest of the workspace's crates).
-rustls = ["fetch", "reqwest/rustls"]
-native-tls = ["fetch", "reqwest/native-tls"]
+rustls = ["client", "reqwest/rustls"]
+native-tls = ["client", "reqwest/native-tls"]
 
 [dependencies]
 # Internal dependencies

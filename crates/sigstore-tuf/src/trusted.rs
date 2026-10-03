@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256, Sha512};
 
 use crate::error::{Error, Result};
 use crate::key::Key;
-use crate::metadata::{MetaFile, Metadata, Role, RoleKeys, Root, Snapshot, Targets, Timestamp};
+use crate::metadata::{Metadata, Role, RoleKeys, Root, Snapshot, Targets, Timestamp};
 
 /// The set of currently-trusted TUF metadata.
 #[derive(Debug, Clone)]
@@ -83,7 +83,7 @@ impl TrustedMetadataSet {
 
         let trusted_version = self.root.signed.version;
         let new_version = new_root.signed.version;
-        if new_version != trusted_version + 1 {
+        if trusted_version.checked_add(1) != Some(new_version) {
             return Err(Error::BadRootVersion {
                 trusted: trusted_version,
                 new: new_version,
@@ -228,7 +228,7 @@ impl TrustedMetadataSet {
             .snapshot_meta()
             .ok_or_else(|| Error::Malformed("timestamp does not pin snapshot.json".to_string()))?;
 
-        check_integrity(bytes, pin, "snapshot.json")?;
+        check_integrity(bytes, pin.length, pin.hashes.as_ref(), "snapshot.json")?;
 
         let new = Metadata::<Snapshot>::from_slice(bytes)?;
         verify_with_root(&new, &self.root.signed, "snapshot")?;
@@ -279,15 +279,13 @@ impl TrustedMetadataSet {
         self.check_root_expired(now)?;
         self.check_timestamp_expired(now)?;
         self.check_snapshot_expired(now)?;
-        let timestamp = self.timestamp().ok_or_else(|| {
-            Error::Malformed("refresh() must be called before resolving targets".into())
-        })?;
-        let snapshot = self
-            .snapshot()
-            .ok_or_else(|| Error::Malformed("no trusted snapshot".into()))?;
-        let targets = self
-            .targets_role("targets")
-            .ok_or_else(|| Error::Malformed("no trusted targets".into()))?;
+        let (Some(timestamp), Some(snapshot), Some(targets)) = (
+            self.timestamp(),
+            self.snapshot(),
+            self.targets_role("targets"),
+        ) else {
+            return Err(Error::NotRefreshed);
+        };
         ensure_not_expired(targets, "targets", now)?;
         if timestamp.snapshot_meta().map(|pin| pin.version) != Some(snapshot.version)
             || snapshot.meta.get("targets.json").map(|pin| pin.version) != Some(targets.version)
@@ -399,7 +397,7 @@ impl TrustedMetadataSet {
             .get(&meta_name)
             .ok_or_else(|| Error::Malformed(format!("snapshot does not pin {meta_name}")))?;
 
-        check_integrity(bytes, pin, &meta_name)?;
+        check_integrity(bytes, pin.length, pin.hashes.as_ref(), &meta_name)?;
 
         let new = Metadata::<Targets>::from_slice(bytes)?;
         if new.signed.version != pin.version {
@@ -468,22 +466,27 @@ fn verify_root_self_signed(root: &Metadata<Root>) -> Result<()> {
 }
 
 fn ensure_not_expired<T: Role>(role: &T, name: &str, now: jiff::Timestamp) -> Result<()> {
-    if role.is_expired(now)? {
+    if role.is_expired(now) {
         return Err(Error::Expired {
             role: name.to_string(),
-            expires: role.expires().to_string(),
+            expires: role.expires(),
         });
     }
     Ok(())
 }
 
-/// Verify that `bytes` matches the length and hashes pinned in `meta`.
+/// Verify that `bytes` matches a pinned length and hashes.
 ///
-/// The length, if pinned, must match exactly. Every hash whose algorithm we
-/// support (`sha256`, `sha512`) must match; at least one supported hash must be
-/// present and verified so that integrity is actually enforced.
-fn check_integrity(bytes: &[u8], meta: &MetaFile, what: &str) -> Result<()> {
-    if let Some(expected_len) = meta.length {
+/// The length, if pinned, must match exactly. When hashes are pinned, every
+/// hash whose algorithm we support (`sha256`, `sha512`) must match, and at
+/// least one must be supported so that integrity is actually enforced.
+pub(crate) fn check_integrity(
+    bytes: &[u8],
+    length: Option<u64>,
+    hashes: Option<&BTreeMap<String, String>>,
+    what: &str,
+) -> Result<()> {
+    if let Some(expected_len) = length {
         if bytes.len() as u64 != expected_len {
             return Err(Error::IntegrityMismatch(format!(
                 "{what}: length {} != pinned {}",
@@ -493,7 +496,7 @@ fn check_integrity(bytes: &[u8], meta: &MetaFile, what: &str) -> Result<()> {
         }
     }
 
-    let Some(hashes) = &meta.hashes else {
+    let Some(hashes) = hashes else {
         // Nothing pinned to check against (length, if any, already verified).
         return Ok(());
     };

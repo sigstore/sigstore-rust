@@ -34,6 +34,7 @@ use crate::key::Key;
 
 /// A single signature over a metadata file's `signed` object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Signature {
     /// The declared ID of the key that produced this signature.
     pub keyid: String,
@@ -46,31 +47,30 @@ pub struct Signature {
 /// A role payload: knows its TUF `_type` string, version, and expiry.
 ///
 /// Implemented by [`Root`], [`Timestamp`], [`Snapshot`], and [`Targets`] so the
-/// envelope can run generic version/expiry checks.
-pub trait Role: DeserializeOwned {
+/// envelope can run generic version/expiry checks. The trait is sealed: it
+/// cannot be implemented outside this crate.
+pub trait Role: DeserializeOwned + sealed::Sealed {
     /// The expected `_type` discriminator for this role.
     const TYPE: &'static str;
 
     /// The metadata version number.
     fn version(&self) -> u64;
 
-    /// The raw `expires` timestamp string (RFC 3339).
-    fn expires(&self) -> &str;
-
-    /// Parse [`Role::expires`] into a [`jiff::Timestamp`].
-    fn expires_at(&self) -> Result<jiff::Timestamp> {
-        self.expires()
-            .parse::<jiff::Timestamp>()
-            .map_err(|source| Error::InvalidTimestamp {
-                value: self.expires().to_string(),
-                source,
-            })
-    }
+    /// When this metadata expires.
+    fn expires(&self) -> jiff::Timestamp;
 
     /// Whether this metadata is expired relative to `now`.
-    fn is_expired(&self, now: jiff::Timestamp) -> Result<bool> {
-        Ok(self.expires_at()? < now)
+    fn is_expired(&self, now: jiff::Timestamp) -> bool {
+        self.expires() < now
     }
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::Root {}
+    impl Sealed for super::Timestamp {}
+    impl Sealed for super::Snapshot {}
+    impl Sealed for super::Targets {}
 }
 
 /// A parsed, signed TUF metadata file.

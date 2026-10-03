@@ -10,6 +10,7 @@ use crate::metadata::Role;
 
 /// A single target file's metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TargetFile {
     /// The target's length in bytes.
     pub length: u64,
@@ -25,6 +26,7 @@ pub struct TargetFile {
 
 /// The TUF `targets` role: the inventory of distributable target files.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Targets {
     /// Always `"targets"`.
     #[serde(rename = "_type")]
@@ -33,8 +35,8 @@ pub struct Targets {
     pub spec_version: String,
     /// Monotonically increasing version number.
     pub version: u64,
-    /// Expiry timestamp (RFC 3339).
-    pub expires: String,
+    /// When this metadata expires.
+    pub expires: jiff::Timestamp,
     /// Target path → target metadata.
     pub targets: BTreeMap<String, TargetFile>,
     /// Optional delegations to other targets roles.
@@ -59,7 +61,7 @@ impl Role for Targets {
         self.version
     }
 
-    fn expires(&self) -> &str {
-        &self.expires
+    fn expires(&self) -> jiff::Timestamp {
+        self.expires
     }
 }

@@ -72,7 +72,8 @@ impl Updater {
         // Fast-forward from cached history
         loop {
             let next = self.trusted.root().version + 1;
-            match store.load(&format!("root_history/{next}.root.json")) {
+            let name = format!("root_history/{next}.root.json");
+            match load_cached(store.as_ref(), &name) {
                 Some(bytes) if self.trusted.update_root(&bytes).is_ok() => {
                     tracing::debug!(version = next, "adopted cached root");
                 }
@@ -122,11 +123,11 @@ impl Updater {
     /// and snapshots still establish version floors. Freshness is required
     /// separately before metadata can authorize a target.
     fn seed_lower_from_store(&mut self, now: jiff::Timestamp) {
-        let Some((ts, snap, tgt)) = self.store.as_ref().map(|s| {
+        let Some((ts, snap, tgt)) = self.store.as_deref().map(|s| {
             (
-                s.load("timestamp.json"),
-                s.load("snapshot.json"),
-                s.load("targets.json"),
+                load_cached(s, "timestamp.json"),
+                load_cached(s, "snapshot.json"),
+                load_cached(s, "targets.json"),
             )
         }) else {
             return;
@@ -152,7 +153,8 @@ impl Updater {
 
     async fn refresh_root(&mut self) -> Result<()> {
         let start = self.trusted.root().version;
-        for next in (start + 1)..=(start + self.config.max_root_rotations) {
+        let last = start.saturating_add(u64::from(self.config.max_root_rotations));
+        for next in (start + 1)..=last {
             let name = format!("{next}.root.json");
             match self
                 .repo
@@ -170,7 +172,7 @@ impl Updater {
                 None => return Ok(()),
             }
         }
-        Err(Error::Transport(format!(
+        Err(Error::transport(format!(
             "exceeded {} root rotations without reaching the latest root",
             self.config.max_root_rotations
         )))
@@ -182,7 +184,7 @@ impl Updater {
             .repo
             .fetch_metadata("timestamp.json", self.config.timestamp_max_length)
             .await?
-            .ok_or_else(|| Error::Transport("timestamp.json not found".to_string()))?;
+            .ok_or_else(|| Error::transport("timestamp.json not found"))?;
         match self.trusted.update_timestamp(&bytes, now) {
             Ok(()) => self.cache_put("timestamp.json", &bytes),
             // Same version as what we already trust: keep it, don't re-fetch the
@@ -214,7 +216,7 @@ impl Updater {
         // cache and the timestamp didn't change), reuse it instead of
         // downloading — matching python-tuf's "use valid local metadata" rule.
         if let Some(snap) = self.trusted.snapshot() {
-            if snap.version == version && !snap.is_expired(now)? {
+            if snap.version == version && !snap.is_expired(now) {
                 tracing::debug!(version, "snapshot unchanged; using trusted copy");
                 return Ok(());
             }
@@ -229,7 +231,7 @@ impl Updater {
             .repo
             .fetch_metadata(&name, self.config.snapshot_max_length)
             .await?
-            .ok_or_else(|| Error::Transport(format!("{name} not found")))?;
+            .ok_or_else(|| Error::transport(format!("{name} not found")))?;
         self.trusted.update_snapshot(&bytes, now)?;
         self.cache_put(&name, &bytes);
         self.cache_put("snapshot.json", &bytes);
@@ -250,7 +252,7 @@ impl Updater {
             .and_then(|s| s.meta.get("targets.json"))
             .map(|m| m.version);
         if let (Some(tgt), Some(pv)) = (self.trusted.targets_role("targets"), pinned) {
-            if tgt.version == pv && !tgt.is_expired(now)? {
+            if tgt.version == pv && !tgt.is_expired(now) {
                 tracing::debug!(version = pv, "targets unchanged; using trusted copy");
                 return Ok(());
             }
@@ -286,7 +288,7 @@ impl Updater {
         self.repo
             .fetch_metadata(&name, self.config.targets_max_length)
             .await?
-            .ok_or_else(|| Error::Transport(format!("{name} not found")))
+            .ok_or_else(|| Error::transport(format!("{name} not found")))
     }
 
     /// Resolve a target's metadata by walking the delegation tree, fetching and
@@ -294,19 +296,13 @@ impl Updater {
     /// [`Updater::refresh`]. Returns `None` if no role authorizes the target.
     ///
     /// Implements TUF's pre-order, depth-first delegation search with
-    /// `terminating` handling and a configurable depth bound
+    /// `terminating` handling and a bound on the number of roles visited
     /// ([`UpdaterConfig::max_delegations`]).
-    pub async fn get_targetinfo(
+    pub async fn get_target_info(
         &mut self,
         target_path: &str,
         now: jiff::Timestamp,
     ) -> Result<Option<TargetFile>> {
-        if self.trusted.targets_role("targets").is_none() {
-            return Err(Error::Malformed(
-                "refresh() must be called before resolving targets".to_string(),
-            ));
-        }
-
         self.trusted.check_target_authorization(now)?;
 
         // Queue of (role_name, delegator_name) to visit, front = next.
@@ -400,10 +396,7 @@ impl Updater {
     /// present, mirroring python-tuf's `find_cached_target`. A cache entry that
     /// fails verification (stale or tampered) is ignored rather than trusted.
     pub fn find_cached_target(&self, target: &TargetFile, target_path: &str) -> Option<Vec<u8>> {
-        let bytes = self
-            .store
-            .as_ref()?
-            .load(&format!("targets/{target_path}"))?;
+        let bytes = load_cached(self.store.as_deref()?, &format!("targets/{target_path}"))?;
         verify_target_bytes(&bytes, target, target_path).ok()?;
         Some(bytes)
     }
@@ -413,14 +406,14 @@ impl Updater {
     /// store already holds one (no network), otherwise downloads, verifies, and
     /// writes it through to the cache. Requires a prior [`Updater::refresh`].
     ///
-    /// Equivalent to [`Updater::get_targetinfo`] followed by
+    /// Equivalent to [`Updater::get_target_info`] followed by
     /// [`Updater::find_cached_target`] and, on a miss,
     /// [`Updater::download_target`].
     pub async fn get_target(&mut self, target_path: &str, now: jiff::Timestamp) -> Result<Vec<u8>> {
         let target = self
-            .get_targetinfo(target_path, now)
+            .get_target_info(target_path, now)
             .await?
-            .ok_or_else(|| Error::Malformed(format!("unknown target {target_path:?}")))?;
+            .ok_or_else(|| Error::TargetNotFound(target_path.to_string()))?;
         if let Some(cached) = self.find_cached_target(&target, target_path) {
             return Ok(cached);
         }
@@ -432,7 +425,7 @@ impl Updater {
     /// cache. This always fetches; call [`Updater::find_cached_target`] first,
     /// or use [`Updater::get_target`], to avoid re-downloading a cached target.
     ///
-    /// Takes the [`TargetFile`] resolved by [`Updater::get_targetinfo`] rather
+    /// Takes the [`TargetFile`] resolved by [`Updater::get_target_info`] rather
     /// than a path, so a caller that has already resolved the target (and
     /// perhaps checked the cache) does not pay for a second delegation walk.
     /// Mirrors python-tuf's `download_target(targetinfo)`.
@@ -443,11 +436,7 @@ impl Updater {
     /// Sigstore's small targets (`trusted_root.json` and friends); a caller that
     /// needs to fetch very large targets without buffering should add a
     /// streaming variant rather than relying on this method.
-    pub async fn download_target(
-        &mut self,
-        target: &TargetFile,
-        target_path: &str,
-    ) -> Result<Vec<u8>> {
+    pub async fn download_target(&self, target: &TargetFile, target_path: &str) -> Result<Vec<u8>> {
         if target.length > self.config.target_max_length {
             return Err(Error::IntegrityMismatch(format!(
                 "{target_path}: pinned length {} exceeds configured max {}",
@@ -476,7 +465,7 @@ impl Updater {
             .repo
             .fetch_target(&relative, target.length)
             .await?
-            .ok_or_else(|| Error::Transport(format!("target {relative} not found")))?;
+            .ok_or_else(|| Error::transport(format!("target {relative} not found")))?;
 
         verify_target_bytes(&bytes, target, target_path)?;
         self.cache_put(&format!("targets/{target_path}"), &bytes);
@@ -513,44 +502,24 @@ fn preferred_hash(hashes: &std::collections::BTreeMap<String, String>) -> Option
     hashes.iter().next().map(|(a, h)| (a.as_str(), h.as_str()))
 }
 
-/// Verify downloaded target bytes against the pinned length and hashes.
-///
-/// The length must match, and every hash whose algorithm we support (`sha256`,
-/// `sha512`) must match; at least one supported hash must be present so a target
-/// is never accepted without an integrity check.
-fn verify_target_bytes(bytes: &[u8], target: &TargetFile, path: &str) -> Result<()> {
-    use sha2::{Digest, Sha256, Sha512};
-    if bytes.len() as u64 != target.length {
-        return Err(Error::IntegrityMismatch(format!(
-            "{path}: length {} != pinned {}",
-            bytes.len(),
-            target.length
-        )));
-    }
-
-    let mut verified_any = false;
-    for (algo, expected) in &target.hashes {
-        let actual = match algo.as_str() {
-            "sha256" => hex::encode(Sha256::digest(bytes)),
-            "sha512" => hex::encode(Sha512::digest(bytes)),
-            _ => continue,
-        };
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err(Error::IntegrityMismatch(format!("{path}: {algo} mismatch")));
-        }
-        verified_any = true;
-    }
-
-    if !verified_any {
-        return Err(Error::IntegrityMismatch(format!(
-            "{path}: no supported hash to verify ({:?})",
-            target.hashes.keys().collect::<Vec<_>>()
-        )));
-    }
-    Ok(())
+/// Load `name` from `store`, logging and treating a read error as a miss: the
+/// cache is an optimization, and everything loaded from it is re-verified.
+fn load_cached(store: &dyn MetadataStore, name: &str) -> Option<Vec<u8>> {
+    store.load(name).unwrap_or_else(|e| {
+        tracing::warn!(%name, error = %e, "failed to read cached file");
+        None
+    })
 }
 
-#[cfg(feature = "fetch")]
+/// Verify downloaded target bytes against the pinned length and hashes.
+///
+/// A target is never accepted without an integrity check: at least one
+/// supported hash must be pinned.
+fn verify_target_bytes(bytes: &[u8], target: &TargetFile, path: &str) -> Result<()> {
+    crate::trusted::check_integrity(bytes, Some(target.length), Some(&target.hashes), path)
+}
+
+#[cfg(feature = "client")]
 mod http {
     use sigstore_types::USER_AGENT;
     use url::Url;
@@ -575,7 +544,7 @@ mod http {
             let base = normalize_base(base_url)?;
             let targets_base = base
                 .join("targets/")
-                .map_err(|e| Error::Transport(format!("invalid targets base: {e}")))?;
+                .map_err(|e| Error::transport_with_source("invalid targets base URL", e))?;
             // Timeouts defend against the slow-retrieval attack (TUF spec §1.5.10):
             // without them a malicious mirror can hang a refresh indefinitely. The
             // read timeout is per read operation, so large-but-flowing target
@@ -586,7 +555,7 @@ mod http {
                 .timeout(std::time::Duration::from_secs(120))
                 .user_agent(USER_AGENT)
                 .build()
-                .map_err(|e| Error::Transport(format!("failed to build HTTP client: {e}")))?;
+                .map_err(|e| Error::transport_with_source("failed to build HTTP client", e))?;
             Ok(Self {
                 metadata_base: base,
                 targets_base,
@@ -617,7 +586,7 @@ mod http {
                 .get(url.clone())
                 .send()
                 .await
-                .map_err(|e| Error::Transport(format!("GET {url} failed: {e}")))?;
+                .map_err(|e| Error::transport_with_source(format!("GET {url} failed"), e))?;
 
             // 403 is treated as "not found" alongside 404 because S3 and GCS
             // return it for missing objects; python-tuf accepts both when
@@ -629,7 +598,7 @@ mod http {
                 return Ok(None);
             }
             if !resp.status().is_success() {
-                return Err(Error::Transport(format!(
+                return Err(Error::transport(format!(
                     "GET {url} returned status {}",
                     resp.status()
                 )));
@@ -637,7 +606,7 @@ mod http {
             // Reject early if the advertised size already exceeds the bound.
             if let Some(len) = resp.content_length() {
                 if len > max_length {
-                    return Err(Error::Transport(format!(
+                    return Err(Error::transport(format!(
                         "{url}: content-length {len} exceeds max {max_length}"
                     )));
                 }
@@ -647,10 +616,10 @@ mod http {
             while let Some(chunk) = resp
                 .chunk()
                 .await
-                .map_err(|e| Error::Transport(format!("reading {url} failed: {e}")))?
+                .map_err(|e| Error::transport_with_source(format!("reading {url} failed"), e))?
             {
                 if buf.len() as u64 + chunk.len() as u64 > max_length {
-                    return Err(Error::Transport(format!(
+                    return Err(Error::transport(format!(
                         "{url}: response exceeds max length {max_length}"
                     )));
                 }
@@ -667,31 +636,30 @@ mod http {
         } else {
             format!("{base_url}/")
         };
-        Url::parse(&with_slash).map_err(|e| Error::Transport(format!("invalid base URL: {e}")))
+        Url::parse(&with_slash)
+            .map_err(|e| Error::transport_with_source(format!("invalid base URL {base_url:?}"), e))
     }
 
     impl Repository for HttpRepository {
         fn fetch_metadata<'a>(&'a self, name: &'a str, max_length: u64) -> FetchFuture<'a> {
             Box::pin(async move {
-                let url = self
-                    .metadata_base
-                    .join(name)
-                    .map_err(|e| Error::Transport(format!("invalid URL {name:?}: {e}")))?;
+                let url = self.metadata_base.join(name).map_err(|e| {
+                    Error::transport_with_source(format!("invalid URL {name:?}"), e)
+                })?;
                 self.bounded_get(url, max_length).await
             })
         }
 
         fn fetch_target<'a>(&'a self, path: &'a str, max_length: u64) -> FetchFuture<'a> {
             Box::pin(async move {
-                let url = self
-                    .targets_base
-                    .join(path)
-                    .map_err(|e| Error::Transport(format!("invalid URL {path:?}: {e}")))?;
+                let url = self.targets_base.join(path).map_err(|e| {
+                    Error::transport_with_source(format!("invalid URL {path:?}"), e)
+                })?;
                 self.bounded_get(url, max_length).await
             })
         }
     }
 }
 
-#[cfg(feature = "fetch")]
+#[cfg(feature = "client")]
 pub use http::HttpRepository;
