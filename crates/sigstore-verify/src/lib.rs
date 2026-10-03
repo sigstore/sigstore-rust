@@ -44,6 +44,6 @@ pub use sigstore_types as types;
 pub use error::{CertificateError, Error, Result, TimestampError, TransparencyLogError};
 pub use sigstore_crypto::SubjectAltName;
 pub use verify::{
-    verify, verify_with_key, CertificatePolicy, IdentityMatcher, PublicKeyVerificationPolicy,
+    verify, CertificatePolicy, IdentityMatcher, Policy, PublicKeyVerificationPolicy,
     VerificationPolicy, VerificationResult, Verifier,
 };

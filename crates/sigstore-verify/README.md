@@ -16,12 +16,21 @@ This crate provides high-level APIs for verifying Sigstore signatures. It handle
 
 ## Verification Steps
 
+The policy you pass decides the kind of bundle accepted: a `VerificationPolicy`
+for keyless bundles (signed with a Fulcio certificate), or a
+`PublicKeyVerificationPolicy` for managed-key bundles (signed with a key you
+supply). A bundle of the other kind is rejected.
+
 1. Parse and validate bundle structure
-2. Verify certificate chain against trusted root
-3. Verify signature over artifact
-4. Verify transparency log entry (checkpoint, inclusion proof, or SET)
-5. Verify timestamps if present
-6. Check identity against policy (optional)
+2. Verify timestamps: RFC 3161 timestamps and, for Rekor v1 entries, the
+   log's integrated time
+3. Keyless only: verify the certificate chain against the trusted root at every
+   verified time, the certificate's SCT, and the identity and issuer the policy
+   requires
+4. Verify the transparency log entry (checkpoint, inclusion proof, or SET)
+5. Verify the signature over the artifact, with the certificate's key or the
+   policy's key
+6. Check that the log entry describes this bundle and artifact
 
 ## Offline verification
 
@@ -57,9 +66,9 @@ requires an identity/issuer restriction or `--allow-any-identity`.
 ## Usage
 
 ```rust
-use sigstore_verify::{verify, Verifier, VerificationPolicy};
+use sigstore_verify::{verify, PublicKeyVerificationPolicy, Verifier, VerificationPolicy};
 use sigstore_trust_root::{TrustedRoot, TufConfig};
-use sigstore_types::{Artifact, Bundle, Sha256Hash};
+use sigstore_types::{Artifact, Bundle, DerPublicKey, Sha256Hash};
 
 let bundle: Bundle = serde_json::from_str(bundle_json)?;
 let policy = VerificationPolicy::any_identity();
@@ -86,9 +95,9 @@ let result = verifier.verify_reader(file, &bundle, &policy)?;
 // Runtime-independent futures_io::AsyncRead is also supported
 let result = verifier.verify_async_reader(async_reader, &bundle, &policy).await?;
 
-// Managed-key bundles use the `verify_with_key*` family with the same
-// three input shapes: `verify_with_key`, `verify_with_key_reader`,
-// `verify_with_key_async_reader`.
+// Managed-key bundles use the same entry points; the key is part of the policy
+let key_policy = PublicKeyVerificationPolicy::new(DerPublicKey::from_pem(&key_pem)?);
+let result = verifier.verify(artifact_bytes.as_slice(), &bundle, &key_policy)?;
 ```
 
 For Tokio readers, enable `tokio-util`'s `compat` feature and use
@@ -133,6 +142,34 @@ let policy = VerificationPolicy::any_identity()
 let policy = VerificationPolicy::any_identity()
     .skip_tlog_unsafe()
     .skip_certificate_chain();
+```
+
+Managed-key bundles carry no certificate, so the key goes in the policy:
+
+```rust
+use sigstore_types::DerPublicKey;
+use sigstore_verify::PublicKeyVerificationPolicy;
+
+let public_key = DerPublicKey::from_pem(&std::fs::read_to_string("key.pub")?)?;
+
+// Verify the signature, timestamps and transparency log entry
+let policy = PublicKeyVerificationPolicy::new(public_key);
+
+// Skip transparency log inclusion (for testing only)
+let policy = policy.skip_tlog_unsafe();
+```
+
+All verify functions accept either policy. When the kind of policy is chosen at
+runtime, pass a `&dyn Policy`:
+
+```rust
+use sigstore_verify::{verify, Policy, PublicKeyVerificationPolicy, VerificationPolicy};
+
+let policy: Box<dyn Policy> = match public_key {
+    Some(key) => Box::new(PublicKeyVerificationPolicy::new(key)),
+    None => Box::new(VerificationPolicy::new(identity, issuer)),
+};
+let result = verify(artifact_bytes.as_slice(), &bundle, policy.as_ref(), &root)?;
 ```
 
 ## Related Crates
