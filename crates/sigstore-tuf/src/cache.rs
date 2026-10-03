@@ -21,8 +21,12 @@ use crate::transport::{FetchFuture, Repository};
 /// A blob store for verified TUF metadata (and optionally cached targets),
 /// keyed by file name.
 pub trait MetadataStore: Send + Sync {
-    /// Load a previously stored blob, or `None` if absent.
-    fn load(&self, name: &str) -> Option<Vec<u8>>;
+    /// Load a previously stored blob, or `Ok(None)` if absent.
+    ///
+    /// An error means the blob may exist but could not be read. The
+    /// [`Updater`](crate::client::Updater) treats it like a cache miss and
+    /// logs it, while [`StoreRepository`] reports it.
+    fn load(&self, name: &str) -> Result<Option<Vec<u8>>>;
 
     /// Persist a blob under `name`. Best-effort callers may ignore the error.
     fn store(&self, name: &str, bytes: &[u8]) -> Result<()>;
@@ -75,16 +79,20 @@ impl FileStore {
 }
 
 impl MetadataStore for FileStore {
-    fn load(&self, name: &str) -> Option<Vec<u8>> {
-        let path = self.safe_path(name).ok()?;
-        std::fs::read(path).ok()
+    fn load(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        let path = self.safe_path(name)?;
+        match std::fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(Error::io(format!("reading {}", path.display()), e)),
+        }
     }
 
     fn store(&self, name: &str, bytes: &[u8]) -> Result<()> {
         let path = self.safe_path(name)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| Error::Transport(format!("cache mkdir failed: {e}")))?;
+                .map_err(|e| Error::io(format!("creating {}", parent.display()), e))?;
         }
         write_atomic(&path, bytes)
     }
@@ -102,9 +110,9 @@ impl MetadataStore for FileStore {
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut tmp = tempfile::NamedTempFile::new_in(dir)
-        .map_err(|e| Error::Transport(format!("cache temp create failed: {e}")))?;
+        .map_err(|e| Error::io(format!("creating a temporary file in {}", dir.display()), e))?;
     tmp.write_all(bytes)
-        .map_err(|e| Error::Transport(format!("cache write failed: {e}")))?;
+        .map_err(|e| Error::io(format!("writing {}", tmp.path().display()), e))?;
 
     let mut to_persist = tmp;
     for attempt in 0..5 {
@@ -115,10 +123,10 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
             Err(e) => {
                 to_persist = e.file;
                 if attempt == 4 {
-                    return Err(Error::Transport(format!(
-                        "cache rename failed: {}",
-                        e.error
-                    )));
+                    return Err(Error::io(
+                        format!("renaming to {}", path.display()),
+                        e.error,
+                    ));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10 * (attempt + 1)));
             }
@@ -141,8 +149,8 @@ impl MemoryStore {
 }
 
 impl MetadataStore for MemoryStore {
-    fn load(&self, name: &str) -> Option<Vec<u8>> {
-        self.map.lock().unwrap().get(name).cloned()
+    fn load(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self.map.lock().unwrap().get(name).cloned())
     }
 
     fn store(&self, name: &str, bytes: &[u8]) -> Result<()> {
@@ -155,7 +163,7 @@ impl MetadataStore for MemoryStore {
 }
 
 impl<S: MetadataStore + ?Sized> MetadataStore for std::sync::Arc<S> {
-    fn load(&self, name: &str) -> Option<Vec<u8>> {
+    fn load(&self, name: &str) -> Result<Option<Vec<u8>>> {
         (**self).load(name)
     }
 
@@ -179,8 +187,8 @@ impl<S: MetadataStore> StoreRepository<S> {
     }
 
     fn read(&self, name: &str, max_length: u64) -> Result<Option<Vec<u8>>> {
-        match self.store.load(name) {
-            Some(bytes) if bytes.len() as u64 > max_length => Err(Error::Transport(format!(
+        match self.store.load(name)? {
+            Some(bytes) if bytes.len() as u64 > max_length => Err(Error::transport(format!(
                 "cached {name} exceeds max length {max_length}"
             ))),
             other => Ok(other),
@@ -220,16 +228,19 @@ mod tests {
         let store = FileStore::new(dir.path());
 
         store.store("timestamp.json", b"v1").unwrap();
-        assert_eq!(store.load("timestamp.json").as_deref(), Some(&b"v1"[..]));
+        assert_eq!(
+            store.load("timestamp.json").unwrap().as_deref(),
+            Some(&b"v1"[..])
+        );
 
         // Last-writer-wins, in place.
         store.store("timestamp.json", b"v2-longer").unwrap();
         assert_eq!(
-            store.load("timestamp.json").as_deref(),
+            store.load("timestamp.json").unwrap().as_deref(),
             Some(&b"v2-longer"[..])
         );
 
-        assert_eq!(store.load("absent.json"), None);
+        assert_eq!(store.load("absent.json").unwrap(), None);
     }
 
     #[test]
@@ -259,6 +270,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = FileStore::new(dir.path());
         assert!(store.store("../escape.json", b"x").is_err());
-        assert!(store.load("../escape.json").is_none());
+        assert!(store.load("../escape.json").is_err());
     }
 }

@@ -34,8 +34,9 @@
 //! * [`trusted::TrustedMetadataSet`] — the transport-free verification state
 //!   machine: signature thresholds, anti-rollback, expiry, and length/hash
 //!   pinning. This is where the security lives, and it is fully unit-testable.
-//! * [`client`] (feature `fetch`) — an HTTP [`client::Updater`] that drives the
-//!   refresh workflow and downloads/verifies targets.
+//! * [`client`] — the [`client::Updater`] that drives the refresh workflow
+//!   over any [`transport::Repository`] and downloads/verifies targets, plus
+//!   [`client::HttpRepository`] (feature `client`, on by default) for HTTP.
 //!
 //! # Status
 //!
@@ -50,7 +51,7 @@
 //! # Example
 //!
 //! ```no_run
-//! # #[cfg(feature = "fetch")]
+//! # #[cfg(feature = "client")]
 //! # async fn run() -> Result<(), sigstore_tuf::Error> {
 //! use sigstore_tuf::{client::Updater, client::HttpRepository, cache::FileStore};
 //!
@@ -93,8 +94,8 @@ pub use trusted::TrustedMetadataSet;
 pub use cache::{FileStore, MemoryStore, MetadataStore, StoreRepository};
 pub use client::Updater;
 
-#[cfg(feature = "fetch")]
+#[cfg(feature = "client")]
 pub use client::HttpRepository;
 /// The HTTP client crate used by [`HttpRepository::with_http_client`].
-#[cfg(feature = "fetch")]
+#[cfg(feature = "client")]
 pub use reqwest;

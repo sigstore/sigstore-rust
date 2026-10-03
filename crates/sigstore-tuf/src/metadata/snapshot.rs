@@ -9,6 +9,7 @@ use crate::metadata::Role;
 
 /// A reference to another metadata file, as recorded by a parent role.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MetaFile {
     /// The referenced file's version number.
     pub version: u64,
@@ -25,6 +26,7 @@ pub struct MetaFile {
 
 /// The TUF `timestamp` role: pins the current `snapshot` version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Timestamp {
     /// Always `"timestamp"`.
     #[serde(rename = "_type")]
@@ -33,8 +35,8 @@ pub struct Timestamp {
     pub spec_version: String,
     /// Monotonically increasing version number.
     pub version: u64,
-    /// Expiry timestamp (RFC 3339).
-    pub expires: String,
+    /// When this metadata expires.
+    pub expires: jiff::Timestamp,
     /// A single entry, `"snapshot.json"`, pinning the snapshot.
     pub meta: BTreeMap<String, MetaFile>,
     /// Producer-specific extras, preserved.
@@ -56,13 +58,14 @@ impl Role for Timestamp {
         self.version
     }
 
-    fn expires(&self) -> &str {
-        &self.expires
+    fn expires(&self) -> jiff::Timestamp {
+        self.expires
     }
 }
 
 /// The TUF `snapshot` role: pins the version of every targets metadata file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Snapshot {
     /// Always `"snapshot"`.
     #[serde(rename = "_type")]
@@ -71,8 +74,8 @@ pub struct Snapshot {
     pub spec_version: String,
     /// Monotonically increasing version number.
     pub version: u64,
-    /// Expiry timestamp (RFC 3339).
-    pub expires: String,
+    /// When this metadata expires.
+    pub expires: jiff::Timestamp,
     /// Targets metadata file name → pinned reference.
     pub meta: BTreeMap<String, MetaFile>,
     /// Producer-specific extras, preserved.
@@ -87,7 +90,7 @@ impl Role for Snapshot {
         self.version
     }
 
-    fn expires(&self) -> &str {
-        &self.expires
+    fn expires(&self) -> jiff::Timestamp {
+        self.expires
     }
 }

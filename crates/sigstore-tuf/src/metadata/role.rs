@@ -11,6 +11,7 @@ use crate::metadata::Role;
 
 /// The set of authorized keys and signature threshold for a role.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct RoleKeys {
     /// Declared IDs of the keys authorized to sign for this role.
     pub keyids: Vec<String>,
@@ -23,6 +24,7 @@ pub struct RoleKeys {
 
 /// The TUF `root` role: the trust anchor that delegates to all other roles.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Root {
     /// Always `"root"`.
     #[serde(rename = "_type")]
@@ -31,8 +33,8 @@ pub struct Root {
     pub spec_version: String,
     /// Monotonically increasing version number.
     pub version: u64,
-    /// Expiry timestamp (RFC 3339).
-    pub expires: String,
+    /// When this metadata expires.
+    pub expires: jiff::Timestamp,
     /// Whether the repository uses consistent snapshots (version-prefixed
     /// metadata/target file names).
     #[serde(default)]
@@ -61,16 +63,17 @@ impl Role for Root {
         self.version
     }
 
-    fn expires(&self) -> &str {
-        &self.expires
+    fn expires(&self) -> jiff::Timestamp {
+        self.expires
     }
 }
 
 /// A delegated targets role (the `roles` entries inside a `delegations` block).
 ///
 /// The delegation walk that consumes these lives in
-/// [`Updater::get_targetinfo`](crate::client::Updater::get_targetinfo).
+/// [`Updater::get_target_info`](crate::client::Updater::get_target_info).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DelegatedRole {
     /// The delegated role's name.
     pub name: String,
@@ -280,6 +283,7 @@ mod tests {
 
 /// A `delegations` block within a targets metadata file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Delegations {
     /// Keys referenced by the delegated roles, indexed by declared key ID.
     pub keys: BTreeMap<String, Key>,

@@ -31,6 +31,7 @@ use crate::error::{Error, Result};
 
 /// The inner `keyval` object of a TUF key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct KeyVal {
     /// The public key material. Either a PEM `SubjectPublicKeyInfo` blob
     /// (ecdsa/rsa) or a hex-encoded raw public key (ed25519).
@@ -45,6 +46,7 @@ pub struct KeyVal {
 /// Unknown fields (e.g. `x-tuf-on-ci-keyowner`) are preserved in [`Key::extra`]
 /// so that round-tripping and editor workflows do not silently drop data.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Key {
     /// The key type, e.g. `ecdsa`, `ed25519`, `rsa`.
     pub keytype: String,
