@@ -50,6 +50,10 @@ tracing = { workspace = true }
 url = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 
+[[example]]
+name = "conformance_client"
+required-features = ["fetch"]
+
 [dev-dependencies]
 # Only the test-runtime features are added here; the crates themselves are
 # already non-optional dependencies above and so are available to tests.

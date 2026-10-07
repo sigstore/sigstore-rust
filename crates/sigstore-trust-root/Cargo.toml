@@ -45,6 +45,10 @@ tokio = { workspace = true, features = ["fs"], optional = true }
 directories = { workspace = true, optional = true }
 
 [[example]]
+name = "trust-instance"
+required-features = ["tuf"]
+
+[[example]]
 # Refreshes the embedded TUF data (root.json files, trusted roots, signing
 # configs) using the TUF client. See .github/workflows/check-embedded-root.yml.
 name = "update-embedded-roots"
