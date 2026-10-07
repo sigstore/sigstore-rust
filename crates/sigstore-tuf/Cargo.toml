@@ -52,7 +52,7 @@ reqwest = { workspace = true, optional = true }
 
 [[example]]
 name = "conformance_client"
-required-features = ["fetch"]
+required-features = ["client"]
 
 [dev-dependencies]
 # Only the test-runtime features are added here; the crates themselves are
