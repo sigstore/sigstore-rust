@@ -2188,7 +2188,6 @@ dependencies = [
 name = "sigstore-tsa"
 version = "0.14.0"
 dependencies = [
- "aws-lc-rs",
  "base64 0.23.1",
  "cms",
  "const-oid 0.9.6",

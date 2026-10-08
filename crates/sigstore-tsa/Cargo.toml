@@ -16,7 +16,6 @@ native-tls = ["client", "reqwest/native-tls"]
 [dependencies]
 sigstore-types = { workspace = true }
 sigstore-crypto = { workspace = true }
-aws-lc-rs = { workspace = true }
 der = { workspace = true }
 const-oid = { workspace = true, features = ["db"] }
 reqwest = { workspace = true, optional = true }

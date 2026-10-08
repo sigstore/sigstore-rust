@@ -24,12 +24,12 @@ const ID_KP_TIME_STAMPING: ObjectIdentifier = const_oid::db::rfc5280::ID_KP_TIME
 const ID_SIGNED_DATA: ObjectIdentifier = const_oid::db::rfc5911::ID_SIGNED_DATA;
 const OID_MESSAGE_DIGEST: ObjectIdentifier = const_oid::db::rfc6268::ID_MESSAGE_DIGEST;
 
-/// The digest algorithm for a hash algorithm OID used in RFC 3161 structures.
-fn digest_for_oid(oid: &ObjectIdentifier) -> Option<&'static aws_lc_rs::digest::Algorithm> {
+/// Compute the digest for a hash algorithm OID used in RFC 3161 structures.
+fn hash_for_oid(oid: &ObjectIdentifier, data: &[u8]) -> Option<Vec<u8>> {
     match *oid {
-        OID_SHA256 => Some(&aws_lc_rs::digest::SHA256),
-        OID_SHA384 => Some(&aws_lc_rs::digest::SHA384),
-        OID_SHA512 => Some(&aws_lc_rs::digest::SHA512),
+        OID_SHA256 => Some(sigstore_crypto::sha256(data).as_bytes().to_vec()),
+        OID_SHA384 => Some(sigstore_crypto::sha384(data).to_vec()),
+        OID_SHA512 => Some(sigstore_crypto::sha512(data).as_bytes().to_vec()),
         _ => None,
     }
 }
@@ -294,13 +294,12 @@ fn verify_message_imprint(tst_info: &TstInfo, signature_bytes: &[u8]) -> Result<
     let hash_alg_oid = &message_imprint.hash_algorithm.algorithm;
 
     // Hash the signature bytes using the algorithm specified in the message imprint
-    let algorithm = digest_for_oid(hash_alg_oid)
+    let computed_hash = hash_for_oid(hash_alg_oid, signature_bytes)
         .ok_or_else(|| Error::Parse(format!("unsupported hash algorithm: {}", hash_alg_oid)))?;
-    let computed_hash = aws_lc_rs::digest::digest(algorithm, signature_bytes);
 
     let expected_hash = message_imprint.hashed_message.as_bytes();
 
-    if computed_hash.as_ref() != expected_hash {
+    if computed_hash.as_slice() != expected_hash {
         return Err(Error::HashMismatch {
             expected: hex::encode(expected_hash),
             actual: hex::encode(computed_hash),
@@ -485,16 +484,15 @@ fn verify_message_digest_attribute(
     let message_digest = message_digest_octets.as_bytes();
 
     // Hash the TSTInfo content using the algorithm declared by the signer.
-    let algorithm = digest_for_oid(digest_alg_oid).ok_or_else(|| {
+    let content_hash = hash_for_oid(digest_alg_oid, tst_info_der).ok_or_else(|| {
         Error::Parse(format!(
             "unsupported signer digest algorithm: {}",
             digest_alg_oid
         ))
     })?;
-    let content_hash = aws_lc_rs::digest::digest(algorithm, tst_info_der);
 
     // Compare the hashes
-    if content_hash.as_ref() != message_digest {
+    if content_hash.as_slice() != message_digest {
         return Err(Error::HashMismatch {
             expected: hex::encode(message_digest),
             actual: hex::encode(content_hash),
