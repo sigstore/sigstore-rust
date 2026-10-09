@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-trust-root-v0.14.0...sigstore-trust-root-v0.15.0) - 2026-10-09
+
+### Fixed
+
+- *(trust-root)* satisfy clippy's sort_by_key lint on Rust 1.98 ([#304](https://github.com/sigstore/sigstore-rust/pull/304))
+
+### Other
+
+- refresh embedded TUF data ([#321](https://github.com/sigstore/sigstore-rust/pull/321))
+- [**breaking**] consistent function and feature names before 1.0 ([#319](https://github.com/sigstore/sigstore-rust/pull/319))
+- [**breaking**] document every public item, enforce missing_docs ([#271](https://github.com/sigstore/sigstore-rust/pull/271))
+
 ## [0.14.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-trust-root-v0.13.0...sigstore-trust-root-v0.14.0) - 2026-09-29
 
 ### Other

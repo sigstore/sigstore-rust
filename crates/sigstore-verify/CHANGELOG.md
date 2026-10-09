@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-verify-v0.14.0...sigstore-verify-v0.15.0) - 2026-10-09
+
+### Fixed
+
+- *(verify)* verify RFC 3161 timestamps with managed keys, earliest integrated time ([#269](https://github.com/sigstore/sigstore-rust/pull/269))
+
+### Other
+
+- *(verify)* [**breaking**] collapse verification entry points ([#316](https://github.com/sigstore/sigstore-rust/pull/316))
+- *(verify)* pass the signing certificate chain to chain verification ([#315](https://github.com/sigstore/sigstore-rust/pull/315))
+- *(verify)* remove unit test from verify_bundle example ([#314](https://github.com/sigstore/sigstore-rust/pull/314))
+- [**breaking**] document every public item, enforce missing_docs ([#271](https://github.com/sigstore/sigstore-rust/pull/271))
+- *(interop)* Make interop tests use conformance test token ([#303](https://github.com/sigstore/sigstore-rust/pull/303))
+- *(verify)* [**breaking**] categorized, matchable verification errors ([#264](https://github.com/sigstore/sigstore-rust/pull/264))
+
 ## [0.14.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-verify-v0.13.0...sigstore-verify-v0.14.0) - 2026-09-29
 
 ### Added
