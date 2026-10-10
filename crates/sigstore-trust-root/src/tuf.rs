@@ -300,7 +300,7 @@ impl TufClient {
                     } else {
                         "failed to fetch target"
                     };
-                    Error::Tuf(format!("{context} '{name}': {e}"))
+                    Error::Tuf(format!("{context} '{name}': {}", error_chain(&e)))
                 })?;
             results.push(bytes);
         }
@@ -338,12 +338,13 @@ impl TufClient {
     /// run can serve them.
     async fn build_updater(&self, validation_time: jiff::Timestamp) -> Result<Updater> {
         let mut repo =
-            HttpRepository::new(&self.config.url).map_err(|e| Error::Tuf(e.to_string()))?;
+            HttpRepository::new(&self.config.url).map_err(|e| Error::Tuf(error_chain(&e)))?;
         if let Some(client) = &self.config.http_client {
             repo = repo.with_http_client(client.clone());
         }
         let root_bytes = self.get_root_json()?;
-        let mut updater = Updater::new(repo, &root_bytes).map_err(|e| Error::Tuf(e.to_string()))?;
+        let mut updater =
+            Updater::new(repo, &root_bytes).map_err(|e| Error::Tuf(error_chain(&e)))?;
 
         if !self.config.disable_cache {
             let cache_dir = self.get_cache_dir()?;
@@ -356,7 +357,7 @@ impl TufClient {
         updater
             .refresh(validation_time)
             .await
-            .map_err(|e| Error::Tuf(format!("TUF repository load failed: {e}")))?;
+            .map_err(|e| Error::Tuf(format!("TUF repository load failed: {}", error_chain(&e))))?;
         Ok(updater)
     }
 
@@ -379,12 +380,14 @@ impl TufClient {
         let cache_dir = self.get_cache_dir()?;
         let store = FileStore::new(&cache_dir);
         let mut updater = Updater::new(StoreRepository::new(store.clone()), &root_bytes)
-            .map_err(|e| Error::Tuf(e.to_string()))?
+            .map_err(|e| Error::Tuf(error_chain(&e)))?
             .with_store(store);
-        updater
-            .refresh(validation_time)
-            .await
-            .map_err(|e| Error::Tuf(format!("offline verification of cached metadata: {e}")))?;
+        updater.refresh(validation_time).await.map_err(|e| {
+            Error::Tuf(format!(
+                "offline verification of cached metadata: {}",
+                error_chain(&e)
+            ))
+        })?;
         Ok(updater)
     }
 
@@ -656,6 +659,20 @@ pub async fn fetch_trust_material_at(
     let config = SigningConfig::from_json(&config_json)?;
 
     Ok((root, config))
+}
+
+/// Render a `sigstore-tuf` error followed by its sources. Its `Display` omits
+/// the underlying cause (an HTTP or I/O error), and [`Error::Tuf`] carries only
+/// a message, so the cause would otherwise be lost.
+fn error_chain(error: &sigstore_tuf::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
 }
 
 #[cfg(test)]

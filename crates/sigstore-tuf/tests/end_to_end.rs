@@ -32,7 +32,7 @@ struct MemRepo {
 impl Repository for MemRepo {
     fn fetch_metadata<'a>(&'a self, name: &'a str, max_length: u64) -> FetchFuture<'a> {
         let res = match self.metadata.get(name) {
-            Some(b) if b.len() as u64 > max_length => Err(sigstore_tuf::Error::Transport(format!(
+            Some(b) if b.len() as u64 > max_length => Err(sigstore_tuf::Error::transport(format!(
                 "{name} exceeds {max_length}"
             ))),
             other => Ok(other.cloned()),
@@ -328,13 +328,13 @@ async fn cached_role_is_reverified_against_each_delegator() {
     updater.refresh(now()).await.unwrap();
 
     updater
-        .get_targetinfo("team-a/trusted_root.json", now())
+        .get_target_info("team-a/trusted_root.json", now())
         .await
         .unwrap()
         .expect("parent A authorizes its release metadata");
 
     let err = updater
-        .get_targetinfo("team-b/trusted_root.json", now())
+        .get_target_info("team-b/trusted_root.json", now())
         .await
         .expect_err("parent A's cached signature must not satisfy parent B");
     assert!(
@@ -358,7 +358,7 @@ async fn get_target_serves_a_cached_target_without_re_downloading() {
     first.refresh(now()).await.unwrap();
     let bytes = first.get_target("delegated/file.txt", now()).await.unwrap();
     assert_eq!(bytes, b"hello from the delegated role");
-    assert!(store.load("targets/delegated/file.txt").is_some());
+    assert!(store.load("targets/delegated/file.txt").unwrap().is_some());
 
     // A second updater backed by the same (populated) store but a repository
     // that serves the metadata yet no targets: the refresh and delegation walk
@@ -401,7 +401,7 @@ async fn full_refresh_resolves_delegated_target_and_caches() {
         .target("delegated/file.txt")
         .is_none());
     let info = updater
-        .get_targetinfo("delegated/file.txt", now())
+        .get_target_info("delegated/file.txt", now())
         .await
         .unwrap()
         .expect("delegation walk should resolve the target");
@@ -414,9 +414,9 @@ async fn full_refresh_resolves_delegated_target_and_caches() {
     assert_eq!(bytes, b"hello from the delegated role");
 
     // Write-through cache populated.
-    assert!(store.load("timestamp.json").is_some());
-    assert!(store.load("delegated.json").is_some());
-    assert!(store.load("targets/delegated/file.txt").is_some());
+    assert!(store.load("timestamp.json").unwrap().is_some());
+    assert!(store.load("delegated.json").unwrap().is_some());
+    assert!(store.load("targets/delegated/file.txt").unwrap().is_some());
 
     // --- offline: re-verify entirely from the cache, no network ---
     let offline_repo = StoreRepository::new(Arc::clone(&store));
@@ -435,10 +435,8 @@ async fn full_refresh_resolves_delegated_target_and_caches() {
 #[tokio::test]
 async fn size_limit_is_enforced() {
     let (repo, root_bytes) = build_repo();
-    let config = UpdaterConfig {
-        timestamp_max_length: 4, // far too small
-        ..UpdaterConfig::default()
-    };
+    let mut config = UpdaterConfig::default();
+    config.timestamp_max_length = 4; // far too small
     let mut updater = Updater::new(repo, &root_bytes).unwrap().with_config(config);
     let err = updater
         .refresh(now())
@@ -613,4 +611,55 @@ async fn expired_metadata_is_rejected() {
         .await
         .expect_err("expired metadata must be rejected");
     assert!(err.to_string().contains("expired"), "got: {err}");
+}
+
+#[tokio::test]
+async fn expired_error_reports_role_and_typed_expiry() {
+    let (repo, root_bytes) = build_repo_with_timestamp_expiry("2026-06-15T00:00:00Z");
+    let mut updater = Updater::new(repo, &root_bytes).unwrap();
+    let err = updater
+        .refresh("2026-07-01T00:00:00Z".parse().unwrap())
+        .await
+        .expect_err("expired timestamp must be rejected");
+    match err {
+        sigstore_tuf::Error::Expired { role, expires } => {
+            assert_eq!(role, "timestamp");
+            assert_eq!(expires, "2026-06-15T00:00:00Z".parse().unwrap());
+        }
+        other => panic!("expected Expired, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn resolving_targets_requires_a_refresh() {
+    let (repo, root_bytes) = build_repo();
+    let mut updater = Updater::new(repo, &root_bytes).unwrap();
+    let err = updater
+        .get_target_info("delegated/file.txt", now())
+        .await
+        .expect_err("target resolution before refresh must fail");
+    assert!(
+        matches!(err, sigstore_tuf::Error::NotRefreshed),
+        "got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn unlisted_target_is_reported_as_not_found() {
+    let (repo, root_bytes) = build_repo();
+    let mut updater = Updater::new(repo, &root_bytes).unwrap();
+    updater.refresh(now()).await.unwrap();
+    assert!(updater
+        .get_target_info("no/such/target", now())
+        .await
+        .unwrap()
+        .is_none());
+    let err = updater
+        .get_target("no/such/target", now())
+        .await
+        .expect_err("unlisted target must fail");
+    assert!(
+        matches!(&err, sigstore_tuf::Error::TargetNotFound(path) if path == "no/such/target"),
+        "got: {err:?}"
+    );
 }

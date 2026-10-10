@@ -33,8 +33,12 @@ struct ConformanceStore {
 }
 
 impl MetadataStore for ConformanceStore {
-    fn load(&self, name: &str) -> Option<Vec<u8>> {
-        std::fs::read(self.dir.join(name)).ok()
+    fn load(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        match std::fs::read(self.dir.join(name)) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(Error::transport_with_source(format!("reading {name}"), e)),
+        }
     }
 
     fn store(&self, name: &str, bytes: &[u8]) -> Result<()> {
@@ -48,7 +52,7 @@ impl MetadataStore for ConformanceStore {
             return Ok(());
         }
         std::fs::write(self.dir.join(name), bytes)
-            .map_err(|e| Error::Transport(format!("cache write {name}: {e}")))
+            .map_err(|e| Error::transport_with_source("cache write {name}", e))
     }
 }
 
@@ -94,7 +98,7 @@ fn metadata_dir(args: &Args) -> Result<PathBuf> {
     args.metadata_dir
         .as_ref()
         .map(PathBuf::from)
-        .ok_or_else(|| Error::Transport("--metadata-dir is required".into()))
+        .ok_or_else(|| Error::transport("--metadata-dir is required"))
 }
 
 /// `init`: copy the given trusted root into the metadata dir as `root.json`.
@@ -103,13 +107,13 @@ fn cmd_init(args: &Args) -> Result<()> {
     let trusted_root = args
         .positionals
         .get(1)
-        .ok_or_else(|| Error::Transport("init requires a trusted root path".into()))?;
+        .ok_or_else(|| Error::transport("init requires a trusted root path"))?;
     let bytes = std::fs::read(trusted_root)
-        .map_err(|e| Error::Transport(format!("reading trusted root: {e}")))?;
+        .map_err(|e| Error::transport_with_source("reading trusted root", e))?;
     // Validate it parses & self-verifies before trusting it on first use.
     sigstore_tuf::TrustedMetadataSet::from_root(&bytes)?;
     std::fs::write(dir.join("root.json"), &bytes)
-        .map_err(|e| Error::Transport(format!("writing root.json: {e}")))?;
+        .map_err(|e| Error::transport_with_source("writing root.json", e))?;
     Ok(())
 }
 
@@ -118,9 +122,9 @@ fn build_updater(args: &Args) -> Result<Updater> {
     let url = args
         .metadata_url
         .as_ref()
-        .ok_or_else(|| Error::Transport("--metadata-url is required".into()))?;
+        .ok_or_else(|| Error::transport("--metadata-url is required"))?;
     let root = std::fs::read(dir.join("root.json"))
-        .map_err(|e| Error::Transport(format!("no trusted root in metadata dir: {e}")))?;
+        .map_err(|e| Error::transport_with_source("no trusted root in metadata dir", e))?;
     let mut repo = HttpRepository::new(url)?;
     if let Some(target_base) = &args.target_base_url {
         repo = repo.with_targets_base(target_base)?;
@@ -138,13 +142,13 @@ async fn cmd_refresh(args: &Args) -> Result<()> {
 /// write it into the target dir.
 async fn cmd_download(args: &Args) -> Result<()> {
     if args.target_names.is_empty() {
-        return Err(Error::Transport("--target-name is required".into()));
+        return Err(Error::transport("--target-name is required"));
     }
     let target_dir = args
         .target_dir
         .as_ref()
         .map(PathBuf::from)
-        .ok_or_else(|| Error::Transport("--target-dir is required".into()))?;
+        .ok_or_else(|| Error::transport("--target-dir is required"))?;
 
     let mut updater = build_updater(args)?;
     let now = jiff::Timestamp::now();
@@ -154,9 +158,9 @@ async fn cmd_download(args: &Args) -> Result<()> {
         // Resolve each target with the same updater so delegation-cache state is
         // retained across all requested target lookups.
         let info = updater
-            .get_targetinfo(target_name, now)
+            .get_target_info(target_name, now)
             .await?
-            .ok_or_else(|| Error::Malformed(format!("unknown target {target_name:?}")))?;
+            .ok_or_else(|| Error::TargetNotFound(target_name.clone()))?;
         let out = target_dir.join(safe_target_filename(target_name));
 
         // Artifact cache: if we already have a byte-identical copy, don't download
@@ -170,10 +174,10 @@ async fn cmd_download(args: &Args) -> Result<()> {
         let bytes = updater.download_target(&info, target_name).await?;
         if let Some(parent) = out.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| Error::Transport(format!("creating target dir: {e}")))?;
+                .map_err(|e| Error::transport_with_source("creating target dir", e))?;
         }
         std::fs::write(&out, &bytes)
-            .map_err(|e| Error::Transport(format!("writing target: {e}")))?;
+            .map_err(|e| Error::transport_with_source("writing target", e))?;
     }
     Ok(())
 }
@@ -221,13 +225,21 @@ async fn main() {
         Some("init") => cmd_init(&args),
         Some("refresh") => cmd_refresh(&args).await,
         Some("download") => cmd_download(&args).await,
-        other => Err(Error::Transport(format!(
+        other => Err(Error::transport(format!(
             "expected subcommand init|refresh|download, got {other:?}"
         ))),
     };
 
     if let Err(e) = result {
-        eprintln!("conformance_client: {e}");
+        // `Error`'s Display omits the underlying cause; print the whole chain.
+        let mut message = e.to_string();
+        let mut source = std::error::Error::source(&e);
+        while let Some(cause) = source {
+            message.push_str(": ");
+            message.push_str(&cause.to_string());
+            source = cause.source();
+        }
+        eprintln!("conformance_client: {message}");
         std::process::exit(1);
     }
 }

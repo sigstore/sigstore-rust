@@ -39,7 +39,7 @@ let trusted_root = updater
 
 ## Cargo Features
 
-- `fetch` (default) — async HTTP transport for fetching remote metadata and targets
+- `client` — the async HTTP transport (`HttpRepository`) for fetching remote metadata and targets. Enabled by either TLS feature.
 - `rustls` (default) — use rustls as the TLS backend
 - `native-tls` — use the platform's native TLS backend instead
 
@@ -47,7 +47,7 @@ To use the verification core without any network transport:
 
 ```toml
 [dependencies]
-sigstore-tuf = { version = "0.8", default-features = false }
+sigstore-tuf = { version = "1", default-features = false }
 ```
 
 ## Architecture
@@ -56,7 +56,7 @@ sigstore-tuf = { version = "0.8", default-features = false }
 - **`key`** — TUF keys → `sigstore_crypto::VerificationKey`; declared key IDs are authoritative
 - **`metadata`** — the signed envelope and the four roles (`root`, `timestamp`, `snapshot`, `targets`)
 - **`trusted::TrustedMetadataSet`** — the transport-free verification state machine: signature thresholds, anti-rollback, expiry, and length / hash pinning. This is where the security lives, and it is fully unit-testable.
-- **`client`** (feature `fetch`) — an HTTP `Updater` that drives the refresh workflow and downloads / verifies targets
+- **`client`** — the `Updater` that drives the refresh workflow over any `Repository` and downloads / verifies targets, plus `HttpRepository` (feature `client`)
 - **`cache`** — write-through on-disk caching (`FileStore`) and an offline `StoreRepository` that re-verifies entirely from cache
 
 ## Related Crates

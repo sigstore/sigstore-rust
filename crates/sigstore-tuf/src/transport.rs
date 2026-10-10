@@ -49,8 +49,15 @@ impl Repository for Box<dyn Repository> {
 /// Per-role byte limits and root-rotation bound for the refresh workflow.
 ///
 /// Defaults match `python-tuf`'s `UpdaterConfig`, which in turn follows the TUF
-/// specification's guidance on bounding download sizes.
-#[derive(Debug, Clone, Copy)]
+/// specification's guidance on bounding download sizes. Start from
+/// [`UpdaterConfig::default`] and override individual fields:
+///
+/// ```
+/// let mut config = sigstore_tuf::UpdaterConfig::default();
+/// config.target_max_length = 1_000_000;
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct UpdaterConfig {
     /// Maximum bytes for a single `root` metadata file.
     pub root_max_length: u64,
@@ -64,8 +71,9 @@ pub struct UpdaterConfig {
     /// metadata. (When a length is pinned, it is used instead.)
     pub target_max_length: u64,
     /// Maximum number of root rotations to walk in one refresh.
-    pub max_root_rotations: u64,
-    /// Maximum depth of the delegation tree to traverse.
+    pub max_root_rotations: u32,
+    /// Maximum number of targets roles (top-level and delegated) visited
+    /// while resolving one target.
     pub max_delegations: u32,
 }
 
