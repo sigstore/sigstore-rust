@@ -661,9 +661,9 @@ pub async fn fetch_trust_material_at(
     Ok((root, config))
 }
 
-/// Render a `sigstore-tuf` error followed by its sources, because
-/// [`Error::Tuf`] carries only a message and the underlying cause (an HTTP or
-/// I/O error) would otherwise be lost.
+/// Render a `sigstore-tuf` error followed by its sources. Its `Display` omits
+/// the underlying cause (an HTTP or I/O error), and [`Error::Tuf`] carries only
+/// a message, so the cause would otherwise be lost.
 fn error_chain(error: &sigstore_tuf::Error) -> String {
     let mut message = error.to_string();
     let mut source = std::error::Error::source(error);

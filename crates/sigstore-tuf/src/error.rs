@@ -4,11 +4,16 @@
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Errors that can occur while parsing or verifying TUF metadata.
+///
+/// An error's [`Display`](std::fmt::Display) output describes only that error;
+/// an underlying cause is never repeated there and is available through
+/// [`Error::source`](std::error::Error::source) instead. Walk the source chain
+/// to render the full story.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
     /// The metadata could not be parsed as JSON.
-    #[error("failed to parse JSON: {0}")]
+    #[error("failed to parse JSON")]
     Json(#[from] serde_json::Error),
 
     /// The JSON did not have the structure expected for a signed metadata file.
@@ -109,7 +114,7 @@ pub enum Error {
     IntegrityMismatch(String),
 
     /// An error originating from `sigstore-crypto`.
-    #[error("crypto error: {0}")]
+    #[error("crypto error")]
     Crypto(#[from] sigstore_crypto::Error),
 
     /// [`Updater::refresh`](crate::Updater::refresh) has not completed, so
@@ -122,7 +127,7 @@ pub enum Error {
     TargetNotFound(String),
 
     /// Reading or writing a [`MetadataStore`](crate::MetadataStore) failed.
-    #[error("{context}: {source}")]
+    #[error("{context}")]
     Io {
         /// What was being done, e.g. which file was written.
         context: String,
@@ -164,10 +169,52 @@ impl Error {
         }
     }
 
-    pub(crate) fn io(context: impl Into<String>, source: std::io::Error) -> Self {
+    /// A [`Error::Io`] caused by `source`, for use by
+    /// [`MetadataStore`](crate::MetadataStore) implementations.
+    pub fn io(context: impl Into<String>, source: std::io::Error) -> Self {
         Self::Io {
             context: context.into(),
             source,
         }
+    }
+}
+
+/// Displays an error followed by each of its [sources](std::error::Error::source),
+/// separated by `": "`.
+pub(crate) struct DisplayChain<'a>(pub(crate) &'a dyn std::error::Error);
+
+impl std::fmt::Display for DisplayChain<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)?;
+        let mut source = self.0.source();
+        while let Some(cause) = source {
+            write!(f, ": {cause}")?;
+            source = cause.source();
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_chain_renders_each_cause_once() {
+        let err = Error::io(
+            "reading /tmp/timestamp.json",
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied"),
+        );
+        assert_eq!(err.to_string(), "reading /tmp/timestamp.json");
+        assert_eq!(
+            DisplayChain(&err).to_string(),
+            "reading /tmp/timestamp.json: permission denied"
+        );
+
+        let err = Error::transport_with_source("fetching root.json", "connection refused");
+        assert_eq!(
+            DisplayChain(&err).to_string(),
+            "transport error: fetching root.json: connection refused"
+        );
     }
 }

@@ -231,7 +231,15 @@ async fn main() {
     };
 
     if let Err(e) = result {
-        eprintln!("conformance_client: {e}");
+        // `Error`'s Display omits the underlying cause; print the whole chain.
+        let mut message = e.to_string();
+        let mut source = std::error::Error::source(&e);
+        while let Some(cause) = source {
+            message.push_str(": ");
+            message.push_str(&cause.to_string());
+            source = cause.source();
+        }
+        eprintln!("conformance_client: {message}");
         std::process::exit(1);
     }
 }

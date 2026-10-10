@@ -17,7 +17,7 @@
 use std::collections::BTreeSet;
 
 use crate::cache::MetadataStore;
-use crate::error::{Error, Result};
+use crate::error::{DisplayChain, Error, Result};
 use crate::metadata::{Role, TargetFile};
 use crate::transport::{Repository, UpdaterConfig};
 use crate::trusted::TrustedMetadataSet;
@@ -86,10 +86,10 @@ impl Updater {
         let root_bytes = self.trusted.root_bytes();
 
         if let Err(e) = store.store("root.json", root_bytes) {
-            tracing::warn!(error = %e, "failed to update root.json in cache");
+            tracing::warn!(error = %DisplayChain(&e), "failed to update root.json in cache");
         }
         if let Err(e) = store.store(&format!("root_history/{version}.root.json"), root_bytes) {
-            tracing::warn!(error = %e, version, "failed to cache root history");
+            tracing::warn!(error = %DisplayChain(&e), version, "failed to cache root history");
         }
 
         self.store = Some(store);
@@ -146,7 +146,7 @@ impl Updater {
     fn cache_put(&self, name: &str, bytes: &[u8]) {
         if let Some(store) = &self.store {
             if let Err(e) = store.store(name, bytes) {
-                tracing::warn!(%name, error = %e, "failed to cache metadata");
+                tracing::warn!(%name, error = %DisplayChain(&e), "failed to cache metadata");
             }
         }
     }
@@ -506,7 +506,7 @@ fn preferred_hash(hashes: &std::collections::BTreeMap<String, String>) -> Option
 /// cache is an optimization, and everything loaded from it is re-verified.
 fn load_cached(store: &dyn MetadataStore, name: &str) -> Option<Vec<u8>> {
     store.load(name).unwrap_or_else(|e| {
-        tracing::warn!(%name, error = %e, "failed to read cached file");
+        tracing::warn!(%name, error = %DisplayChain(&e), "failed to read cached file");
         None
     })
 }
