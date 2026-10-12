@@ -659,7 +659,7 @@ mod base64_bytes_array4 {
 // ============================================================================
 
 /// Define a fixed-size hash type. Every hash type gets the same constructors,
-/// encodings and conversions, so SHA-256 and SHA-512 stay interchangeable.
+/// encodings and conversions, so the SHA-2 variants stay interchangeable.
 macro_rules! fixed_hash {
     ($(#[$meta:meta])* $name:ident, $len:literal, $label:literal) => {
         $(#[$meta])*
@@ -866,6 +866,13 @@ fixed_hash!(
     Sha256Hash,
     32,
     "SHA-256"
+);
+
+fixed_hash!(
+    /// SHA-384 hash digest (48 bytes)
+    Sha384Hash,
+    48,
+    "SHA-384"
 );
 
 fixed_hash!(
@@ -1180,6 +1187,21 @@ mod tests {
 
         assert_eq!(digest_bytes, vec_bytes);
         assert_eq!(vec_bytes, digest_bytes);
+    }
+
+    #[test]
+    fn test_sha384_hash_round_trips() {
+        let hash = Sha384Hash::new([9u8; 48]);
+        let hex = hash.to_hex();
+        assert_eq!(hex.parse::<Sha384Hash>().unwrap(), hash);
+        assert_eq!(Sha384Hash::from_hex_or_base64(&hex).unwrap(), hash);
+        assert_eq!(
+            Sha384Hash::from_hex_or_base64(&hash.to_base64()).unwrap(),
+            hash
+        );
+        let json = serde_json::to_string(&hash).unwrap();
+        assert_eq!(serde_json::from_str::<Sha384Hash>(&json).unwrap(), hash);
+        assert!(Sha384Hash::try_from(&[0u8; 32][..]).is_err());
     }
 
     #[test]

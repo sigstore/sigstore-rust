@@ -46,13 +46,13 @@ pub enum VerificationMaterialV03 {
 #[derive(Debug, Clone)]
 pub struct BundleV03 {
     /// Verification material - either a certificate or public key
-    pub verification: VerificationMaterialV03,
+    verification: VerificationMaterialV03,
     /// The signature content (message signature or DSSE envelope)
-    pub content: SignatureContent,
+    content: SignatureContent,
     /// Transparency log entries
-    pub tlog_entries: Vec<TransparencyLogEntry>,
+    tlog_entries: Vec<TransparencyLogEntry>,
     /// RFC 3161 timestamps
-    pub rfc3161_timestamps: Vec<Rfc3161Timestamp>,
+    rfc3161_timestamps: Vec<Rfc3161Timestamp>,
 }
 
 impl BundleV03 {

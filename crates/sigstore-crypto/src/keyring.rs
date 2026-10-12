@@ -46,12 +46,12 @@ impl Keyring {
     }
 
     /// Get a key by its full ID, without applying its validity window.
-    pub fn get_key(&self, key_id: &Sha256Hash) -> Option<&VerificationKey> {
+    pub fn key(&self, key_id: &Sha256Hash) -> Option<&VerificationKey> {
         self.keys.get(key_id).map(|entry| &entry.key)
     }
 
     /// Get a key by its full ID if it was valid at `time`.
-    pub fn get_key_at(&self, key_id: &Sha256Hash, time: Timestamp) -> Option<&VerificationKey> {
+    pub fn key_at(&self, key_id: &Sha256Hash, time: Timestamp) -> Option<&VerificationKey> {
         self.keys
             .get(key_id)
             .filter(|entry| {
@@ -64,13 +64,9 @@ impl Keyring {
 
     /// Get a key by ID if its validity period has started by `time`.
     ///
-    /// Unlike [`Self::get_key_at`], expired keys remain available for
+    /// Unlike [`Self::key_at`], expired keys remain available for
     /// historical material whose exact production time is unavailable.
-    pub fn get_key_started_by(
-        &self,
-        key_id: &Sha256Hash,
-        time: Timestamp,
-    ) -> Option<&VerificationKey> {
+    pub fn key_started_by(&self, key_id: &Sha256Hash, time: Timestamp) -> Option<&VerificationKey> {
         self.keys
             .get(key_id)
             .filter(|entry| {
@@ -109,7 +105,7 @@ impl Keyring {
         signature: &SignatureBytes,
     ) -> Result<()> {
         let key = self
-            .get_key(key_id)
+            .key(key_id)
             .ok_or_else(|| Error::Verification(format!("key not found: {}", key_id.to_hex())))?;
         key.verify(data, signature)
     }
@@ -122,7 +118,7 @@ impl Keyring {
         data: impl AsRef<[u8]>,
         signature: &SignatureBytes,
     ) -> Result<()> {
-        let key = self.get_key_at(key_id, time).ok_or_else(|| {
+        let key = self.key_at(key_id, time).ok_or_else(|| {
             Error::Verification(format!(
                 "key not found or not valid at {}: {}",
                 time,
@@ -182,7 +178,7 @@ mod tests {
         let mut keyring = Keyring::new();
         keyring.add_key(key_id, vk);
         assert_eq!(keyring.len(), 1);
-        assert!(keyring.get_key(&key_id).is_some());
+        assert!(keyring.key(&key_id).is_some());
     }
 
     #[test]
@@ -218,10 +214,10 @@ mod tests {
         let mut keyring = Keyring::new();
         keyring.add_key_with_validity(key_id, vk, Some(TimeRange::new(start, Some(end))));
 
-        assert!(keyring.get_key_at(&key_id, start).is_some());
-        assert!(keyring.get_key_at(&key_id, end).is_some());
+        assert!(keyring.key_at(&key_id, start).is_some());
+        assert!(keyring.key_at(&key_id, end).is_some());
         assert!(keyring
-            .get_key_at(&key_id, "2022-01-01T00:00:00Z".parse().unwrap())
+            .key_at(&key_id, "2022-01-01T00:00:00Z".parse().unwrap())
             .is_none());
         // Historical checkpoint lookup keeps an expired key once it has started.
         assert_eq!(

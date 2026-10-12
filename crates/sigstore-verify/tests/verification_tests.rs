@@ -336,14 +336,14 @@ fn test_policy_builder() {
         ))
     );
     assert_eq!(policy.issuer(), Some("https://accounts.google.com"));
-    assert!(!policy.verify_tlog());
+    assert!(!policy.verifies_tlog());
 }
 
 #[test]
 fn test_policy_requires_identity_or_issuer_alone() {
     let policy = VerificationPolicy::any_identity().require_identity("user@example.com");
     assert!(policy.identity().is_some() && policy.issuer().is_none());
-    assert!(policy.verify_tlog()); // Default is true
+    assert!(policy.verifies_tlog()); // Default is true
 
     let policy = VerificationPolicy::any_identity()
         .require_issuer("https://token.actions.githubusercontent.com");

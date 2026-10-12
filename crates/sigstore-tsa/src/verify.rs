@@ -28,7 +28,7 @@ const OID_MESSAGE_DIGEST: ObjectIdentifier = const_oid::db::rfc6268::ID_MESSAGE_
 fn hash_for_oid(oid: &ObjectIdentifier, data: &[u8]) -> Option<Vec<u8>> {
     match *oid {
         OID_SHA256 => Some(sigstore_crypto::sha256(data).as_bytes().to_vec()),
-        OID_SHA384 => Some(sigstore_crypto::sha384(data).to_vec()),
+        OID_SHA384 => Some(sigstore_crypto::sha384(data).as_bytes().to_vec()),
         OID_SHA512 => Some(sigstore_crypto::sha512(data).as_bytes().to_vec()),
         _ => None,
     }

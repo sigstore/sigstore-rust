@@ -74,7 +74,7 @@ impl PublicKeyVerificationPolicy {
     }
 
     /// Whether transparency log inclusion is verified.
-    pub fn verify_tlog(&self) -> bool {
+    pub fn verifies_tlog(&self) -> bool {
         self.verify_tlog
     }
 }
@@ -336,7 +336,7 @@ impl VerificationPolicy {
 
     /// Whether transparency log inclusion is verified; see
     /// [`Self::skip_tlog_unsafe`].
-    pub fn verify_tlog(&self) -> bool {
+    pub fn verifies_tlog(&self) -> bool {
         self.verify_tlog
     }
 
@@ -1187,7 +1187,7 @@ mod tests {
             Some(&IdentityMatcher::Exact("test@example.com".to_string()))
         );
         assert_eq!(policy.issuer(), Some("https://accounts.google.com"));
-        assert!(!policy.verify_tlog());
+        assert!(!policy.verifies_tlog());
     }
 
     #[test]

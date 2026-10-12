@@ -248,7 +248,7 @@ impl TrustedRoot {
                 continue;
             };
             let key_id = key_id(&tlog.log_id.key_id)?;
-            if keyring.get_key(&key_id).is_some() {
+            if keyring.key(&key_id).is_some() {
                 return Err(Error::InvalidKey(format!(
                     "duplicate Rekor log ID: {}",
                     tlog.log_id.key_id
@@ -460,7 +460,7 @@ mod tests {
         let root = TrustedRoot::from_json(SAMPLE_TRUSTED_ROOT).unwrap();
         let keys = root.rekor_keys().unwrap();
         assert_eq!(keys.len(), 1);
-        assert!(keys.get_key(&Sha256Hash::new([0; 32])).is_some());
+        assert!(keys.key(&Sha256Hash::new([0; 32])).is_some());
     }
 
     #[test]
@@ -544,13 +544,13 @@ mod tests {
         assert_eq!(keys.len(), 3);
         let now = Timestamp::now();
         assert!(keys
-            .get_key_started_by(&test_key_id("expired-key"), now)
+            .key_started_by(&test_key_id("expired-key"), now)
             .is_some());
         assert!(keys
-            .get_key_started_by(&test_key_id("current-key"), now)
+            .key_started_by(&test_key_id("current-key"), now)
             .is_some());
         assert!(keys
-            .get_key_started_by(&test_key_id("future-key"), now)
+            .key_started_by(&test_key_id("future-key"), now)
             .is_none());
 
         // The compatibility lookup honors the same rule.
@@ -643,10 +643,10 @@ mod tests {
         assert_eq!(keys.len(), 2);
         let now = Timestamp::now();
         assert!(keys
-            .get_key_started_by(&test_key_id("current-ctlog"), now)
+            .key_started_by(&test_key_id("current-ctlog"), now)
             .is_some());
         assert!(keys
-            .get_key_started_by(&test_key_id("future-ctlog"), now)
+            .key_started_by(&test_key_id("future-ctlog"), now)
             .is_none());
 
         // Malformed timestamp is rejected when the trusted root is parsed

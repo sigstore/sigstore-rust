@@ -3,7 +3,7 @@
 use crate::error::{Error, Result};
 use aws_lc_rs::digest::{self, Context, SHA256, SHA384, SHA512};
 use futures_io::AsyncRead;
-use sigstore_types::{ArtifactDigest, HashAlgorithm, Sha256Hash, Sha512Hash};
+use sigstore_types::{ArtifactDigest, HashAlgorithm, Sha256Hash, Sha384Hash, Sha512Hash};
 use std::future::Future;
 use std::io::{self, Read};
 use std::pin::Pin;
@@ -20,10 +20,12 @@ pub fn sha256(data: &[u8]) -> Sha256Hash {
     Sha256Hash::new(result)
 }
 
-/// Hash data using SHA-384, returning raw bytes
-pub fn sha384(data: &[u8]) -> Vec<u8> {
+/// Hash data using SHA-384, returning a typed hash
+pub fn sha384(data: &[u8]) -> Sha384Hash {
     let digest = digest::digest(&SHA384, data);
-    digest.as_ref().to_vec()
+    let mut result = [0u8; 48];
+    result.copy_from_slice(digest.as_ref());
+    Sha384Hash::new(result)
 }
 
 /// Hash data using SHA-512, returning a typed hash

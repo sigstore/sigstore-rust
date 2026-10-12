@@ -244,7 +244,7 @@ pub fn verify_set(entry: &TransparencyLogEntry, rekor_keys: &Keyring) -> Result<
         .map_err(|e| Error::malformed_entry(format!("invalid Rekor log ID: {e}")))?;
     let keyring = rekor_keys;
     let log_key = if let Some(integrated_ts) = entry.integrated_time {
-        keyring.get_key_at(&key_id, integrated_ts).ok_or_else(|| {
+        keyring.key_at(&key_id, integrated_ts).ok_or_else(|| {
             Error::inclusion_promise(format!(
                 "No log key valid at integrated time {} for log ID {}",
                 integrated_ts, entry.log_id.key_id
@@ -252,7 +252,7 @@ pub fn verify_set(entry: &TransparencyLogEntry, rekor_keys: &Keyring) -> Result<
         })?
     } else {
         keyring
-            .get_key_started_by(&key_id, jiff::Timestamp::now())
+            .key_started_by(&key_id, jiff::Timestamp::now())
             .ok_or_else(|| Error::unknown_log(entry.log_id.key_id.to_string()))?
     };
 

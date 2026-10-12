@@ -437,7 +437,7 @@ mod tests {
         .is_err());
         assert!(vk384.verify(data, &sig).is_ok());
         let sha384 = crate::hash::sha384(data);
-        assert!(vk384.verify_prehashed(&sha384, &sig).is_ok());
+        assert!(vk384.verify_prehashed(sha384.as_slice(), &sig).is_ok());
 
         // Mismatched hash must fail closed.
         let vk256 =
