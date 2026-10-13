@@ -779,7 +779,9 @@ fn p384_ed25519_rsa_mldsa_and_webpki_verification() {
     let p384_spki = spki_der(ID_EC_PUBLIC_KEY, Some(SECP_384_R_1), &p384_pk);
     let vk_p384 = VerificationKey::from_spki(&p384_spki).unwrap();
     vk_p384.verify(data, &p384_sig).unwrap();
-    vk_p384.verify_prehashed(&sha384(data), &p384_sig).unwrap();
+    vk_p384
+        .verify_prehashed(sha384(data).as_bytes(), &p384_sig)
+        .unwrap();
     let vk_p384_256 =
         VerificationKey::from_spki_with_scheme(&p384_spki, SigningScheme::EcdsaP384Sha256).unwrap();
     assert!(vk_p384_256.verify(data, &p384_sig).is_err());
