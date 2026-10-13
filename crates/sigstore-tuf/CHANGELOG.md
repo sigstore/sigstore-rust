@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-tuf-v0.14.0...sigstore-tuf-v0.15.0) - 2026-10-13
+
+### Other
+
+- Crypto agility ([#326](https://github.com/sigstore/sigstore-rust/pull/326))
+- consolidate feature and dependency checks into check-features.py ([#320](https://github.com/sigstore/sigstore-rust/pull/320))
+- *(tuf)* use sigstore-crypto for hashing instead of sha2 ([#327](https://github.com/sigstore/sigstore-rust/pull/327))
+- *(tuf)* [**breaking**] stabilize the sigstore-tuf API for 1.0 ([#317](https://github.com/sigstore/sigstore-rust/pull/317))
+
 ## [0.14.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-tuf-v0.13.0...sigstore-tuf-v0.14.0) - 2026-09-29
 
 ### Added

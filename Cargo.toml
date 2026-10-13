@@ -18,7 +18,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.14.0"
+version = "0.15.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/sigstore/sigstore-rust"
@@ -104,15 +104,15 @@ open = "5.3"
 # without intermediate crates unconditionally re-enabling `aws-lc-rs` or `rustls`.
 # Each crate enables `aws-lc-rs` in its own `default` feature for standalone builds,
 # and Cargo feature unification propagates `sigstore-crypto/aws-lc-rs` when enabled.
-sigstore-types = { path = "crates/sigstore-types", version = "0.14.0" }
-sigstore-crypto = { path = "crates/sigstore-crypto", version = "0.14.0", default-features = false }
-sigstore-merkle = { path = "crates/sigstore-merkle", version = "0.14.0", default-features = false }
-sigstore-tsa = { path = "crates/sigstore-tsa", version = "0.14.0", default-features = false }
-sigstore-trust-root = { path = "crates/sigstore-trust-root", version = "0.14.0", default-features = false }
-sigstore-tuf = { path = "crates/sigstore-tuf", version = "0.14.0", default-features = false }
-sigstore-bundle = { path = "crates/sigstore-bundle", version = "0.14.0", default-features = false }
-sigstore-rekor = { path = "crates/sigstore-rekor", version = "0.14.0", default-features = false }
-sigstore-fulcio = { path = "crates/sigstore-fulcio", version = "0.14.0", default-features = false }
-sigstore-oidc = { path = "crates/sigstore-oidc", version = "0.14.0", default-features = false }
-sigstore-verify = { path = "crates/sigstore-verify", version = "0.14.0", default-features = false }
-sigstore-sign = { path = "crates/sigstore-sign", version = "0.14.0", default-features = false }
+sigstore-types = { path = "crates/sigstore-types", version = "0.15.0" }
+sigstore-crypto = { path = "crates/sigstore-crypto", version = "0.15.0", default-features = false }
+sigstore-merkle = { path = "crates/sigstore-merkle", version = "0.15.0", default-features = false }
+sigstore-tsa = { path = "crates/sigstore-tsa", version = "0.15.0", default-features = false }
+sigstore-trust-root = { path = "crates/sigstore-trust-root", version = "0.15.0", default-features = false }
+sigstore-tuf = { path = "crates/sigstore-tuf", version = "0.15.0", default-features = false }
+sigstore-bundle = { path = "crates/sigstore-bundle", version = "0.15.0", default-features = false }
+sigstore-rekor = { path = "crates/sigstore-rekor", version = "0.15.0", default-features = false }
+sigstore-fulcio = { path = "crates/sigstore-fulcio", version = "0.15.0", default-features = false }
+sigstore-oidc = { path = "crates/sigstore-oidc", version = "0.15.0", default-features = false }
+sigstore-verify = { path = "crates/sigstore-verify", version = "0.15.0", default-features = false }
+sigstore-sign = { path = "crates/sigstore-sign", version = "0.15.0", default-features = false }
