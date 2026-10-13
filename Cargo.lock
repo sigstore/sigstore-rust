@@ -2032,7 +2032,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sigstore-bundle"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "jiff",
  "sigstore-merkle",
@@ -2042,7 +2042,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-conformance"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "hex",
  "sigstore-oidc",
@@ -2055,7 +2055,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-crypto"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
@@ -2076,7 +2076,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-fulcio"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "reqwest",
  "serde",
@@ -2090,7 +2090,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-merkle"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "base64 0.23.1",
  "rstest",
@@ -2103,7 +2103,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-oidc"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "ambient-id",
  "base64 0.23.1",
@@ -2123,7 +2123,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-protobuf-compat"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2145,7 +2145,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-rekor"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "base64 0.23.1",
  "hex",
@@ -2161,7 +2161,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-sign"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "base64 0.23.1",
  "futures-io",
@@ -2181,7 +2181,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-trust-root"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "directories",
  "hex",
@@ -2198,7 +2198,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-tsa"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "base64 0.23.1",
  "cms",
@@ -2221,7 +2221,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-tuf"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "glob",
  "hex",
@@ -2240,7 +2240,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-types"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "base64 0.23.1",
  "hex",
@@ -2253,7 +2253,7 @@ dependencies = [
 
 [[package]]
 name = "sigstore-verify"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "base64 0.23.1",
  "const-oid",
