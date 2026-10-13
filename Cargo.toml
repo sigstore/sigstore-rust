@@ -78,7 +78,7 @@ insta = "1.48"
 tracing = { version = "0.1" }
 
 # Serialization / JSON
-serde_json_canonicalizer = "0.3"
+serde_json_canonicalizer = "0.4"
 
 # Glob matching within individual TUF path segments
 # Keep this segment-based: glob's `**` extension must not cross `/`.
