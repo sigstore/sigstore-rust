@@ -1,7 +1,7 @@
-//! Hashing utilities using aws-lc-rs
+//! Hashing utilities
 
-use crate::error::{Error, Result};
-use aws_lc_rs::digest::{self, Context, SHA256, SHA384, SHA512};
+use crate::error::Result;
+use crate::provider::{default_provider, HashContext};
 use futures_io::AsyncRead;
 use sigstore_types::{ArtifactDigest, HashAlgorithm, Sha256Hash, Sha384Hash, Sha512Hash};
 use std::future::Future;
@@ -14,32 +14,23 @@ const HASH_CHUNK_SIZE: usize = 64 * 1024;
 
 /// Hash data using SHA-256, returning a typed hash
 pub fn sha256(data: &[u8]) -> Sha256Hash {
-    let digest = digest::digest(&SHA256, data);
-    let mut result = [0u8; 32];
-    result.copy_from_slice(digest.as_ref());
-    Sha256Hash::new(result)
+    Sha256Hash::new(default_provider().sha256(data))
 }
 
 /// Hash data using SHA-384, returning a typed hash
 pub fn sha384(data: &[u8]) -> Sha384Hash {
-    let digest = digest::digest(&SHA384, data);
-    let mut result = [0u8; 48];
-    result.copy_from_slice(digest.as_ref());
-    Sha384Hash::new(result)
+    Sha384Hash::new(default_provider().sha384(data))
 }
 
 /// Hash data using SHA-512, returning a typed hash
 pub fn sha512(data: &[u8]) -> Sha512Hash {
-    let digest = digest::digest(&SHA512, data);
-    let mut result = [0u8; 64];
-    result.copy_from_slice(digest.as_ref());
-    Sha512Hash::new(result)
+    Sha512Hash::new(default_provider().sha512(data))
 }
 
 /// Incremental hasher for a typed artifact digest.
 pub struct ArtifactHasher {
     algorithm: HashAlgorithm,
-    context: Context,
+    context: Box<dyn HashContext>,
 }
 
 impl ArtifactHasher {
@@ -47,19 +38,9 @@ impl ArtifactHasher {
     ///
     /// Fails for algorithms this version of the crate cannot compute.
     pub fn new(algorithm: HashAlgorithm) -> Result<Self> {
-        let backend = match algorithm {
-            HashAlgorithm::Sha2256 => &SHA256,
-            HashAlgorithm::Sha2384 => &SHA384,
-            HashAlgorithm::Sha2512 => &SHA512,
-            _ => {
-                return Err(Error::UnsupportedAlgorithm(format!(
-                    "cannot compute {algorithm} digests"
-                )))
-            }
-        };
         Ok(Self {
             algorithm,
-            context: Context::new(backend),
+            context: default_provider().hash(algorithm)?,
         })
     }
 
@@ -70,7 +51,8 @@ impl ArtifactHasher {
 
     /// Finish hashing and return the digest.
     pub fn finalize(self) -> ArtifactDigest {
-        ArtifactDigest::new(self.algorithm, self.context.finish().as_ref())
+        let bytes = self.context.finalize();
+        ArtifactDigest::new(self.algorithm, bytes)
             .expect("backend digest length does not match the algorithm's documented length")
     }
 }
@@ -98,14 +80,16 @@ impl HashUpdate for Sha256Hasher {
 
 /// Incremental SHA-256 hasher
 pub struct Sha256Hasher {
-    context: Context,
+    context: Box<dyn HashContext>,
 }
 
 impl Sha256Hasher {
     /// Create a new SHA-256 hasher
     pub fn new() -> Self {
         Self {
-            context: Context::new(&SHA256),
+            context: default_provider()
+                .hash(HashAlgorithm::Sha2256)
+                .expect("CryptoProvider must support SHA-256"),
         }
     }
 
@@ -116,18 +100,12 @@ impl Sha256Hasher {
 
     /// Finalize and get the digest as a typed hash
     pub fn finalize(self) -> Sha256Hash {
-        let digest = self.finish_digest();
-        let mut result = [0u8; 32];
-        result.copy_from_slice(digest.as_ref());
-        Sha256Hash::new(result)
-    }
-
-    /// Finalize and return the raw aws-lc-rs digest.
-    ///
-    /// Crate-internal so that [`crate::KeyPair::sign_prehashed`] can sign the
-    /// digest directly without leaking aws-lc-rs types into the public API.
-    pub(crate) fn finish_digest(self) -> digest::Digest {
-        self.context.finish()
+        let digest: [u8; 32] = self
+            .context
+            .finalize()
+            .try_into()
+            .expect("CryptoProvider SHA-256 digest must be 32 bytes");
+        Sha256Hash::new(digest)
     }
 }
 
@@ -270,7 +248,7 @@ fn yield_now() -> impl Future<Output = ()> {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "aws-lc-rs"))]
 mod tests {
     use super::*;
     use futures::{executor::block_on, task::noop_waker_ref};

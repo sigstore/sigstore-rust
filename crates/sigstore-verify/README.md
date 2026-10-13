@@ -32,12 +32,15 @@ supply). A bundle of the other kind is rejected.
    policy's key
 6. Check that the log entry describes this bundle and artifact
 
-## Offline verification
+## Offline verification and Cargo features
 
-The default `sigstore-verify` dependency tree has no HTTP client or Tokio runtime.
-Verification always uses the supplied trusted root and never fetches artifacts
-or keys. Enable `tuf` plus `rustls` (default) or `native-tls` when the application
-also needs network trust-root refreshes.
+The default `sigstore-verify` dependency tree (`default = ["rustls", "aws-lc-rs"]`)
+has no HTTP client or Tokio runtime: `rustls` only configures `sigstore-trust-root`
+when `tuf` is also enabled. Verification always uses the supplied trusted root and
+never fetches artifacts or keys.
+
+- **Default (`aws-lc-rs`)**: Uses `aws-lc-rs` for cryptographic verification. Enable `tuf` (plus default `rustls` or `native-tls`) when the application also needs network trust-root refreshes.
+- **Custom `CryptoProvider` (`default-features = false`)**: Omits `aws-lc-rs` so you can install a custom [`sigstore_crypto::CryptoProvider`](../sigstore-crypto/src/provider.rs) via `sigstore_crypto::install_default_provider(...)` (see [`crates/sigstore-crypto/tests/boring_provider.rs`](../sigstore-crypto/tests/boring_provider.rs) for a BoringSSL reference implementation). When combining a custom provider with `tuf`, use `rustls-no-provider` (and install a matching `rustls::crypto::CryptoProvider` at startup) or `native-tls` so `rustls` does not pull in `aws-lc-sys`.
 
 ## Verifier construction
 

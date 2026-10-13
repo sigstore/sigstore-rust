@@ -7,9 +7,13 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = ["aws-lc-rs"]
+aws-lc-rs = ["dep:aws-lc-rs"]
+
 [dependencies]
 sigstore-types = { workspace = true }
-aws-lc-rs = { workspace = true }
+aws-lc-rs = { workspace = true, optional = true }
 der = { workspace = true }
 spki = { workspace = true }
 const-oid = { workspace = true }
@@ -17,9 +21,16 @@ thiserror = { workspace = true }
 x509-cert = { workspace = true }
 jiff = { workspace = true }
 futures-io = { workspace = true }
+rustls-pki-types = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 insta = { workspace = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(sigstore_boring_test)'] }
+
+[target.'cfg(sigstore_boring_test)'.dev-dependencies]
+boring = { workspace = true }

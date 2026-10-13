@@ -8,12 +8,14 @@ repository.workspace = true
 rust-version.workspace = true
 
 [features]
-default = ["rustls"]
+default = ["rustls", "aws-lc-rs"]
 # HTTP transport (`HttpRepository`) for fetching remote TUF metadata and targets.
 client = ["dep:reqwest", "dep:url"]
 # TLS backend selection (matches the rest of the workspace's crates).
 rustls = ["client", "reqwest/rustls"]
+rustls-no-provider = ["client", "reqwest/rustls-no-provider"]
 native-tls = ["client", "reqwest/native-tls"]
+aws-lc-rs = ["sigstore-crypto/aws-lc-rs"]
 
 [dependencies]
 # Internal dependencies
@@ -26,9 +28,6 @@ thiserror = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
-
-# Hashing (target/metadata integrity checks)
-sha2 = { workspace = true }
 
 # Glob matching within individual delegation path segments
 glob = { workspace = true }
@@ -49,6 +48,10 @@ tracing = { workspace = true }
 # `rustls` / `native-tls` features, matching the rest of the workspace.
 url = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
+
+[[example]]
+name = "conformance_client"
+required-features = ["client"]
 
 [dev-dependencies]
 # Only the test-runtime features are added here; the crates themselves are

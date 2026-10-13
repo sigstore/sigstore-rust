@@ -13,8 +13,6 @@
 
 use std::collections::BTreeMap;
 
-use sha2::{Digest, Sha256, Sha512};
-
 use crate::error::{Error, Result};
 use crate::key::Key;
 use crate::metadata::{Metadata, Role, RoleKeys, Root, Snapshot, Targets, Timestamp};
@@ -504,8 +502,8 @@ pub(crate) fn check_integrity(
     let mut verified_any = false;
     for (algo, expected_hex) in hashes {
         let actual = match algo.as_str() {
-            "sha256" => hex::encode(Sha256::digest(bytes)),
-            "sha512" => hex::encode(Sha512::digest(bytes)),
+            "sha256" => sigstore_crypto::sha256(bytes).to_hex(),
+            "sha512" => sigstore_crypto::sha512(bytes).to_hex(),
             _ => continue, // unsupported algorithm; skip
         };
         if !actual.eq_ignore_ascii_case(expected_hex) {

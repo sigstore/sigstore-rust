@@ -156,14 +156,11 @@ impl Key {
             scheme,
             SigningScheme::MlDsa44 | SigningScheme::MlDsa65 | SigningScheme::MlDsa87
         ) {
-            use sha2::{Digest, Sha512};
-            let mut hasher = Sha512::new();
-            hasher.update(data);
-            let digest = hasher.finalize();
+            let digest = sigstore_crypto::sha512(data);
 
-            let mut payload = Vec::with_capacity(4 + digest.len());
+            let mut payload = Vec::with_capacity(4 + digest.as_bytes().len());
             payload.extend_from_slice(b"tuf\x01");
-            payload.extend_from_slice(&digest);
+            payload.extend_from_slice(digest.as_bytes());
 
             vkey.verify(&payload, signature).map_err(Error::from)
         } else {

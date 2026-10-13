@@ -158,7 +158,7 @@ impl Keyring {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "aws-lc-rs"))]
 mod tests {
     use super::*;
     use crate::hash::sha256;

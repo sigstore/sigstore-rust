@@ -8,9 +8,11 @@ repository.workspace = true
 rust-version.workspace = true
 
 [features]
-default = ["tuf", "rustls"]
+default = ["tuf", "rustls", "aws-lc-rs"]
 rustls = ["sigstore-tuf?/rustls"]
+rustls-no-provider = ["sigstore-tuf?/rustls-no-provider"]
 native-tls = ["sigstore-tuf?/native-tls"]
+aws-lc-rs = ["sigstore-crypto/aws-lc-rs"]
 tuf = [
   "dep:sigstore-tuf",
   "dep:tokio",
@@ -34,9 +36,6 @@ serde_json = { workspace = true }
 # Time handling
 jiff = { workspace = true }
 
-# Utilities
-hex = { workspace = true }
-
 # TUF feature dependencies (optional). The TUF client (metadata fetch +
 # verification) is now provided by the in-workspace `sigstore-tuf` crate, which
 # brings its own HTTP transport and (via the `rustls` feature) TLS backend.
@@ -45,14 +44,17 @@ tokio = { workspace = true, features = ["fs"], optional = true }
 directories = { workspace = true, optional = true }
 
 [[example]]
+name = "trust-instance"
+required-features = ["tuf"]
+
+[[example]]
 # Refreshes the embedded TUF data (root.json files, trusted roots, signing
 # configs) using the TUF client. See .github/workflows/check-embedded-root.yml.
 name = "update-embedded-roots"
 required-features = ["tuf"]
 
 [dev-dependencies]
+hex = { workspace = true }
 tempfile = { workspace = true }
-# For building signed TUF fixtures in offline-cache tests
-sha2 = { workspace = true }
 # For testing
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

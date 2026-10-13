@@ -13,7 +13,7 @@ name = "conformance"
 path = "src/main.rs"
 
 [features]
-default = ["rustls"]
+default = ["rustls", "aws-lc-rs"]
 rustls = [
   "sigstore-sign/rustls",
   "sigstore-verify/rustls",
@@ -23,6 +23,12 @@ native-tls = [
   "sigstore-sign/native-tls",
   "sigstore-verify/native-tls",
   "sigstore-oidc/native-tls",
+]
+aws-lc-rs = [
+  "sigstore-sign/aws-lc-rs",
+  "sigstore-verify/aws-lc-rs",
+  "sigstore-oidc/aws-lc-rs",
+  "sigstore-trust-root/aws-lc-rs",
 ]
 
 [dependencies]

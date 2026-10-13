@@ -8,9 +8,11 @@ repository.workspace = true
 rust-version.workspace = true
 
 [features]
-default = ["rustls"]
+default = ["rustls", "aws-lc-rs"]
 rustls = ["reqwest/rustls", "sigstore-oidc/rustls"]
+rustls-no-provider = ["reqwest/rustls-no-provider", "sigstore-oidc/rustls-no-provider"]
 native-tls = ["reqwest/native-tls", "sigstore-oidc/native-tls"]
+aws-lc-rs = ["sigstore-crypto/aws-lc-rs"]
 
 [dependencies]
 sigstore-types = { workspace = true }

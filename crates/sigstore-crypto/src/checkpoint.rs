@@ -87,6 +87,7 @@ mod tests {
         assert_eq!(checkpoint.signatures()[0].key_id.as_bytes().len(), 4);
     }
 
+    #[cfg(feature = "aws-lc-rs")]
     #[test]
     fn verify_signature_tries_every_signature_with_a_colliding_hint() {
         use base64::Engine;

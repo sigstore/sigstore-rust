@@ -17,23 +17,30 @@ sigstore-oidc = { workspace = true }
 sigstore-tsa = { workspace = true, features = ["client"] }
 sigstore-trust-root = { workspace = true }
 thiserror = { workspace = true }
-base64 = { workspace = true }
 serde_json = { workspace = true }
 futures-io = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+base64 = { workspace = true }
 hex = { workspace = true }
 sigstore-trust-root = { workspace = true, features = ["tuf"] }
 
 [features]
-default = ["rustls", "browser", "tuf"]
+default = ["rustls", "browser", "tuf", "aws-lc-rs"]
 rustls = [
   "sigstore-rekor/rustls",
   "sigstore-fulcio/rustls",
   "sigstore-oidc/rustls",
   "sigstore-tsa/rustls",
   "sigstore-trust-root/rustls",
+]
+rustls-no-provider = [
+  "sigstore-rekor/rustls-no-provider",
+  "sigstore-fulcio/rustls-no-provider",
+  "sigstore-oidc/rustls-no-provider",
+  "sigstore-tsa/rustls-no-provider",
+  "sigstore-trust-root/rustls-no-provider",
 ]
 native-tls = [
   "sigstore-rekor/native-tls",
@@ -42,6 +49,7 @@ native-tls = [
   "sigstore-tsa/native-tls",
   "sigstore-trust-root/native-tls",
 ]
+aws-lc-rs = ["sigstore-crypto/aws-lc-rs"]
 # Enable automatic browser opening for authentication
 browser = ["sigstore-oidc/browser"]
 # Fetch signing configs through TUF (SigningContext::production and friends)

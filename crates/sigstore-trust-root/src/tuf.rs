@@ -873,7 +873,6 @@ mod tests {
         use std::path::Path;
 
         use serde_json::{json, Value};
-        use sha2::{Digest, Sha256};
         use sigstore_crypto::KeyPair;
 
         pub const FAR_FUTURE: &str = "2999-01-01T00:00:00Z";
@@ -894,7 +893,7 @@ mod tests {
             json!({
                 "version": version,
                 "length": bytes.len(),
-                "hashes": { "sha256": hex::encode(Sha256::digest(bytes)) },
+                "hashes": { "sha256": sigstore_crypto::sha256(bytes).to_hex() },
             })
         }
 
@@ -921,7 +920,7 @@ mod tests {
                 "targets": {
                     target_path: {
                         "length": target_content.len(),
-                        "hashes": { "sha256": hex::encode(Sha256::digest(target_content)) },
+                        "hashes": { "sha256": sigstore_crypto::sha256(target_content).to_hex() },
                     }
                 },
             });

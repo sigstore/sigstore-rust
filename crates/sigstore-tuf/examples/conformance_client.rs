@@ -184,14 +184,13 @@ async fn cmd_download(args: &Args) -> Result<()> {
 
 /// Whether `bytes` already satisfies a target's pinned length and hash.
 fn target_bytes_match(bytes: &[u8], info: &sigstore_tuf::TargetFile) -> bool {
-    use sha2::{Digest, Sha256, Sha512};
     if bytes.len() as u64 != info.length {
         return false;
     }
     info.hashes.iter().any(|(algo, expected)| {
         let actual = match algo.as_str() {
-            "sha256" => hex::encode(Sha256::digest(bytes)),
-            "sha512" => hex::encode(Sha512::digest(bytes)),
+            "sha256" => sigstore_crypto::sha256(bytes).to_hex(),
+            "sha512" => sigstore_crypto::sha512(bytes).to_hex(),
             _ => return false,
         };
         actual.eq_ignore_ascii_case(expected)

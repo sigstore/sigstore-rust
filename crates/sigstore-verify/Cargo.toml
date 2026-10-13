@@ -21,7 +21,7 @@ serde_json_canonicalizer = { workspace = true }
 thiserror = { workspace = true }
 jiff = { workspace = true }
 base64 = { workspace = true }
-x509-cert = { workspace = true }
+x509-cert = { workspace = true, features = ["sct"] }
 hex = { workspace = true }
 const-oid = { workspace = true }
 tls_codec = { workspace = true }
@@ -33,18 +33,13 @@ futures-io = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 futures = { workspace = true }
-hex = { workspace = true }
-base64 = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-const-oid = { workspace = true }
-x509-cert = { workspace = true }
-sigstore-types = { workspace = true }
 regex = { workspace = true }
 sigstore-trust-root = { workspace = true, features = ["tuf"] }
 
 [features]
-default = ["rustls"]
+default = ["rustls", "aws-lc-rs"]
 rustls = ["sigstore-trust-root/rustls"]
+rustls-no-provider = ["sigstore-trust-root/rustls-no-provider"]
 native-tls = ["sigstore-trust-root/native-tls"]
 tuf = ["sigstore-trust-root/tuf"]
+aws-lc-rs = ["sigstore-crypto/aws-lc-rs"]

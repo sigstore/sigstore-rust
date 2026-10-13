@@ -12,12 +12,12 @@ use cms::signed_data::{SignedData, SignerIdentifier};
 use const_oid::ObjectIdentifier;
 use jiff::Timestamp;
 use rustls_pki_types::CertificateDer;
-use sigstore_crypto::{verify_signature, KeyAlgorithm};
+use sigstore_crypto::{verify_signature, KeyAlgorithm, WEBPKI_VERIFICATION_ALGS};
 use sigstore_types::{DerPublicKey, SignatureBytes, TimestampToken, TsaAuthority};
 use x509_cert::Certificate;
 
 // Re-export webpki from rustls-webpki
-use webpki::{anchor_from_trusted_cert, EndEntityCert, KeyUsage, ALL_VERIFICATION_ALGS};
+use webpki::{anchor_from_trusted_cert, EndEntityCert, KeyUsage};
 
 // Define OIDs as constants using const_oid::db
 const ID_KP_TIME_STAMPING: ObjectIdentifier = const_oid::db::rfc5280::ID_KP_TIME_STAMPING;
@@ -612,7 +612,7 @@ fn validate_tsa_certificate_chain(
     // Verify the certificate chain with TimeStamping EKU
     end_entity_cert
         .verify_for_usage(
-            ALL_VERIFICATION_ALGS,
+            WEBPKI_VERIFICATION_ALGS,
             &trust_anchors,
             &intermediate_ders,
             verification_time,

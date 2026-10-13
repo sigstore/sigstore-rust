@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use sigstore_crypto::KeyPair;
 use sigstore_tuf::transport::{FetchFuture, Repository};
 use sigstore_tuf::{Key, MemoryStore, MetadataStore, StoreRepository, Updater, UpdaterConfig};
@@ -74,7 +73,7 @@ fn metafile(bytes: &[u8], version: u64) -> Value {
     json!({
         "version": version,
         "length": bytes.len(),
-        "hashes": { "sha256": hex::encode(Sha256::digest(bytes)) },
+        "hashes": { "sha256": sigstore_crypto::sha256(bytes).to_hex() },
     })
 }
 
@@ -103,7 +102,7 @@ fn build_repo_with_timestamp_expiry(timestamp_expires: &str) -> (MemRepo, Vec<u8
         "targets": {
             target_path: {
                 "length": target_content.len(),
-                "hashes": { "sha256": hex::encode(Sha256::digest(&target_content)) },
+                "hashes": { "sha256": sigstore_crypto::sha256(&target_content).to_hex() },
             }
         },
     });

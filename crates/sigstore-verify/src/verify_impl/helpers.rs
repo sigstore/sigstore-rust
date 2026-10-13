@@ -6,14 +6,14 @@
 use crate::error::{Error, Result};
 use const_oid::db::rfc5912::ID_KP_CODE_SIGNING;
 use rustls_pki_types::{CertificateDer, UnixTime};
-use sigstore_crypto::CertificateInfo;
+use sigstore_crypto::{CertificateInfo, WEBPKI_VERIFICATION_ALGS};
 use sigstore_trust_root::{TrustedRoot, TsaAuthority};
 use sigstore_types::bundle::{VerificationMaterialContent, X509Certificate};
 use sigstore_types::{
     Bundle, DerCertificate, DerPublicKey, KindVersion, SignatureBytes, SignatureContent,
     TimestampToken,
 };
-use webpki::{EndEntityCert, KeyUsage, ALL_VERIFICATION_ALGS};
+use webpki::{EndEntityCert, KeyUsage};
 
 pub(crate) type FulcioAnchor = (
     rustls_pki_types::TrustAnchor<'static>,
@@ -343,7 +343,7 @@ pub fn verify_certificate_chain(
     // - Extended Key Usage validation (CODE_SIGNING)
     let path = end_entity_cert
         .verify_for_usage(
-            ALL_VERIFICATION_ALGS,
+            WEBPKI_VERIFICATION_ALGS,
             &trust_anchors,
             &intermediate_certs,
             verification_time,

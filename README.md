@@ -151,19 +151,39 @@ cargo run -p sigstore-verify --example verify_bundle -- \
 - Identity-based verification policies
 - Ambient credential detection for CI/CD environments
 
-## Cryptography
+## Cryptography and TLS Configuration
 
-This library uses [aws-lc-rs](https://github.com/aws/aws-lc-rs) as its cryptographic backend. AWS-LC is a general-purpose cryptographic library maintained by AWS, based on code from BoringSSL. It provides:
+By default, `sigstore-rust` uses [aws-lc-rs](https://github.com/aws/aws-lc-rs) for cryptographic operations and `rustls` (with `aws-lc-rs`) for HTTPS transport. It supports:
 
-- ECDSA (P-256, P-384) signature verification and signing
-- Ed25519 signature support
+- ECDSA (P-256, P-384) signature verification and P-256 signing
+- Ed25519, RSA (PKCS#1 v1.5 and PSS), and ML-DSA (44, 65, 87) signature verification
 - SHA-256/SHA-384/SHA-512 hashing
-- X.509 certificate parsing and validation
+- X.509 certificate parsing and chain validation
 
 AWS-LC has a [FIPS 140-3 validated module](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/4816).
 This workspace does not enable a FIPS build by default and does not claim FIPS
 validation for sigstore-rust. Compliance depends on the exact module build,
 configuration, platform, and approved operations.
+
+### Custom `CryptoProvider` (Avoiding `aws-lc-sys`)
+
+Downstream applications or language bindings that already link another cryptographic library (such as BoringSSL, OpenSSL, or a custom FFI table) and cannot link `aws-lc-sys` into the same binary can disable default features (`default-features = false`), implement [`sigstore_crypto::CryptoProvider`](crates/sigstore-crypto/src/provider.rs), and register their provider once at startup via `sigstore_crypto::install_default_provider(&MY_PROVIDER)`.
+
+See [`crates/sigstore-crypto/tests/boring_provider.rs`](crates/sigstore-crypto/tests/boring_provider.rs) for a complete reference implementation backed by `boring` (BoringSSL).
+
+When using network clients (`tuf`, `sigstore-sign`, `sigstore-rekor`, etc.) without `aws-lc-rs`, replace the default `rustls` feature with either:
+
+- **`native-tls`**: Uses the OS TLS stack (OpenSSL on Linux, Secure Transport on macOS, SChannel on Windows). Note that `native-tls` on Linux links OpenSSL (`openssl-sys`), which conflicts at link time with `boring-sys`.
+- **`rustls-no-provider`**: Uses `rustls` for HTTPS without pulling in `rustls`'s default `aws-lc-rs` crypto provider. Install your own `rustls` provider at startup via `rustls::crypto::CryptoProvider::install_default(...)`.
+
+```toml
+[dependencies]
+sigstore-crypto = { version = "0.14", default-features = false }
+sigstore-verify = { version = "0.14", default-features = false, features = ["tuf", "rustls-no-provider"] }
+sigstore-trust-root = { version = "0.14", default-features = false, features = ["tuf", "rustls-no-provider"] }
+```
+
+> **Note:** In `sigstore-oidc` / `sigstore-sign`, the `ambient-id` dependency only supports `rustls` (`aws-lc-rs`) or `native-tls`, so automatic HTTPS ambient credential detection in CI requires one of those two TLS features (or passing an explicit OIDC token with `rustls-no-provider`).
 
 ## Minimum Supported Rust Version
 
