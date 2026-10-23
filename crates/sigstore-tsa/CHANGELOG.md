@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1](https://github.com/sigstore/sigstore-rust/compare/sigstore-tsa-v0.15.0...sigstore-tsa-v0.15.1) - 2026-10-23
+
+### Fixed
+
+- *(tsa)* verify response messageImprint matches request ([#340](https://github.com/sigstore/sigstore-rust/pull/340))
+
 ## [0.15.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-tsa-v0.14.0...sigstore-tsa-v0.15.0) - 2026-10-13
 
 ### Fixed
