@@ -70,33 +70,6 @@ pub const TRUSTED_ROOT_TARGET: &str = "trusted_root.json";
 /// TUF target name for signing configuration
 pub const SIGNING_CONFIG_TARGET: &str = "signing_config.v0.2.json";
 
-/// Returns the name of the TUF target holding the trusted root of a GitHub
-/// artifact attestation trust domain.
-///
-/// GitHub's TUF repository (`tuf-repo.github.com`) publishes the trusted root
-/// for github.com as `trusted_root.json` and one root per GitHub Enterprise
-/// Cloud data residency region (`*.ghe.com` tenants) as
-/// `<trust domain>.trusted_root.json`, e.g. `prod-weu-01.trusted_root.json`.
-/// A tenant's trust domain is reported by its `GET /meta` REST endpoint as
-/// `domains.artifact_attestations.trust_domain`, which is empty for github.com.
-///
-/// An empty `trust_domain` selects github.com. Trust domains may only contain
-/// ASCII letters, digits and `-`.
-pub fn github_trusted_root_target(trust_domain: &str) -> Result<String> {
-    if trust_domain.is_empty() {
-        return Ok(TRUSTED_ROOT_TARGET.to_string());
-    }
-    if !trust_domain
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-')
-    {
-        return Err(Error::Tuf(format!(
-            "invalid GitHub trust domain {trust_domain:?}"
-        )));
-    }
-    Ok(format!("{trust_domain}.{TRUSTED_ROOT_TARGET}"))
-}
-
 /// Convert a URL to a safe directory name for caching
 ///
 /// This encodes special characters to create a filesystem-safe name while
@@ -528,8 +501,10 @@ impl TrustedRoot {
     /// Fetch a trusted root published under a TUF target name other than
     /// [`TRUSTED_ROOT_TARGET`].
     ///
-    /// Some repositories publish several roots, such as GitHub's, which has
-    /// one per data residency region (see [`github_trusted_root_target`]).
+    /// Some repositories publish several trusted roots. GitHub's
+    /// (`tuf-repo.github.com`), for example, publishes the root for github.com
+    /// as `trusted_root.json` and one root per GitHub Enterprise Cloud data
+    /// residency region as `<region>.trusted_root.json`.
     pub async fn from_tuf_target(config: TufConfig, target_name: &str) -> Result<Self> {
         Self::from_tuf_target_at(config, target_name, jiff::Timestamp::now()).await
     }
@@ -546,18 +521,6 @@ impl TrustedRoot {
         let json = String::from_utf8(bytes)
             .map_err(|e| Error::Tuf(format!("Invalid UTF-8 in {}: {}", target_name, e)))?;
         Self::from_json(&json)
-    }
-
-    /// Fetch the trusted root of a GitHub artifact attestation trust domain
-    /// from GitHub's TUF repository.
-    ///
-    /// An empty `trust_domain` selects github.com, which GitHub uses for
-    /// private and internal repositories; GitHub Enterprise Cloud tenants on
-    /// `*.ghe.com` use the trust domain of their region (see
-    /// [`github_trusted_root_target`]).
-    pub async fn github(trust_domain: &str) -> Result<Self> {
-        let target = github_trusted_root_target(trust_domain)?;
-        Self::from_tuf_target(TufConfig::github(), &target).await
     }
 }
 
@@ -750,18 +713,6 @@ mod tests {
             TufConfig::production().url,
             "https://tuf-repo-cdn.sigstore.dev"
         );
-    }
-
-    #[test]
-    fn github_trusted_root_targets() {
-        assert_eq!(github_trusted_root_target("").unwrap(), "trusted_root.json");
-        assert_eq!(
-            github_trusted_root_target("prod-weu-01").unwrap(),
-            "prod-weu-01.trusted_root.json"
-        );
-        for invalid in ["../root", "prod/weu", "prod weu", "prod.weu"] {
-            assert!(github_trusted_root_target(invalid).is_err(), "{invalid}");
-        }
     }
 
     #[test]

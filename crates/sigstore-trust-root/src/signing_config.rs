@@ -46,6 +46,15 @@ pub const SIGSTORE_PRODUCTION_SIGNING_CONFIG: &str =
 pub const SIGSTORE_STAGING_SIGNING_CONFIG: &str =
     include_str!("../repository/signing_config_staging.json");
 
+/// Embedded signing config for GitHub's artifact attestation instance.
+///
+/// GitHub does not publish a signing config, so this one is written by hand
+/// from the endpoints `actions/attest` signs with for private and internal
+/// repositories on github.com: GitHub's Fulcio and TSA, and no transparency
+/// log, so that nothing about the repository is published.
+pub const SIGSTORE_GITHUB_SIGNING_CONFIG: &str =
+    include_str!("../repository/signing_config_github.json");
+
 /// Supported Rekor API versions
 pub const SUPPORTED_REKOR_VERSIONS: &[u32] = &[1, 2];
 

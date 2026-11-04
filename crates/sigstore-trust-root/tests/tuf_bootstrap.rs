@@ -39,11 +39,13 @@ async fn bootstrap_github_trusted_root() {
 #[ignore = "network"]
 async fn bootstrap_github_data_residency_trusted_root() {
     // GitHub Enterprise Cloud tenants on `*.ghe.com` sign with per-region
-    // instances whose roots are published as `<trust domain>.trusted_root.json`.
-    let target = sigstore_trust_root::github_trusted_root_target("prod-weu-01").unwrap();
-    let root = TrustedRoot::from_tuf_target(TufConfig::github().without_cache(), &target)
-        .await
-        .expect("GitHub data residency trusted root should bootstrap over TUF");
+    // instances whose roots are published as `<region>.trusted_root.json`.
+    let root = TrustedRoot::from_tuf_target(
+        TufConfig::github().without_cache(),
+        "prod-weu-01.trusted_root.json",
+    )
+    .await
+    .expect("GitHub data residency trusted root should bootstrap over TUF");
     assert!(
         root.certificate_authorities
             .iter()

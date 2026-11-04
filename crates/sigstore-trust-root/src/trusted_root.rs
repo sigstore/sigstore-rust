@@ -396,12 +396,13 @@ impl SigstoreInstance {
     }
 
     /// Return the embedded `signing_config.json` snapshot, if this instance
-    /// publishes one (GitHub's instance does not).
+    /// has one. GitHub publishes no signing config; its snapshot is
+    /// [`crate::SIGSTORE_GITHUB_SIGNING_CONFIG`].
     pub fn embedded_signing_config_json(self) -> Option<&'static str> {
         match self {
             Self::PublicGood => Some(crate::SIGSTORE_PRODUCTION_SIGNING_CONFIG),
             Self::Staging => Some(crate::SIGSTORE_STAGING_SIGNING_CONFIG),
-            Self::GitHub => None,
+            Self::GitHub => Some(crate::SIGSTORE_GITHUB_SIGNING_CONFIG),
         }
     }
 
@@ -789,10 +790,11 @@ mod tests {
             SigstoreInstance::GitHub,
         ] {
             instance.embedded_trusted_root().unwrap();
-            let signing_config = instance.embedded_signing_config().unwrap();
+            let signing_config = instance.embedded_signing_config().unwrap().unwrap();
+            // GitHub's instance keeps no transparency log.
             assert_eq!(
-                signing_config.is_some(),
-                instance != SigstoreInstance::GitHub
+                signing_config.rekor_tlog_urls.is_empty(),
+                instance == SigstoreInstance::GitHub
             );
         }
     }

@@ -89,8 +89,9 @@ pub mod tuf;
 pub use error::{Error, Result};
 pub use signing_config::{
     ServiceConfiguration, ServiceEndpoint, ServiceSelector, SigningConfig,
-    SIGNING_CONFIG_MEDIA_TYPE, SIGSTORE_PRODUCTION_SIGNING_CONFIG, SIGSTORE_STAGING_SIGNING_CONFIG,
-    SUPPORTED_FULCIO_VERSIONS, SUPPORTED_REKOR_VERSIONS, SUPPORTED_TSA_VERSIONS,
+    SIGNING_CONFIG_MEDIA_TYPE, SIGSTORE_GITHUB_SIGNING_CONFIG, SIGSTORE_PRODUCTION_SIGNING_CONFIG,
+    SIGSTORE_STAGING_SIGNING_CONFIG, SUPPORTED_FULCIO_VERSIONS, SUPPORTED_REKOR_VERSIONS,
+    SUPPORTED_TSA_VERSIONS,
 };
 pub use sigstore_types::{TimeRange, TsaAuthority};
 pub use trusted_root::{
@@ -104,6 +105,6 @@ pub use trusted_root::{
 pub use sigstore_tuf::reqwest;
 #[cfg(feature = "tuf")]
 pub use tuf::{
-    fetch_trust_material, fetch_trust_material_at, github_trusted_root_target, TufBootstrap,
-    TufConfig, SIGNING_CONFIG_TARGET, TRUSTED_ROOT_TARGET,
+    fetch_trust_material, fetch_trust_material_at, TufBootstrap, TufConfig, SIGNING_CONFIG_TARGET,
+    TRUSTED_ROOT_TARGET,
 };

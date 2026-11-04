@@ -67,10 +67,13 @@ async fn prepare_dsse_payload_yielding(
     (PayloadBytes::new(prepared.payload), prepared.hasher)
 }
 
-/// GitHub's Fulcio for repositories on github.com.
-const GITHUB_FULCIO_URL: &str = "https://fulcio.githubapp.com";
-/// GitHub's RFC 3161 timestamp authority for repositories on github.com.
-const GITHUB_TSA_URL: &str = "https://timestamp.githubapp.com/api/v1/timestamp";
+/// Whether an instance's signing config must name a transparency log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransparencyLog {
+    Required,
+    /// The instance runs no log, so its signing config lists none.
+    NotRun,
+}
 
 /// A transparency log and the API version it speaks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,10 +90,10 @@ struct RekorService {
 /// caller always chooses the instance.
 ///
 /// Most instances record every signature in a public Rekor log. GitHub's
-/// artifact attestation instance ([`Self::github`]), which GitHub uses for
-/// private repositories, has no transparency log: its bundles carry an RFC
-/// 3161 timestamp instead, so that the identity of a private repository is
-/// not published.
+/// artifact attestation instance ([`SigstoreInstance::GitHub`]), which GitHub
+/// uses for private repositories, has no transparency log: its signing config
+/// lists none, and its bundles carry an RFC 3161 timestamp instead, so that
+/// the identity of a private repository is not published.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SigningServices {
     fulcio_url: String,
@@ -123,7 +126,7 @@ impl SigningServices {
     /// signature was made. Verifiers must trust the instance's TSA and accept
     /// bundles without a log entry (for example with
     /// `sigstore_verify::VerificationPolicy::skip_tlog_unsafe`), which is only
-    /// appropriate for instances that run no log, such as [`Self::github`].
+    /// appropriate for instances that run no log, such as GitHub's.
     pub fn without_transparency_log(
         fulcio_url: impl Into<String>,
         tsa_url: impl Into<String>,
@@ -137,54 +140,28 @@ impl SigningServices {
         }
     }
 
-    /// GitHub's artifact attestation instance for repositories on github.com.
-    ///
-    /// This is the instance `actions/attest` signs with for private and
-    /// internal repositories: GitHub's Fulcio and TSA, and no transparency
-    /// log, so nothing about the repository is published. Its Fulcio only
-    /// accepts GitHub Actions identity tokens. Bundles verify against
-    /// [`SigstoreInstance::GitHub`]'s trusted root.
-    ///
-    /// GitHub publishes no signing config for this instance, so the endpoints
-    /// are the well-known ones `actions/attest` uses. For GitHub Enterprise
-    /// Cloud with data residency use [`Self::github_for_host`].
-    pub fn github() -> Self {
-        Self::without_transparency_log(GITHUB_FULCIO_URL, GITHUB_TSA_URL)
-    }
-
-    /// GitHub's artifact attestation instance for the GitHub host `host`, for
-    /// example `github.com` or `octocorp.ghe.com`.
-    ///
-    /// Mirrors `actions/attest`: the services live at `fulcio.<domain>` and
-    /// `timestamp.<domain>`, where `<domain>` is `host`, except that
-    /// `github.com` uses `githubapp.com`.
-    pub fn github_for_host(host: &str) -> Self {
-        let host = host.trim().trim_end_matches('/').to_ascii_lowercase();
-        if host == "github.com" {
-            return Self::github();
-        }
-        Self::without_transparency_log(
-            format!("https://fulcio.{host}"),
-            format!("https://timestamp.{host}/api/v1/timestamp"),
-        )
-    }
-
     /// The services from a well-known instance's embedded signing config.
     ///
     /// Embedded snapshots go stale as instances add or retire services;
     /// prefer [`SigningContext::for_instance`], which fetches the current
     /// signing config through TUF.
     ///
-    /// GitHub publishes no signing config, so [`SigstoreInstance::GitHub`]
-    /// yields [`Self::github`].
+    /// GitHub's instance ([`SigstoreInstance::GitHub`]) runs no transparency
+    /// log, so its signing config lists none and the services only timestamp
+    /// signatures with GitHub's TSA. That is the instance `actions/attest`
+    /// signs with for private and internal repositories on github.com, so
+    /// that nothing about the repository is published; its Fulcio only
+    /// accepts GitHub Actions identity tokens.
     pub fn from_embedded(instance: SigstoreInstance) -> Result<Self> {
-        if instance == SigstoreInstance::GitHub {
-            return Ok(Self::github());
-        }
         let config = instance
             .embedded_signing_config()?
             .ok_or(ConfigError::NoSigningConfig(instance))?;
-        Self::from_signing_config(&config)
+        let transparency_log = if instance == SigstoreInstance::GitHub {
+            TransparencyLog::NotRun
+        } else {
+            TransparencyLog::Required
+        };
+        Self::select_services(&config, None, transparency_log)
     }
 
     /// Submit to this Rekor log, which speaks the given API version.
@@ -252,6 +229,11 @@ impl SigningServices {
     /// and TSA endpoint, and supports only ANY or EXACT with count 1; other counts
     /// are rejected rather than silently reduced to a single service.
     ///
+    /// A config without an eligible Rekor log is rejected, so that a damaged or
+    /// outdated config never silently yields bundles without a log entry. Use
+    /// [`Self::from_embedded`] for GitHub's instance, which runs no log, or
+    /// [`Self::without_transparency_log`] for another instance without one.
+    ///
     /// # Arguments
     ///
     /// * `signing_config` - The signing config to select services from
@@ -274,7 +256,26 @@ impl SigningServices {
         signing_config: &TufSigningConfig,
         force_rekor_version: Option<RekorApiVersion>,
     ) -> Result<Self> {
+        Self::select_services(
+            signing_config,
+            force_rekor_version,
+            TransparencyLog::Required,
+        )
+    }
+
+    /// Select the services of `signing_config`. With
+    /// [`TransparencyLog::NotRun`], a config that lists no Rekor logs yields
+    /// services without one.
+    fn select_services(
+        signing_config: &TufSigningConfig,
+        force_rekor_version: Option<RekorApiVersion>,
+        transparency_log: TransparencyLog,
+    ) -> Result<Self> {
         let force_major = force_rekor_version.map(RekorApiVersion::major);
+
+        let without_log = transparency_log == TransparencyLog::NotRun
+            && signing_config.rekor_tlog_urls.is_empty()
+            && force_rekor_version.is_none();
 
         // This signer submits to one Rekor and one TSA. Reject requirements it
         // cannot satisfy before discarding the TUF service-selection metadata.
@@ -290,6 +291,9 @@ impl SigningServices {
                 signing_config.eligible_tsa_urls(),
             ),
         ] {
+            if service == Service::Rekor && without_log {
+                continue;
+            }
             check_single_service_requirement(service, config, &eligible)?;
         }
 
@@ -298,17 +302,21 @@ impl SigningServices {
             .map(|e| e.url.clone())
             .ok_or(ConfigError::MissingService(Service::Fulcio))?;
 
-        let (rekor_url, rekor_api_version) =
-            if let Some(rekor) = signing_config.rekor_url(force_major) {
-                let version = RekorApiVersion::from_major(rekor.major_api_version).ok_or(
-                    ConfigError::UnsupportedRekorVersion(rekor.major_api_version),
-                )?;
-                (rekor.url.clone(), version)
-            } else if let Some(version) = force_rekor_version {
-                return Err(ConfigError::MissingRekorVersion(version).into());
-            } else {
-                return Err(ConfigError::MissingService(Service::Rekor).into());
-            };
+        let rekor = if without_log {
+            None
+        } else if let Some(rekor) = signing_config.rekor_url(force_major) {
+            let version = RekorApiVersion::from_major(rekor.major_api_version).ok_or(
+                ConfigError::UnsupportedRekorVersion(rekor.major_api_version),
+            )?;
+            Some(RekorService {
+                url: rekor.url.clone(),
+                version,
+            })
+        } else if let Some(version) = force_rekor_version {
+            return Err(ConfigError::MissingRekorVersion(version).into());
+        } else {
+            return Err(ConfigError::MissingService(Service::Rekor).into());
+        };
 
         let tsa_url = Some(
             signing_config
@@ -320,10 +328,7 @@ impl SigningServices {
 
         Ok(Self {
             fulcio_url,
-            rekor: Some(RekorService {
-                url: rekor_url,
-                version: rekor_api_version,
-            }),
+            rekor,
             tsa_url,
             signing_scheme: SigningScheme::EcdsaP256Sha256,
             oidc_url,
@@ -438,21 +443,16 @@ impl SigningContext {
 
     /// Sign with a well-known instance, using its current signing config
     /// fetched and verified through TUF.
-    #[cfg(feature = "tuf")]
     ///
-    /// GitHub publishes no signing config, so [`SigstoreInstance::GitHub`]
-    /// uses [`SigningServices::github`] without contacting TUF.
+    /// GitHub publishes no signing config through TUF, so
+    /// [`SigstoreInstance::GitHub`] uses its embedded signing config
+    /// ([`SigningServices::from_embedded`]) without contacting TUF.
+    #[cfg(feature = "tuf")]
     pub async fn for_instance(instance: SigstoreInstance) -> Result<Self> {
         if instance == SigstoreInstance::GitHub {
-            return Ok(Self::new(SigningServices::github()));
+            return Self::from_embedded(instance);
         }
         Self::from_tuf(instance.tuf_config()).await
-    }
-
-    /// Sign with GitHub's artifact attestation instance, which keeps no
-    /// transparency log. See [`SigningServices::github`].
-    pub fn github() -> Self {
-        Self::new(SigningServices::github())
     }
 
     /// Sign with the public-good instance (signing config fetched through TUF).
@@ -1007,7 +1007,8 @@ impl Attestation {
 mod tests {
     use super::*;
     use sigstore_trust_root::{
-        SIGSTORE_PRODUCTION_SIGNING_CONFIG, SIGSTORE_STAGING_SIGNING_CONFIG,
+        SIGSTORE_GITHUB_SIGNING_CONFIG, SIGSTORE_PRODUCTION_SIGNING_CONFIG,
+        SIGSTORE_STAGING_SIGNING_CONFIG,
     };
 
     #[test]
@@ -1018,7 +1019,7 @@ mod tests {
         let staging = SigningServices::from_embedded(SigstoreInstance::Staging).unwrap();
         assert!(staging.fulcio_url().contains("sigstage.dev"));
         let github = SigningServices::from_embedded(SigstoreInstance::GitHub).unwrap();
-        assert_eq!(github, SigningServices::github());
+        assert_eq!(github.fulcio_url(), "https://fulcio.githubapp.com");
 
         let explicit = SigningServices::new("https://fulcio.example", "https://rekor.example");
         assert_eq!(explicit.rekor_api_version(), Some(RekorApiVersion::V1));
@@ -1188,7 +1189,7 @@ mod tests {
 
     #[test]
     fn github_instance_signs_without_a_transparency_log() {
-        let github = SigningServices::github();
+        let github = SigningServices::from_embedded(SigstoreInstance::GitHub).unwrap();
         assert_eq!(github.fulcio_url(), "https://fulcio.githubapp.com");
         assert_eq!(
             github.tsa_url(),
@@ -1196,23 +1197,63 @@ mod tests {
         );
         assert_eq!(github.rekor_url(), None);
         assert_eq!(github.rekor_api_version(), None);
+        assert_eq!(github.oidc_url(), None);
         github.validate().unwrap();
+    }
 
-        assert_eq!(SigningServices::github_for_host("GitHub.com/"), github);
-        let ghe = SigningServices::github_for_host("octocorp.ghe.com");
-        assert_eq!(ghe.fulcio_url(), "https://fulcio.octocorp.ghe.com");
-        assert_eq!(
-            ghe.tsa_url(),
-            Some("https://timestamp.octocorp.ghe.com/api/v1/timestamp")
+    #[test]
+    fn signing_configs_without_an_eligible_log_still_fail() {
+        // GitHub's config lists no log, which only `from_embedded` accepts.
+        let github = TufSigningConfig::from_json(SIGSTORE_GITHUB_SIGNING_CONFIG).unwrap();
+        let error = SigningServices::from_signing_config(&github).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Config(ConfigError::MissingService(Service::Rekor))
+            ),
+            "{error}"
         );
-        assert_eq!(ghe.rekor_url(), None);
 
-        assert_eq!(SigningContext::github().services(), &github);
+        // Lists a log, but it has not started yet.
+        let config = TufSigningConfig::from_json(
+            r#"{
+                "mediaType": "application/vnd.dev.sigstore.signingconfig.v0.2+json",
+                "caUrls": [{"url": "https://fulcio.example", "majorApiVersion": 1,
+                    "validFor": {"start": "2020-01-01T00:00:00Z"}}],
+                "rekorTlogUrls": [{"url": "https://rekor.example", "majorApiVersion": 1,
+                    "validFor": {"start": "2999-01-01T00:00:00Z"}}],
+                "tsaUrls": [{"url": "https://tsa.example", "majorApiVersion": 1,
+                    "validFor": {"start": "2020-01-01T00:00:00Z"}}]
+            }"#,
+        )
+        .unwrap();
+        let error = SigningServices::from_signing_config(&config).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Config(ConfigError::MissingService(Service::Rekor))
+            ),
+            "{error}"
+        );
+
+        // A log-less config cannot satisfy a forced Rekor version.
+        let error = SigningServices::from_signing_config_with_rekor_version(
+            &github,
+            Some(RekorApiVersion::V1),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Config(ConfigError::MissingRekorVersion(RekorApiVersion::V1))
+            ),
+            "{error}"
+        );
     }
 
     #[test]
     fn signing_without_a_transparency_log_requires_a_timestamp_authority() {
-        let mut config = SigningServices::github();
+        let mut config = SigningServices::from_embedded(SigstoreInstance::GitHub).unwrap();
         config.tsa_url = None;
         let error = config.validate().unwrap_err();
         assert!(
