@@ -104,6 +104,6 @@ pub use trusted_root::{
 pub use sigstore_tuf::reqwest;
 #[cfg(feature = "tuf")]
 pub use tuf::{
-    fetch_trust_material, fetch_trust_material_at, TufBootstrap, TufConfig, SIGNING_CONFIG_TARGET,
-    TRUSTED_ROOT_TARGET,
+    fetch_trust_material, fetch_trust_material_at, github_trusted_root_target, TufBootstrap,
+    TufConfig, SIGNING_CONFIG_TARGET, TRUSTED_ROOT_TARGET,
 };
