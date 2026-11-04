@@ -109,9 +109,12 @@ pub enum ConfigError {
     #[error("signing scheme {} is not supported", .0.name())]
     UnsupportedScheme(SigningScheme),
 
-    /// Rekor v2 entries carry no integrated time, so bundles need an
-    /// RFC 3161 timestamp, but no timestamp authority is configured.
-    #[error("Rekor v2 requires an RFC 3161 timestamp authority")]
+    /// Bundles need an RFC 3161 timestamp because neither a Rekor v2 entry
+    /// nor a bundle without a transparency log entry carries an integrated
+    /// time, but no timestamp authority is configured.
+    #[error(
+        "an RFC 3161 timestamp authority is required with Rekor v2 or without a transparency log"
+    )]
     TimestampAuthorityRequired,
 }
 

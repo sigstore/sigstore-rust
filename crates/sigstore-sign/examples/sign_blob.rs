@@ -204,7 +204,7 @@ async fn main() {
     };
 
     println!("  Rekor API: {:?}", config.rekor_api_version());
-    println!("  Rekor URL: {}", config.rekor_url());
+    println!("  Rekor URL: {}", config.rekor_url().unwrap_or("none"));
     if let Some(tsa_url) = config.tsa_url() {
         println!("  TSA URL: {}", tsa_url);
     } else {
