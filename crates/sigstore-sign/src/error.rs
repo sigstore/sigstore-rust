@@ -11,7 +11,7 @@ use std::fmt;
 
 use sigstore_crypto::SigningScheme;
 use sigstore_rekor::RekorApiVersion;
-use sigstore_trust_root::{ServiceSelector, SigstoreInstance};
+use sigstore_trust_root::ServiceSelector;
 use thiserror::Error;
 
 /// Errors that can occur during signing
@@ -74,10 +74,6 @@ pub enum Error {
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ConfigError {
-    /// The instance ships no embedded signing config.
-    #[error("{0:?} publishes no signing config")]
-    NoSigningConfig(SigstoreInstance),
-
     /// The signing config lists no endpoint for this service that is
     /// currently valid and speaks a supported API version.
     #[error("no eligible {0} endpoint in the signing config")]

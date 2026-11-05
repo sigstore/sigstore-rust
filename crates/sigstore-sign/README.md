@@ -4,14 +4,14 @@ Sigstore signature creation for [sigstore-rust](https://github.com/sigstore/sigs
 
 ## Overview
 
-This crate provides high-level APIs for creating Sigstore signatures. It orchestrates the keyless signing flow: OIDC authentication, certificate issuance from Fulcio, signing, transparency log submission to Rekor, and optional timestamping.
+This crate provides high-level APIs for creating Sigstore signatures. It orchestrates the keyless signing flow: OIDC authentication, certificate issuance from Fulcio, signing, transparency log submission to Rekor, and optional timestamping. Instances that run no transparency log, such as GitHub's artifact attestation instance, are supported as well; their bundles carry an RFC 3161 timestamp instead of a log entry.
 
 ## Features
 
 - **Keyless signing**: Sign artifacts using OIDC identity (no long-lived keys)
 - **Bundle creation**: Produces standard Sigstore bundles
-- **Transparency logging**: Automatic submission to Rekor
-- **Timestamping**: Optional RFC 3161 timestamps for long-term validity
+- **Transparency logging**: Automatic submission to Rekor, or none for instances that run no log
+- **Timestamping**: RFC 3161 timestamps for long-term validity (required with Rekor v2 or without a log)
 - **Multiple content types**: Support for blobs and DSSE attestations
 
 ## Signing Flow
@@ -20,8 +20,8 @@ This crate provides high-level APIs for creating Sigstore signatures. It orchest
 2. Generate ephemeral key pair
 3. Request certificate from Fulcio
 4. Sign the artifact
-5. Submit to Rekor transparency log
-6. Optionally request timestamp from TSA
+5. Submit to Rekor transparency log (skipped for instances that run no log)
+6. Request timestamp from TSA (optional with Rekor v1, required otherwise)
 7. Package everything into a Sigstore bundle
 
 ## Usage
@@ -86,6 +86,35 @@ let context = SigningContext::new(services)
     // Timeouts, proxies and TLS settings are configured on the HTTP client
     .with_http_client(reqwest::Client::builder().build()?);
 ```
+
+### Signing without a transparency log
+
+GitHub's artifact attestation instance, which `actions/attest` uses for
+private and internal repositories, runs no transparency log so that nothing
+about the repository is published. It also publishes no signing config
+through TUF, so `SigningContext::for_instance(SigstoreInstance::GitHub)`
+uses the crate's embedded signing config without contacting TUF. Its Fulcio
+only accepts GitHub Actions identity tokens.
+
+```rust
+use sigstore_sign::{SigningContext, SigningServices, SigstoreInstance};
+
+// GitHub's Fulcio and TSA, no Rekor
+let context = SigningContext::for_instance(SigstoreInstance::GitHub).await?;
+
+// Another instance without a log: explicit Fulcio and TSA
+let services = SigningServices::without_transparency_log(
+    "https://fulcio.example",
+    "https://tsa.example/api/v1/timestamp",
+);
+```
+
+Bundles signed this way carry an RFC 3161 timestamp as the only evidence of
+when the signature was made, and no log entry. Verifiers must trust the
+instance's TSA and opt in to accepting such bundles, for example with
+`sigstore_verify::VerificationPolicy::skip_tlog_unsafe`. A signing config
+fetched through TUF is never used without a log: `from_signing_config`
+rejects a config that lists no eligible Rekor endpoint.
 
 For Tokio files/streams, enable `tokio-util`'s `compat` feature and call
 `TokioAsyncReadCompatExt::compat()` before passing the reader to the async API.
