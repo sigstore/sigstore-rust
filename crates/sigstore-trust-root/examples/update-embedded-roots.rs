@@ -73,7 +73,9 @@ const INSTANCES: &[Instance] = &[
         name: "github",
         instance: SigstoreInstance::GitHub,
         root_path: "repository/tuf_github_root.json",
-        // GitHub's Sigstore instance does not publish a signing config.
+        // GitHub's Sigstore instance does not publish a signing config;
+        // repository/signing_config_github.json is written by hand, and a
+        // unit test checks that it still names the trusted root's services.
         targets: &[(TRUSTED_ROOT_TARGET, "src/trusted_root_github.json")],
     },
 ];

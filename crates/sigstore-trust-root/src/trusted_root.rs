@@ -395,24 +395,51 @@ impl SigstoreInstance {
         TrustedRoot::from_json(self.embedded_trusted_root_json())
     }
 
-    /// Return the embedded `signing_config.json` snapshot, if this instance
-    /// has one. GitHub publishes no signing config; its snapshot is
-    /// [`crate::SIGSTORE_GITHUB_SIGNING_CONFIG`].
-    pub fn embedded_signing_config_json(self) -> Option<&'static str> {
+    /// Return the embedded `signing_config.json` snapshot for this instance.
+    ///
+    /// GitHub publishes no signing config (see
+    /// [`Self::publishes_signing_config`]); its snapshot,
+    /// [`crate::SIGSTORE_GITHUB_SIGNING_CONFIG`], is written by hand.
+    pub fn embedded_signing_config_json(self) -> &'static str {
         match self {
-            Self::PublicGood => Some(crate::SIGSTORE_PRODUCTION_SIGNING_CONFIG),
-            Self::Staging => Some(crate::SIGSTORE_STAGING_SIGNING_CONFIG),
-            Self::GitHub => Some(crate::SIGSTORE_GITHUB_SIGNING_CONFIG),
+            Self::PublicGood => crate::SIGSTORE_PRODUCTION_SIGNING_CONFIG,
+            Self::Staging => crate::SIGSTORE_STAGING_SIGNING_CONFIG,
+            Self::GitHub => crate::SIGSTORE_GITHUB_SIGNING_CONFIG,
         }
     }
 
-    /// Load this instance's embedded signing config snapshot, if it has one.
+    /// Load this instance's embedded signing config snapshot.
     ///
-    /// Snapshots go stale; prefer fetching the signing config through TUF.
-    pub fn embedded_signing_config(self) -> Result<Option<crate::SigningConfig>> {
-        self.embedded_signing_config_json()
-            .map(crate::SigningConfig::from_json)
-            .transpose()
+    /// Snapshots go stale; prefer fetching the signing config through TUF
+    /// where the instance publishes one.
+    pub fn embedded_signing_config(self) -> Result<crate::SigningConfig> {
+        crate::SigningConfig::from_json(self.embedded_signing_config_json())
+    }
+
+    /// Whether this instance publishes a signing config through its TUF
+    /// repository.
+    ///
+    /// GitHub's instance does not: signing clients must use its embedded
+    /// signing config ([`Self::embedded_signing_config`]).
+    pub fn publishes_signing_config(self) -> bool {
+        match self {
+            Self::PublicGood | Self::Staging => true,
+            Self::GitHub => false,
+        }
+    }
+
+    /// Whether this instance records signatures in a transparency log.
+    ///
+    /// GitHub's instance runs no log: its trusted root lists no `tlogs` and
+    /// its signing config no Rekor URL, so that nothing about the private
+    /// and internal repositories it signs for is published. Its bundles
+    /// carry an RFC 3161 timestamp from GitHub's TSA instead, and verifiers
+    /// must accept bundles without a log entry.
+    pub fn runs_transparency_log(self) -> bool {
+        match self {
+            Self::PublicGood | Self::Staging => true,
+            Self::GitHub => false,
+        }
     }
 }
 
@@ -782,20 +809,83 @@ mod tests {
         assert!(period.has_started_by("2022-06-01T00:00:00Z".parse().unwrap()));
     }
 
+    const ALL_INSTANCES: [SigstoreInstance; 3] = [
+        SigstoreInstance::PublicGood,
+        SigstoreInstance::Staging,
+        SigstoreInstance::GitHub,
+    ];
+
     #[test]
     fn instances_expose_their_embedded_material() {
-        for instance in [
-            SigstoreInstance::PublicGood,
-            SigstoreInstance::Staging,
-            SigstoreInstance::GitHub,
-        ] {
-            instance.embedded_trusted_root().unwrap();
-            let signing_config = instance.embedded_signing_config().unwrap().unwrap();
-            // GitHub's instance keeps no transparency log.
+        for instance in ALL_INSTANCES {
+            let root = instance.embedded_trusted_root().unwrap();
+            let signing_config = instance.embedded_signing_config().unwrap();
+            // Only GitHub's instance keeps no transparency log, and both of
+            // its embedded files must agree with that.
+            assert_eq!(
+                instance.runs_transparency_log(),
+                instance != SigstoreInstance::GitHub
+            );
+            assert_eq!(
+                root.tlogs.is_empty(),
+                !instance.runs_transparency_log(),
+                "{instance:?}: trusted root tlogs"
+            );
             assert_eq!(
                 signing_config.rekor_tlog_urls.is_empty(),
-                instance == SigstoreInstance::GitHub
+                !instance.runs_transparency_log(),
+                "{instance:?}: signing config rekorTlogUrls"
             );
+        }
+    }
+
+    /// The host of a service URL or trusted-root URI, which may lack a scheme.
+    fn host(url: &str) -> &str {
+        let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+        rest.split('/').next().unwrap()
+    }
+
+    #[test]
+    fn embedded_signing_configs_name_the_trusted_roots_services() {
+        // GitHub's signing config is hand-written and never refreshed by
+        // `update-embedded-roots`, while its trusted root is. The two must
+        // not silently diverge; the other instances are checked alike.
+        for instance in ALL_INSTANCES {
+            let root = instance.embedded_trusted_root().unwrap();
+            let config = instance.embedded_signing_config().unwrap();
+
+            let ca_hosts: Vec<&str> = root
+                .certificate_authorities
+                .iter()
+                .map(|ca| host(&ca.uri))
+                .collect();
+            assert!(!config.ca_urls.is_empty(), "{instance:?}: no caUrls");
+            for ca in &config.ca_urls {
+                assert!(
+                    ca_hosts.contains(&host(&ca.url)),
+                    "{instance:?}: signing config CA {} is not in the trusted root {ca_hosts:?}",
+                    ca.url
+                );
+            }
+
+            let tsa_hosts: Vec<&str> = root
+                .timestamp_authorities
+                .iter()
+                .filter_map(|tsa| tsa.uri.as_deref())
+                .map(host)
+                .collect();
+            assert!(!config.tsa_urls.is_empty(), "{instance:?}: no tsaUrls");
+            for tsa in &config.tsa_urls {
+                assert!(
+                    tsa_hosts.contains(&host(&tsa.url)),
+                    "{instance:?}: signing config TSA {} is not in the trusted root {tsa_hosts:?}",
+                    tsa.url
+                );
+            }
+
+            // Rekor logs are not compared: a signing config may name a log
+            // through a load balancer (staging's `global.rekor.sigstage.dev`)
+            // and bundles identify the log by key, not by host.
         }
     }
 }
