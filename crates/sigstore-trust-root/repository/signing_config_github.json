@@ -1,0 +1,28 @@
+{
+  "mediaType": "application/vnd.dev.sigstore.signingconfig.v0.2+json",
+  "caUrls": [
+    {
+      "url": "https://fulcio.githubapp.com",
+      "majorApiVersion": 1,
+      "validFor": {
+        "start": "2023-10-27T16:30:00Z"
+      },
+      "operator": "github.com"
+    }
+  ],
+  "oidcUrls": [],
+  "rekorTlogUrls": [],
+  "tsaUrls": [
+    {
+      "url": "https://timestamp.githubapp.com/api/v1/timestamp",
+      "majorApiVersion": 1,
+      "validFor": {
+        "start": "2023-10-27T16:30:00Z"
+      },
+      "operator": "github.com"
+    }
+  ],
+  "tsaConfig": {
+    "selector": "ANY"
+  }
+}

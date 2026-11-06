@@ -34,3 +34,23 @@ async fn bootstrap_github_trusted_root() {
         "expected GitHub trusted root to carry certificate authorities"
     );
 }
+
+#[tokio::test]
+#[ignore = "network"]
+async fn bootstrap_github_data_residency_trusted_root() {
+    // GitHub Enterprise Cloud tenants on `*.ghe.com` sign with per-region
+    // instances whose roots are published as `<region>.trusted_root.json`.
+    let root = TrustedRoot::from_tuf_target(
+        TufConfig::github().without_cache(),
+        "prod-weu-01.trusted_root.json",
+    )
+    .await
+    .expect("GitHub data residency trusted root should bootstrap over TUF");
+    assert!(
+        root.certificate_authorities
+            .iter()
+            .all(|ca| ca.uri.ends_with(".ghe.com")),
+        "expected the regional root to only carry *.ghe.com certificate authorities"
+    );
+    assert!(root.tlogs.is_empty());
+}

@@ -153,7 +153,7 @@ async fn main() {
         .expect("Missing required endpoints in TUF config");
 
     println!("  Fulcio URL: {}", config.fulcio_url());
-    println!("  Rekor URL: {}", config.rekor_url());
+    println!("  Rekor URL: {}", config.rekor_url().unwrap_or("none"));
     if let Some(tsa_url) = config.tsa_url() {
         println!("  TSA URL: {}", tsa_url);
     }

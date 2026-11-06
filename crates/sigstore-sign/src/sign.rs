@@ -67,17 +67,29 @@ async fn prepare_dsse_payload_yielding(
     (PayloadBytes::new(prepared.payload), prepared.hasher)
 }
 
-/// The services a signer submits to: Fulcio, Rekor and optionally a TSA,
+/// A transparency log and the API version it speaks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RekorService {
+    url: String,
+    version: RekorApiVersion,
+}
+
+/// The services a signer submits to: Fulcio, optionally Rekor and a TSA,
 /// plus the OIDC provider used to authenticate.
 ///
 /// Build it from an instance's signing config (fetched through TUF or
 /// embedded) or from explicit URLs. There is deliberately no default: the
 /// caller always chooses the instance.
+///
+/// Most instances record every signature in a public Rekor log. GitHub's
+/// artifact attestation instance ([`SigstoreInstance::GitHub`]), which GitHub
+/// uses for private repositories, has no transparency log: its signing config
+/// lists none, and its bundles carry an RFC 3161 timestamp instead, so that
+/// the identity of a private repository is not published.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SigningServices {
     fulcio_url: String,
-    rekor_url: String,
-    rekor_api_version: RekorApiVersion,
+    rekor: Option<RekorService>,
     tsa_url: Option<String>,
     oidc_url: Option<String>,
     signing_scheme: SigningScheme,
@@ -89,9 +101,32 @@ impl SigningServices {
     pub fn new(fulcio_url: impl Into<String>, rekor_url: impl Into<String>) -> Self {
         Self {
             fulcio_url: fulcio_url.into(),
-            rekor_url: rekor_url.into(),
-            rekor_api_version: RekorApiVersion::V1,
+            rekor: Some(RekorService {
+                url: rekor_url.into(),
+                version: RekorApiVersion::V1,
+            }),
             tsa_url: None,
+            oidc_url: None,
+            signing_scheme: SigningScheme::EcdsaP256Sha256,
+        }
+    }
+
+    /// Submit to Fulcio and a TSA only, without recording the signature in a
+    /// transparency log.
+    ///
+    /// The bundle's RFC 3161 timestamp is then the only evidence of when the
+    /// signature was made. Verifiers must trust the instance's TSA and accept
+    /// bundles without a log entry (for example with
+    /// `sigstore_verify::VerificationPolicy::skip_tlog_unsafe`), which is only
+    /// appropriate for instances that run no log, such as GitHub's.
+    pub fn without_transparency_log(
+        fulcio_url: impl Into<String>,
+        tsa_url: impl Into<String>,
+    ) -> Self {
+        Self {
+            fulcio_url: fulcio_url.into(),
+            rekor: None,
+            tsa_url: Some(tsa_url.into()),
             oidc_url: None,
             signing_scheme: SigningScheme::EcdsaP256Sha256,
         }
@@ -102,11 +137,15 @@ impl SigningServices {
     /// Embedded snapshots go stale as instances add or retire services;
     /// prefer [`SigningContext::for_instance`], which fetches the current
     /// signing config through TUF.
+    ///
+    /// GitHub's instance ([`SigstoreInstance::GitHub`]) runs no transparency
+    /// log, so its signing config lists none and the services only timestamp
+    /// signatures with GitHub's TSA. That is the instance `actions/attest`
+    /// signs with for private and internal repositories on github.com, so
+    /// that nothing about the repository is published; its Fulcio only
+    /// accepts GitHub Actions identity tokens.
     pub fn from_embedded(instance: SigstoreInstance) -> Result<Self> {
-        let config = instance
-            .embedded_signing_config()?
-            .ok_or(ConfigError::NoSigningConfig(instance))?;
-        Self::from_signing_config(&config)
+        Self::from_signing_config(&instance.embedded_signing_config()?)
     }
 
     /// Submit to this Rekor log, which speaks the given API version.
@@ -114,12 +153,15 @@ impl SigningServices {
     /// URL and version are set together: v1 and v2 logs are separate
     /// services, so changing only the version would point at the wrong log.
     pub fn with_rekor(mut self, rekor_url: impl Into<String>, version: RekorApiVersion) -> Self {
-        self.rekor_url = rekor_url.into();
-        self.rekor_api_version = version;
+        self.rekor = Some(RekorService {
+            url: rekor_url.into(),
+            version,
+        });
         self
     }
 
-    /// Request an RFC 3161 timestamp from this TSA (required for Rekor v2).
+    /// Request an RFC 3161 timestamp from this TSA (required for Rekor v2 and
+    /// for signing without a transparency log).
     pub fn with_tsa_url(mut self, tsa_url: impl Into<String>) -> Self {
         self.tsa_url = Some(tsa_url.into());
         self
@@ -137,14 +179,15 @@ impl SigningServices {
         &self.fulcio_url
     }
 
-    /// The Rekor URL.
-    pub fn rekor_url(&self) -> &str {
-        &self.rekor_url
+    /// The Rekor URL, or `None` when signatures are not recorded in a
+    /// transparency log.
+    pub fn rekor_url(&self) -> Option<&str> {
+        self.rekor.as_ref().map(|rekor| rekor.url.as_str())
     }
 
     /// The Rekor API version used with [`Self::rekor_url`].
-    pub fn rekor_api_version(&self) -> RekorApiVersion {
-        self.rekor_api_version
+    pub fn rekor_api_version(&self) -> Option<RekorApiVersion> {
+        self.rekor.as_ref().map(|rekor| rekor.version)
     }
 
     /// The TSA URL, if timestamps are requested.
@@ -166,9 +209,17 @@ impl SigningServices {
     /// fetched with [`TufSigningConfig::from_tuf`].
     ///
     /// This extracts the best available endpoints from the signing config,
-    /// preferring higher API versions when available. Requires an eligible Rekor
-    /// and TSA endpoint, and supports only ANY or EXACT with count 1; other counts
-    /// are rejected rather than silently reduced to a single service.
+    /// preferring higher API versions when available. Requires an eligible
+    /// Fulcio and TSA endpoint, and supports only ANY or EXACT with count 1;
+    /// other counts are rejected rather than silently reduced to a single
+    /// service.
+    ///
+    /// A config that lists a transparency log (`rekorTlogUrls`) or says how
+    /// to use one (`rekorTlogConfig`) requires an eligible Rekor endpoint, so
+    /// that a damaged or outdated config never silently yields bundles
+    /// without a log entry. Only a config with neither, such as GitHub's,
+    /// signs without a transparency log; its bundles then rely on the TSA
+    /// timestamp alone.
     ///
     /// # Arguments
     ///
@@ -181,7 +232,8 @@ impl SigningServices {
     /// Rekor version
     ///
     /// The Rekor endpoint is always selected from `signing_config`, so the chosen
-    /// instance (production, staging, or custom) is preserved.
+    /// instance (production, staging, or custom) is preserved. See
+    /// [`Self::from_signing_config`] for when a Rekor endpoint is required.
     ///
     /// # Arguments
     ///
@@ -192,42 +244,26 @@ impl SigningServices {
         signing_config: &TufSigningConfig,
         force_rekor_version: Option<RekorApiVersion>,
     ) -> Result<Self> {
-        let force_major = force_rekor_version.map(RekorApiVersion::major);
+        let requires_log = signing_config.rekor_tlog_config.is_some()
+            || !signing_config.rekor_tlog_urls.is_empty()
+            || force_rekor_version.is_some();
+        let rekor = if requires_log {
+            Some(Self::select_rekor(signing_config, force_rekor_version)?)
+        } else {
+            None
+        };
 
-        // This signer submits to one Rekor and one TSA. Reject requirements it
-        // cannot satisfy before discarding the TUF service-selection metadata.
-        for (service, config, eligible) in [
-            (
-                Service::Rekor,
-                &signing_config.rekor_tlog_config,
-                signing_config.eligible_rekor_urls(force_major),
-            ),
-            (
-                Service::Tsa,
-                &signing_config.tsa_config,
-                signing_config.eligible_tsa_urls(),
-            ),
-        ] {
-            check_single_service_requirement(service, config, &eligible)?;
-        }
+        // This signer submits to one TSA.
+        check_single_service_requirement(
+            Service::Tsa,
+            signing_config.tsa_config.as_ref(),
+            &signing_config.eligible_tsa_urls(),
+        )?;
 
         let fulcio_url = signing_config
             .fulcio_url()
             .map(|e| e.url.clone())
             .ok_or(ConfigError::MissingService(Service::Fulcio))?;
-
-        let (rekor_url, rekor_api_version) =
-            if let Some(rekor) = signing_config.rekor_url(force_major) {
-                let version = RekorApiVersion::from_major(rekor.major_api_version).ok_or(
-                    ConfigError::UnsupportedRekorVersion(rekor.major_api_version),
-                )?;
-                (rekor.url.clone(), version)
-            } else if let Some(version) = force_rekor_version {
-                return Err(ConfigError::MissingRekorVersion(version).into());
-            } else {
-                return Err(ConfigError::MissingService(Service::Rekor).into());
-            };
-
         let tsa_url = Some(
             signing_config
                 .tsa_url()
@@ -236,21 +272,52 @@ impl SigningServices {
         );
         let oidc_url = signing_config.oidc_url().map(|e| e.url.clone());
 
-        Ok(Self {
+        let services = Self {
             fulcio_url,
-            rekor_url,
+            rekor,
             tsa_url,
-            signing_scheme: SigningScheme::EcdsaP256Sha256,
-            rekor_api_version,
             oidc_url,
-        })
+            signing_scheme: SigningScheme::EcdsaP256Sha256,
+        };
+        services.validate()?;
+        Ok(services)
+    }
+
+    /// The Rekor log of `signing_config` to submit to.
+    fn select_rekor(
+        signing_config: &TufSigningConfig,
+        force_rekor_version: Option<RekorApiVersion>,
+    ) -> Result<RekorService> {
+        let force_major = force_rekor_version.map(RekorApiVersion::major);
+
+        // This signer submits to one Rekor. Reject a requirement it cannot
+        // satisfy before discarding the TUF service-selection metadata.
+        check_single_service_requirement(
+            Service::Rekor,
+            signing_config.rekor_tlog_config.as_ref(),
+            &signing_config.eligible_rekor_urls(force_major),
+        )?;
+
+        if let Some(rekor) = signing_config.rekor_url(force_major) {
+            let version = RekorApiVersion::from_major(rekor.major_api_version).ok_or(
+                ConfigError::UnsupportedRekorVersion(rekor.major_api_version),
+            )?;
+            Ok(RekorService {
+                url: rekor.url.clone(),
+                version,
+            })
+        } else if let Some(version) = force_rekor_version {
+            Err(ConfigError::MissingRekorVersion(version).into())
+        } else {
+            Err(ConfigError::MissingService(Service::Rekor).into())
+        }
     }
 
     /// Validate that the configured services can produce a verifiable bundle.
     pub fn validate(&self) -> Result<()> {
         validate_configuration(
             self.signing_scheme,
-            self.rekor_api_version,
+            self.rekor_api_version(),
             self.tsa_url.as_deref(),
         )
     }
@@ -258,15 +325,19 @@ impl SigningServices {
 
 /// Check that a TUF service requirement can be met by submitting to one service.
 ///
-/// `eligible` are the endpoints the signer could choose from. ANY and EXACT
+/// `eligible` are the endpoints the signer could choose from. An absent
+/// requirement means ANY. ANY and EXACT
 /// with count 1 are satisfiable; ALL is satisfiable only when the eligible
 /// endpoints belong to a single operator. UNDEFINED and unknown selectors are
 /// rejected rather than guessed.
 fn check_single_service_requirement(
     service: Service,
-    config: &sigstore_trust_root::ServiceConfiguration,
+    config: Option<&sigstore_trust_root::ServiceConfiguration>,
     eligible: &[&sigstore_trust_root::ServiceEndpoint],
 ) -> Result<()> {
+    let Some(config) = config else {
+        return Ok(());
+    };
     let unsatisfiable = || {
         Error::from(ConfigError::UnsatisfiableSelector {
             service,
@@ -298,13 +369,15 @@ fn check_single_service_requirement(
 
 fn validate_configuration(
     scheme: SigningScheme,
-    rekor: RekorApiVersion,
+    rekor: Option<RekorApiVersion>,
     tsa: Option<&str>,
 ) -> Result<()> {
     if scheme != SigningScheme::EcdsaP256Sha256 {
         return Err(ConfigError::UnsupportedScheme(scheme).into());
     }
-    if rekor == RekorApiVersion::V2 && tsa.is_none() {
+    // Only a Rekor v1 entry carries an integrated time; anything else needs a
+    // TSA timestamp to establish when the certificate was used.
+    if rekor != Some(RekorApiVersion::V1) && tsa.is_none() {
         return Err(ConfigError::TimestampAuthorityRequired.into());
     }
     Ok(())
@@ -352,8 +425,15 @@ impl SigningContext {
 
     /// Sign with a well-known instance, using its current signing config
     /// fetched and verified through TUF.
+    ///
+    /// An instance that publishes no signing config through TUF, such as
+    /// [`SigstoreInstance::GitHub`], uses its embedded signing config
+    /// ([`SigningServices::from_embedded`]) without contacting TUF.
     #[cfg(feature = "tuf")]
     pub async fn for_instance(instance: SigstoreInstance) -> Result<Self> {
+        if !instance.publishes_signing_config() {
+            return Self::from_embedded(instance);
+        }
         Self::from_tuf(instance.tuf_config()).await
     }
 
@@ -407,9 +487,8 @@ impl SigningContext {
             identity_token,
             signing_scheme: self.services.signing_scheme,
             fulcio_url: self.services.fulcio_url.clone(),
-            rekor_url: self.services.rekor_url.clone(),
+            rekor: self.services.rekor.clone(),
             tsa_url: self.services.tsa_url.clone(),
-            rekor_api_version: self.services.rekor_api_version,
             http_client: self.http_client.clone(),
         }
     }
@@ -443,9 +522,8 @@ pub struct Signer {
     identity_token: IdentityToken,
     signing_scheme: SigningScheme,
     fulcio_url: String,
-    rekor_url: String,
+    rekor: Option<RekorService>,
     tsa_url: Option<String>,
-    rekor_api_version: RekorApiVersion,
     http_client: Option<reqwest::Client>,
 }
 
@@ -458,17 +536,20 @@ impl Signer {
         Ok(builder.build()?)
     }
 
-    fn rekor_client(&self) -> Result<RekorClient> {
-        let mut builder = RekorClient::builder(&self.rekor_url);
-        if let Some(http) = &self.http_client {
+    fn rekor_client(rekor_url: &str, http_client: Option<&reqwest::Client>) -> Result<RekorClient> {
+        let mut builder = RekorClient::builder(rekor_url);
+        if let Some(http) = http_client {
             builder = builder.with_http_client(http.clone());
         }
         Ok(builder.build()?)
     }
 
-    fn rekor_v2_client(&self) -> Result<RekorV2Client> {
-        let mut builder = RekorV2Client::builder(&self.rekor_url);
-        if let Some(http) = &self.http_client {
+    fn rekor_v2_client(
+        rekor_url: &str,
+        http_client: Option<&reqwest::Client>,
+    ) -> Result<RekorV2Client> {
+        let mut builder = RekorV2Client::builder(rekor_url);
+        if let Some(http) = http_client {
             builder = builder.with_http_client(http.clone());
         }
         Ok(builder.build()?)
@@ -579,22 +660,29 @@ impl Signer {
         // 3. Sign the already prepared digest.
         let signature = key_pair.sign_digest(&artifact_hash)?;
 
-        // 4. Create Rekor entry (with certificate, not just public key)
-        let tlog_entry = self
-            .create_rekor_entry(&artifact_hash, &signature, &leaf_cert_der)
-            .await?;
+        // 4. Create Rekor entry (with certificate, not just public key), unless
+        //    the instance keeps no transparency log
+        let tlog_entry = match &self.rekor {
+            Some(rekor) => Some(
+                self.create_rekor_entry(rekor, &artifact_hash, &signature, &leaf_cert_der)
+                    .await?,
+            ),
+            None => None,
+        };
 
-        // 6. Get timestamp from TSA (required for Rekor v2)
+        // 5. Get timestamp from TSA (required for Rekor v2 and without a log)
         let timestamp = if let Some(tsa_url) = &self.tsa_url {
             Some(self.request_timestamp(tsa_url, &signature).await?)
         } else {
             None
         };
 
-        // 7. Build bundle
+        // 6. Build bundle
         let mut bundle =
-            BundleV03::with_certificate_and_signature(leaf_cert_der, signature, artifact_hash)
-                .with_tlog_entry(tlog_entry);
+            BundleV03::with_certificate_and_signature(leaf_cert_der, signature, artifact_hash);
+        if let Some(entry) = tlog_entry {
+            bundle = bundle.with_tlog_entry(entry);
+        }
 
         if let Some(ts) = timestamp {
             bundle = bundle.with_rfc3161_timestamp(ts);
@@ -628,19 +716,21 @@ impl Signer {
     /// Create a Rekor entry for the signed artifact
     async fn create_rekor_entry(
         &self,
+        rekor_service: &RekorService,
         artifact_hash: &Sha256Hash,
         signature: &SignatureBytes,
         certificate: &DerCertificate,
     ) -> Result<TransparencyLogEntry> {
-        match self.rekor_api_version {
+        let http = self.http_client.as_ref();
+        match rekor_service.version {
             RekorApiVersion::V1 => {
-                let rekor = self.rekor_client()?;
+                let rekor = Self::rekor_client(&rekor_service.url, http)?;
                 let request = HashedRekord::new(artifact_hash, signature, certificate);
                 let entry = rekor.create_entry(request).await?;
                 to_bundle_entry(&entry, KindVersion::HashedRekordV001)
             }
             RekorApiVersion::V2 => {
-                let rekor = self.rekor_v2_client()?;
+                let rekor = Self::rekor_v2_client(&rekor_service.url, http)?;
                 let request = HashedRekordV2::new_with_certificate(
                     artifact_hash,
                     signature,
@@ -737,12 +827,17 @@ impl Signer {
             DsseSignature::new(signature.clone(), KeyId::default()),
         );
 
-        // Create and submit DSSE Rekor entry
-        let tlog_entry = self
-            .create_dsse_rekor_entry(&dsse_envelope, &leaf_cert_der)
-            .await?;
+        // Create and submit DSSE Rekor entry, unless the instance keeps no
+        // transparency log
+        let tlog_entry = match &self.rekor {
+            Some(rekor) => Some(
+                self.create_dsse_rekor_entry(rekor, &dsse_envelope, &leaf_cert_der)
+                    .await?,
+            ),
+            None => None,
+        };
 
-        // Get timestamp from TSA (required for Rekor v2)
+        // Get timestamp from TSA (required for Rekor v2 and without a log)
         let timestamp = if let Some(tsa_url) = &self.tsa_url {
             Some(self.request_timestamp(tsa_url, &signature).await?)
         } else {
@@ -750,8 +845,10 @@ impl Signer {
         };
 
         // Build bundle with DSSE envelope
-        let mut bundle = BundleV03::with_certificate_and_dsse(leaf_cert_der, dsse_envelope)
-            .with_tlog_entry(tlog_entry);
+        let mut bundle = BundleV03::with_certificate_and_dsse(leaf_cert_der, dsse_envelope);
+        if let Some(entry) = tlog_entry {
+            bundle = bundle.with_tlog_entry(entry);
+        }
 
         if let Some(ts) = timestamp {
             bundle = bundle.with_rfc3161_timestamp(ts);
@@ -763,18 +860,20 @@ impl Signer {
     /// Create a DSSE Rekor entry
     async fn create_dsse_rekor_entry(
         &self,
+        rekor_service: &RekorService,
         envelope: &DsseEnvelope,
         certificate: &DerCertificate,
     ) -> Result<TransparencyLogEntry> {
-        match self.rekor_api_version {
+        let http = self.http_client.as_ref();
+        match rekor_service.version {
             RekorApiVersion::V1 => {
-                let rekor = self.rekor_client()?;
+                let rekor = Self::rekor_client(&rekor_service.url, http)?;
                 let request = DsseEntry::new(envelope, certificate)?;
                 let entry = rekor.create_dsse_entry(request).await?;
                 to_bundle_entry(&entry, KindVersion::DsseV001)
             }
             RekorApiVersion::V2 => {
-                let rekor = self.rekor_v2_client()?;
+                let rekor = Self::rekor_v2_client(&rekor_service.url, http)?;
                 let hash = sha256_pae_yielding(&envelope.payload_type, envelope.payload.as_bytes())
                     .await
                     .finalize();
@@ -793,7 +892,7 @@ impl Signer {
     fn validate_configuration(&self) -> Result<()> {
         validate_configuration(
             self.signing_scheme,
-            self.rekor_api_version,
+            self.rekor.as_ref().map(|rekor| rekor.version),
             self.tsa_url.as_deref(),
         )
     }
@@ -890,7 +989,8 @@ impl Attestation {
 mod tests {
     use super::*;
     use sigstore_trust_root::{
-        SIGSTORE_PRODUCTION_SIGNING_CONFIG, SIGSTORE_STAGING_SIGNING_CONFIG,
+        SIGSTORE_GITHUB_SIGNING_CONFIG, SIGSTORE_PRODUCTION_SIGNING_CONFIG,
+        SIGSTORE_STAGING_SIGNING_CONFIG,
     };
 
     #[test]
@@ -900,10 +1000,11 @@ mod tests {
         assert!(production.tsa_url().is_some() && production.oidc_url().is_some());
         let staging = SigningServices::from_embedded(SigstoreInstance::Staging).unwrap();
         assert!(staging.fulcio_url().contains("sigstage.dev"));
-        assert!(SigningServices::from_embedded(SigstoreInstance::GitHub).is_err());
+        let github = SigningServices::from_embedded(SigstoreInstance::GitHub).unwrap();
+        assert_eq!(github.fulcio_url(), "https://fulcio.githubapp.com");
 
         let explicit = SigningServices::new("https://fulcio.example", "https://rekor.example");
-        assert_eq!(explicit.rekor_api_version(), RekorApiVersion::V1);
+        assert_eq!(explicit.rekor_api_version(), Some(RekorApiVersion::V1));
         assert_eq!(explicit.tsa_url(), None);
         assert_eq!(explicit.oidc_url(), None);
     }
@@ -930,6 +1031,7 @@ mod tests {
                 } else {
                     &mut tuf.rekor_tlog_config
                 };
+                let requirement = requirement.get_or_insert_with(Default::default);
                 requirement.selector = ServiceSelector::Exact;
                 requirement.count = count;
                 // Neither conversion entry point may discard the requirement.
@@ -972,6 +1074,7 @@ mod tests {
                 } else {
                     (&mut tuf.rekor_tlog_config, &mut tuf.rekor_tlog_urls)
                 };
+                let requirement = requirement.get_or_insert_with(Default::default);
                 requirement.selector = selector;
                 if let Some(operator) = second_operator {
                     let mut second = endpoints[0].clone();
@@ -1016,6 +1119,7 @@ mod tests {
                     } else {
                         (&mut tuf.rekor_tlog_config, &mut tuf.rekor_tlog_urls)
                     };
+                    let requirement = requirement.get_or_insert_with(Default::default);
                     requirement.selector = selector;
                     requirement.count = Some(1);
                     match unavailable {
@@ -1056,12 +1160,139 @@ mod tests {
             .with_rekor("https://rekor-v2.example", RekorApiVersion::V2);
         config.tsa_url = None;
         let error = config.validate().unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("Rekor v2 requires an RFC 3161 timestamp authority"));
+        assert!(
+            matches!(
+                error,
+                Error::Config(ConfigError::TimestampAuthorityRequired)
+            ),
+            "{error}"
+        );
 
         config.tsa_url = Some("https://timestamp.example".to_string());
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn github_instance_signs_without_a_transparency_log() {
+        let github = SigningServices::from_embedded(SigstoreInstance::GitHub).unwrap();
+        assert_eq!(github.fulcio_url(), "https://fulcio.githubapp.com");
+        assert_eq!(
+            github.tsa_url(),
+            Some("https://timestamp.githubapp.com/api/v1/timestamp")
+        );
+        assert_eq!(github.rekor_url(), None);
+        assert_eq!(github.rekor_api_version(), None);
+        assert_eq!(github.oidc_url(), None);
+        github.validate().unwrap();
+    }
+
+    #[test]
+    fn only_a_config_without_any_log_signs_without_one() {
+        let baseline = TufSigningConfig::from_json(SIGSTORE_GITHUB_SIGNING_CONFIG).unwrap();
+        assert!(baseline.rekor_tlog_urls.is_empty());
+        assert!(baseline.rekor_tlog_config.is_none());
+        let ok = SigningServices::from_signing_config(&baseline).unwrap();
+        assert_eq!(ok.rekor_url(), None);
+
+        // A config that says how to use a log but lists none is damaged or
+        // self-contradictory, whatever its selector, and must not silently
+        // yield log-less bundles.
+        for (selector, count) in [
+            (ServiceSelector::Any, None),
+            (ServiceSelector::Exact, Some(1)),
+            (ServiceSelector::All, None),
+            (ServiceSelector::Undefined, None),
+        ] {
+            let mut config = baseline.clone();
+            let requirement = config.rekor_tlog_config.insert(Default::default());
+            requirement.selector = selector;
+            requirement.count = count;
+            let error = SigningServices::from_signing_config(&config).unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    Error::Config(
+                        ConfigError::MissingService(Service::Rekor)
+                            | ConfigError::UnsatisfiableSelector {
+                                service: Service::Rekor,
+                                ..
+                            }
+                    )
+                ),
+                "{selector:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn signing_configs_without_an_eligible_log_still_fail() {
+        // A log-less config cannot satisfy a forced Rekor version.
+        let github = TufSigningConfig::from_json(SIGSTORE_GITHUB_SIGNING_CONFIG).unwrap();
+        let error = SigningServices::from_signing_config_with_rekor_version(
+            &github,
+            Some(RekorApiVersion::V1),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Config(ConfigError::MissingRekorVersion(RekorApiVersion::V1))
+            ),
+            "{error}"
+        );
+
+        // Lists a log, but it has not started yet.
+        let config = TufSigningConfig::from_json(
+            r#"{
+                "mediaType": "application/vnd.dev.sigstore.signingconfig.v0.2+json",
+                "caUrls": [{"url": "https://fulcio.example", "majorApiVersion": 1,
+                    "validFor": {"start": "2020-01-01T00:00:00Z"}}],
+                "rekorTlogUrls": [{"url": "https://rekor.example", "majorApiVersion": 1,
+                    "validFor": {"start": "2999-01-01T00:00:00Z"}}],
+                "tsaUrls": [{"url": "https://tsa.example", "majorApiVersion": 1,
+                    "validFor": {"start": "2020-01-01T00:00:00Z"}}]
+            }"#,
+        )
+        .unwrap();
+        let error = SigningServices::from_signing_config(&config).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Config(ConfigError::MissingService(Service::Rekor))
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn signing_without_a_transparency_log_requires_a_timestamp_authority() {
+        let mut config = SigningServices::from_embedded(SigstoreInstance::GitHub).unwrap();
+        config.tsa_url = None;
+        let error = config.validate().unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Config(ConfigError::TimestampAuthorityRequired)
+            ),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn signing_without_a_tsa_or_log_fails_before_contacting_fulcio() {
+        // Nothing listens here: reaching Fulcio would fail with Error::Fulcio.
+        let mut config =
+            SigningServices::without_transparency_log("http://127.0.0.1:1", "http://127.0.0.1:1");
+        config.tsa_url = None;
+        let signer = SigningContext::new(config).signer(test_token());
+        let error = signer.sign(b"artifact".as_slice()).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Config(ConfigError::TimestampAuthorityRequired)
+            ),
+            "{error}"
+        );
     }
 
     #[test]
@@ -1073,17 +1304,18 @@ mod tests {
             Some(RekorApiVersion::V2),
         )
         .unwrap();
-        assert_eq!(v2.rekor_api_version, RekorApiVersion::V2);
-        assert!(v2.rekor_url.contains("sigstage.dev"), "{}", v2.rekor_url);
-        assert_ne!(v2.rekor_url, "https://log2025-1.rekor.sigstore.dev");
+        assert_eq!(v2.rekor_api_version(), Some(RekorApiVersion::V2));
+        let v2_url = v2.rekor_url().unwrap();
+        assert!(v2_url.contains("sigstage.dev"), "{v2_url}");
+        assert_ne!(v2_url, "https://log2025-1.rekor.sigstore.dev");
 
         let v1 = SigningServices::from_signing_config_with_rekor_version(
             &staging,
             Some(RekorApiVersion::V1),
         )
         .unwrap();
-        assert_eq!(v1.rekor_api_version, RekorApiVersion::V1);
-        assert_eq!(v1.rekor_url, "https://rekor.sigstage.dev");
+        assert_eq!(v1.rekor_api_version(), Some(RekorApiVersion::V1));
+        assert_eq!(v1.rekor_url(), Some("https://rekor.sigstage.dev"));
     }
 
     #[test]
@@ -1107,7 +1339,7 @@ mod tests {
             Some(RekorApiVersion::V1),
         )
         .unwrap();
-        assert_eq!(v1.rekor_url, "https://rekor.example");
+        assert_eq!(v1.rekor_url(), Some("https://rekor.example"));
 
         let error = SigningServices::from_signing_config_with_rekor_version(
             &custom,

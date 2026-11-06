@@ -11,7 +11,7 @@ use std::fmt;
 
 use sigstore_crypto::SigningScheme;
 use sigstore_rekor::RekorApiVersion;
-use sigstore_trust_root::{ServiceSelector, SigstoreInstance};
+use sigstore_trust_root::ServiceSelector;
 use thiserror::Error;
 
 /// Errors that can occur during signing
@@ -74,10 +74,6 @@ pub enum Error {
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ConfigError {
-    /// The instance ships no embedded signing config.
-    #[error("{0:?} publishes no signing config")]
-    NoSigningConfig(SigstoreInstance),
-
     /// The signing config lists no endpoint for this service that is
     /// currently valid and speaks a supported API version.
     #[error("no eligible {0} endpoint in the signing config")]
@@ -109,9 +105,12 @@ pub enum ConfigError {
     #[error("signing scheme {} is not supported", .0.name())]
     UnsupportedScheme(SigningScheme),
 
-    /// Rekor v2 entries carry no integrated time, so bundles need an
-    /// RFC 3161 timestamp, but no timestamp authority is configured.
-    #[error("Rekor v2 requires an RFC 3161 timestamp authority")]
+    /// Bundles need an RFC 3161 timestamp because neither a Rekor v2 entry
+    /// nor a bundle without a transparency log entry carries an integrated
+    /// time, but no timestamp authority is configured.
+    #[error(
+        "an RFC 3161 timestamp authority is required with Rekor v2 or without a transparency log"
+    )]
     TimestampAuthorityRequired,
 }
 

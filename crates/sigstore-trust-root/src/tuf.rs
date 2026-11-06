@@ -495,12 +495,31 @@ impl TrustedRoot {
     /// freeze-attack protection and the time must come from application-owned
     /// state, not cache metadata or filesystem timestamps.
     pub async fn from_tuf_at(config: TufConfig, validation_time: jiff::Timestamp) -> Result<Self> {
+        Self::from_tuf_target_at(config, TRUSTED_ROOT_TARGET, validation_time).await
+    }
+
+    /// Fetch a trusted root published under a TUF target name other than
+    /// [`TRUSTED_ROOT_TARGET`].
+    ///
+    /// Some repositories publish several trusted roots. GitHub's
+    /// (`tuf-repo.github.com`), for example, publishes the root for github.com
+    /// as `trusted_root.json` and one root per GitHub Enterprise Cloud data
+    /// residency region as `<region>.trusted_root.json`.
+    pub async fn from_tuf_target(config: TufConfig, target_name: &str) -> Result<Self> {
+        Self::from_tuf_target_at(config, target_name, jiff::Timestamp::now()).await
+    }
+
+    /// Like [`Self::from_tuf_target`], evaluating TUF metadata expiry at
+    /// `validation_time` (see [`Self::from_tuf_at`]).
+    pub async fn from_tuf_target_at(
+        config: TufConfig,
+        target_name: &str,
+        validation_time: jiff::Timestamp,
+    ) -> Result<Self> {
         let client = TufClient::new(config);
-        let bytes = client
-            .fetch_target_at(TRUSTED_ROOT_TARGET, validation_time)
-            .await?;
+        let bytes = client.fetch_target_at(target_name, validation_time).await?;
         let json = String::from_utf8(bytes)
-            .map_err(|e| Error::Tuf(format!("Invalid UTF-8 in {}: {}", TRUSTED_ROOT_TARGET, e)))?;
+            .map_err(|e| Error::Tuf(format!("Invalid UTF-8 in {}: {}", target_name, e)))?;
         Self::from_json(&json)
     }
 }

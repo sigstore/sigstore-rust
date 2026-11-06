@@ -203,8 +203,13 @@ async fn main() {
         .expect("Missing required endpoints in TUF config")
     };
 
-    println!("  Rekor API: {:?}", config.rekor_api_version());
-    println!("  Rekor URL: {}", config.rekor_url());
+    println!(
+        "  Rekor API: {}",
+        config
+            .rekor_api_version()
+            .map_or("none".to_string(), |version| format!("{version:?}"))
+    );
+    println!("  Rekor URL: {}", config.rekor_url().unwrap_or("none"));
     if let Some(tsa_url) = config.tsa_url() {
         println!("  TSA URL: {}", tsa_url);
     } else {
