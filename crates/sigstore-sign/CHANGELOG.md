@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-sign-v0.15.1...sigstore-sign-v0.16.0) - 2026-11-06
+
+### Added
+
+- *(sign)* [**breaking**] support signing without a transparency log (GitHub private instance) ([#346](https://github.com/sigstore/sigstore-rust/pull/346))
+
 ## [0.15.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-sign-v0.14.0...sigstore-sign-v0.15.0) - 2026-10-13
 
 ### Added
