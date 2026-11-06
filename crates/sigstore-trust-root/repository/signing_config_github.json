@@ -22,9 +22,6 @@
       "operator": "github.com"
     }
   ],
-  "rekorTlogConfig": {
-    "selector": "ANY"
-  },
   "tsaConfig": {
     "selector": "ANY"
   }

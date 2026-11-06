@@ -145,11 +145,7 @@ impl SigningServices {
     /// that nothing about the repository is published; its Fulcio only
     /// accepts GitHub Actions identity tokens.
     pub fn from_embedded(instance: SigstoreInstance) -> Result<Self> {
-        let config = instance.embedded_signing_config()?;
-        if instance.runs_transparency_log() || !config.rekor_tlog_urls.is_empty() {
-            return Self::from_signing_config(&config);
-        }
-        Self::from_signing_config_without_log(&config)
+        Self::from_signing_config(&instance.embedded_signing_config()?)
     }
 
     /// Submit to this Rekor log, which speaks the given API version.
@@ -213,14 +209,17 @@ impl SigningServices {
     /// fetched with [`TufSigningConfig::from_tuf`].
     ///
     /// This extracts the best available endpoints from the signing config,
-    /// preferring higher API versions when available. Requires an eligible Rekor
-    /// and TSA endpoint, and supports only ANY or EXACT with count 1; other counts
-    /// are rejected rather than silently reduced to a single service.
+    /// preferring higher API versions when available. Requires an eligible
+    /// Fulcio and TSA endpoint, and supports only ANY or EXACT with count 1;
+    /// other counts are rejected rather than silently reduced to a single
+    /// service.
     ///
-    /// A config without an eligible Rekor log is rejected, so that a damaged or
-    /// outdated config never silently yields bundles without a log entry. Use
-    /// [`Self::from_embedded`] for GitHub's instance, which runs no log, or
-    /// [`Self::without_transparency_log`] for another instance without one.
+    /// A config that lists a transparency log (`rekorTlogUrls`) or says how
+    /// to use one (`rekorTlogConfig`) requires an eligible Rekor endpoint, so
+    /// that a damaged or outdated config never silently yields bundles
+    /// without a log entry. Only a config with neither, such as GitHub's,
+    /// signs without a transparency log; its bundles then rely on the TSA
+    /// timestamp alone.
     ///
     /// # Arguments
     ///
@@ -233,7 +232,8 @@ impl SigningServices {
     /// Rekor version
     ///
     /// The Rekor endpoint is always selected from `signing_config`, so the chosen
-    /// instance (production, staging, or custom) is preserved.
+    /// instance (production, staging, or custom) is preserved. See
+    /// [`Self::from_signing_config`] for when a Rekor endpoint is required.
     ///
     /// # Arguments
     ///
@@ -244,62 +244,19 @@ impl SigningServices {
         signing_config: &TufSigningConfig,
         force_rekor_version: Option<RekorApiVersion>,
     ) -> Result<Self> {
-        let force_major = force_rekor_version.map(RekorApiVersion::major);
-
-        // This signer submits to one Rekor. Reject a requirement it cannot
-        // satisfy before discarding the TUF service-selection metadata.
-        check_single_service_requirement(
-            Service::Rekor,
-            &signing_config.rekor_tlog_config,
-            &signing_config.eligible_rekor_urls(force_major),
-        )?;
-
-        let rekor = if let Some(rekor) = signing_config.rekor_url(force_major) {
-            let version = RekorApiVersion::from_major(rekor.major_api_version).ok_or(
-                ConfigError::UnsupportedRekorVersion(rekor.major_api_version),
-            )?;
-            RekorService {
-                url: rekor.url.clone(),
-                version,
-            }
-        } else if let Some(version) = force_rekor_version {
-            return Err(ConfigError::MissingRekorVersion(version).into());
+        let requires_log = signing_config.rekor_tlog_config.is_some()
+            || !signing_config.rekor_tlog_urls.is_empty()
+            || force_rekor_version.is_some();
+        let rekor = if requires_log {
+            Some(Self::select_rekor(signing_config, force_rekor_version)?)
         } else {
-            return Err(ConfigError::MissingService(Service::Rekor).into());
+            None
         };
 
-        let mut services = Self::fulcio_and_tsa(signing_config)?;
-        services.rekor = Some(rekor);
-        Ok(services)
-    }
-
-    /// The services of a signing config that lists no transparency log,
-    /// for an instance that runs none.
-    ///
-    /// Such a config must not require log submissions either: a Rekor
-    /// selector other than ANY contradicts the empty log list and is
-    /// rejected rather than silently yielding bundles without a log entry.
-    fn from_signing_config_without_log(signing_config: &TufSigningConfig) -> Result<Self> {
-        debug_assert!(signing_config.rekor_tlog_urls.is_empty());
-        let requirement = &signing_config.rekor_tlog_config;
-        if requirement.selector != ServiceSelector::Any {
-            return Err(ConfigError::UnsatisfiableSelector {
-                service: Service::Rekor,
-                selector: requirement.selector,
-                count: requirement.count,
-            }
-            .into());
-        }
-        Self::fulcio_and_tsa(signing_config)
-    }
-
-    /// Fulcio, the TSA and the OIDC provider of `signing_config`, with no
-    /// transparency log.
-    fn fulcio_and_tsa(signing_config: &TufSigningConfig) -> Result<Self> {
         // This signer submits to one TSA.
         check_single_service_requirement(
             Service::Tsa,
-            &signing_config.tsa_config,
+            signing_config.tsa_config.as_ref(),
             &signing_config.eligible_tsa_urls(),
         )?;
 
@@ -315,13 +272,45 @@ impl SigningServices {
         );
         let oidc_url = signing_config.oidc_url().map(|e| e.url.clone());
 
-        Ok(Self {
+        let services = Self {
             fulcio_url,
-            rekor: None,
+            rekor,
             tsa_url,
             oidc_url,
             signing_scheme: SigningScheme::EcdsaP256Sha256,
-        })
+        };
+        services.validate()?;
+        Ok(services)
+    }
+
+    /// The Rekor log of `signing_config` to submit to.
+    fn select_rekor(
+        signing_config: &TufSigningConfig,
+        force_rekor_version: Option<RekorApiVersion>,
+    ) -> Result<RekorService> {
+        let force_major = force_rekor_version.map(RekorApiVersion::major);
+
+        // This signer submits to one Rekor. Reject a requirement it cannot
+        // satisfy before discarding the TUF service-selection metadata.
+        check_single_service_requirement(
+            Service::Rekor,
+            signing_config.rekor_tlog_config.as_ref(),
+            &signing_config.eligible_rekor_urls(force_major),
+        )?;
+
+        if let Some(rekor) = signing_config.rekor_url(force_major) {
+            let version = RekorApiVersion::from_major(rekor.major_api_version).ok_or(
+                ConfigError::UnsupportedRekorVersion(rekor.major_api_version),
+            )?;
+            Ok(RekorService {
+                url: rekor.url.clone(),
+                version,
+            })
+        } else if let Some(version) = force_rekor_version {
+            Err(ConfigError::MissingRekorVersion(version).into())
+        } else {
+            Err(ConfigError::MissingService(Service::Rekor).into())
+        }
     }
 
     /// Validate that the configured services can produce a verifiable bundle.
@@ -336,15 +325,19 @@ impl SigningServices {
 
 /// Check that a TUF service requirement can be met by submitting to one service.
 ///
-/// `eligible` are the endpoints the signer could choose from. ANY and EXACT
+/// `eligible` are the endpoints the signer could choose from. An absent
+/// requirement means ANY. ANY and EXACT
 /// with count 1 are satisfiable; ALL is satisfiable only when the eligible
 /// endpoints belong to a single operator. UNDEFINED and unknown selectors are
 /// rejected rather than guessed.
 fn check_single_service_requirement(
     service: Service,
-    config: &sigstore_trust_root::ServiceConfiguration,
+    config: Option<&sigstore_trust_root::ServiceConfiguration>,
     eligible: &[&sigstore_trust_root::ServiceEndpoint],
 ) -> Result<()> {
+    let Some(config) = config else {
+        return Ok(());
+    };
     let unsatisfiable = || {
         Error::from(ConfigError::UnsatisfiableSelector {
             service,
@@ -1038,6 +1031,7 @@ mod tests {
                 } else {
                     &mut tuf.rekor_tlog_config
                 };
+                let requirement = requirement.get_or_insert_with(Default::default);
                 requirement.selector = ServiceSelector::Exact;
                 requirement.count = count;
                 // Neither conversion entry point may discard the requirement.
@@ -1080,6 +1074,7 @@ mod tests {
                 } else {
                     (&mut tuf.rekor_tlog_config, &mut tuf.rekor_tlog_urls)
                 };
+                let requirement = requirement.get_or_insert_with(Default::default);
                 requirement.selector = selector;
                 if let Some(operator) = second_operator {
                     let mut second = endpoints[0].clone();
@@ -1124,6 +1119,7 @@ mod tests {
                     } else {
                         (&mut tuf.rekor_tlog_config, &mut tuf.rekor_tlog_urls)
                     };
+                    let requirement = requirement.get_or_insert_with(Default::default);
                     requirement.selector = selector;
                     requirement.count = Some(1);
                     match unavailable {
@@ -1191,30 +1187,37 @@ mod tests {
     }
 
     #[test]
-    fn log_less_config_must_not_require_a_log() {
+    fn only_a_config_without_any_log_signs_without_one() {
         let baseline = TufSigningConfig::from_json(SIGSTORE_GITHUB_SIGNING_CONFIG).unwrap();
         assert!(baseline.rekor_tlog_urls.is_empty());
-        let ok = SigningServices::from_signing_config_without_log(&baseline).unwrap();
+        assert!(baseline.rekor_tlog_config.is_none());
+        let ok = SigningServices::from_signing_config(&baseline).unwrap();
         assert_eq!(ok.rekor_url(), None);
 
-        // An empty log list with a selector that demands log submissions is
-        // self-contradictory and must not silently yield log-less bundles.
+        // A config that says how to use a log but lists none is damaged or
+        // self-contradictory, whatever its selector, and must not silently
+        // yield log-less bundles.
         for (selector, count) in [
+            (ServiceSelector::Any, None),
             (ServiceSelector::Exact, Some(1)),
             (ServiceSelector::All, None),
             (ServiceSelector::Undefined, None),
         ] {
             let mut config = baseline.clone();
-            config.rekor_tlog_config.selector = selector;
-            config.rekor_tlog_config.count = count;
-            let error = SigningServices::from_signing_config_without_log(&config).unwrap_err();
+            let requirement = config.rekor_tlog_config.insert(Default::default());
+            requirement.selector = selector;
+            requirement.count = count;
+            let error = SigningServices::from_signing_config(&config).unwrap_err();
             assert!(
                 matches!(
                     error,
-                    Error::Config(ConfigError::UnsatisfiableSelector {
-                        service: Service::Rekor,
-                        ..
-                    })
+                    Error::Config(
+                        ConfigError::MissingService(Service::Rekor)
+                            | ConfigError::UnsatisfiableSelector {
+                                service: Service::Rekor,
+                                ..
+                            }
+                    )
                 ),
                 "{selector:?}: {error}"
             );
@@ -1223,13 +1226,17 @@ mod tests {
 
     #[test]
     fn signing_configs_without_an_eligible_log_still_fail() {
-        // GitHub's config lists no log, which only `from_embedded` accepts.
+        // A log-less config cannot satisfy a forced Rekor version.
         let github = TufSigningConfig::from_json(SIGSTORE_GITHUB_SIGNING_CONFIG).unwrap();
-        let error = SigningServices::from_signing_config(&github).unwrap_err();
+        let error = SigningServices::from_signing_config_with_rekor_version(
+            &github,
+            Some(RekorApiVersion::V1),
+        )
+        .unwrap_err();
         assert!(
             matches!(
                 error,
-                Error::Config(ConfigError::MissingService(Service::Rekor))
+                Error::Config(ConfigError::MissingRekorVersion(RekorApiVersion::V1))
             ),
             "{error}"
         );
@@ -1252,20 +1259,6 @@ mod tests {
             matches!(
                 error,
                 Error::Config(ConfigError::MissingService(Service::Rekor))
-            ),
-            "{error}"
-        );
-
-        // A log-less config cannot satisfy a forced Rekor version.
-        let error = SigningServices::from_signing_config_with_rekor_version(
-            &github,
-            Some(RekorApiVersion::V1),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(
-                error,
-                Error::Config(ConfigError::MissingRekorVersion(RekorApiVersion::V1))
             ),
             "{error}"
         );

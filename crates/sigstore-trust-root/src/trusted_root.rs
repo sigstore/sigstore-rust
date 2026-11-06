@@ -427,20 +427,6 @@ impl SigstoreInstance {
             Self::GitHub => false,
         }
     }
-
-    /// Whether this instance records signatures in a transparency log.
-    ///
-    /// GitHub's instance runs no log: its trusted root lists no `tlogs` and
-    /// its signing config no Rekor URL, so that nothing about the private
-    /// and internal repositories it signs for is published. Its bundles
-    /// carry an RFC 3161 timestamp from GitHub's TSA instead, and verifiers
-    /// must accept bundles without a log entry.
-    pub fn runs_transparency_log(self) -> bool {
-        match self {
-            Self::PublicGood | Self::Staging => true,
-            Self::GitHub => false,
-        }
-    }
 }
 
 impl TrustedRoot {
@@ -820,21 +806,24 @@ mod tests {
         for instance in ALL_INSTANCES {
             let root = instance.embedded_trusted_root().unwrap();
             let signing_config = instance.embedded_signing_config().unwrap();
-            // Only GitHub's instance keeps no transparency log, and both of
-            // its embedded files must agree with that.
-            assert_eq!(
-                instance.runs_transparency_log(),
-                instance != SigstoreInstance::GitHub
-            );
+            // Only GitHub's instance keeps no transparency log. Its signing
+            // config says so by omitting both the log list and its
+            // configuration, and its trusted root must agree.
+            let runs_log = instance != SigstoreInstance::GitHub;
             assert_eq!(
                 root.tlogs.is_empty(),
-                !instance.runs_transparency_log(),
+                !runs_log,
                 "{instance:?}: trusted root tlogs"
             );
             assert_eq!(
                 signing_config.rekor_tlog_urls.is_empty(),
-                !instance.runs_transparency_log(),
+                !runs_log,
                 "{instance:?}: signing config rekorTlogUrls"
+            );
+            assert_eq!(
+                signing_config.rekor_tlog_config.is_none(),
+                !runs_log,
+                "{instance:?}: signing config rekorTlogConfig"
             );
         }
     }

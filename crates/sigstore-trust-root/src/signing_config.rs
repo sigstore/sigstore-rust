@@ -143,12 +143,17 @@ pub struct SigningConfig {
     /// Timestamp authority URLs
     #[serde(default)]
     pub tsa_urls: Vec<ServiceEndpoint>,
-    /// Rekor tlog configuration
-    #[serde(default)]
-    pub rekor_tlog_config: ServiceConfiguration,
-    /// TSA configuration
-    #[serde(default)]
-    pub tsa_config: ServiceConfiguration,
+    /// How many transparency logs to submit to, if the config says.
+    ///
+    /// Absent together with an empty [`Self::rekor_tlog_urls`] means the
+    /// instance runs no transparency log (for example GitHub's). Clients
+    /// otherwise treat an absent configuration as [`ServiceSelector::Any`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rekor_tlog_config: Option<ServiceConfiguration>,
+    /// How many timestamp authorities to use, if the config says. Clients
+    /// treat an absent configuration as [`ServiceSelector::Any`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tsa_config: Option<ServiceConfiguration>,
 }
 
 impl SigningConfig {
@@ -382,7 +387,24 @@ mod tests {
         json["rekorTlogConfig"] = serde_json::json!({"selector": "ALL"});
         json["tsaConfig"] = serde_json::json!({"selector": "ALL"});
         let config = SigningConfig::from_json(&json.to_string()).unwrap();
-        assert_eq!(config.rekor_tlog_config.selector, ServiceSelector::All);
-        assert_eq!(config.tsa_config.selector, ServiceSelector::All);
+        assert_eq!(
+            config.rekor_tlog_config.unwrap().selector,
+            ServiceSelector::All
+        );
+        assert_eq!(config.tsa_config.unwrap().selector, ServiceSelector::All);
+    }
+
+    #[test]
+    fn test_omitted_service_configurations_are_absent() {
+        let mut json: serde_json::Value =
+            serde_json::from_str(crate::SIGSTORE_PRODUCTION_SIGNING_CONFIG).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("rekorTlogConfig");
+        object.remove("tsaConfig");
+        let config = SigningConfig::from_json(&json.to_string()).unwrap();
+        assert!(config.rekor_tlog_config.is_none());
+        assert!(config.tsa_config.is_none());
+        let reserialized = serde_json::to_value(&config).unwrap();
+        assert!(reserialized.get("rekorTlogConfig").is_none());
     }
 }
