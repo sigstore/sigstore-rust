@@ -9,6 +9,7 @@ use jiff::Timestamp;
 use sigstore_types::{KeyHint, Sha256Hash, SignatureBytes, TimeRange};
 use std::collections::HashMap;
 
+#[derive(Debug, Clone)]
 struct KeyringEntry {
     key: VerificationKey,
     validity: Option<TimeRange>,
@@ -19,7 +20,7 @@ struct KeyringEntry {
 /// Keys are indexed by their SHA-256 key ID. A key may additionally carry a
 /// validity window; callers can perform either an unrestricted historical
 /// lookup or a lookup at a specific point in time.
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Keyring {
     keys: HashMap<Sha256Hash, KeyringEntry>,
 }
