@@ -119,7 +119,8 @@ pub enum CertificateError {
         time: jiff::Timestamp,
     },
 
-    /// The signing time is before the certificate's `notBefore`.
+    /// The signing time is before the `notBefore` of the signing certificate
+    /// or of a certificate in its chain.
     #[error("certificate is not yet valid at {time} (not before {not_before})")]
     NotYetValid {
         /// The authenticated signing time
@@ -128,7 +129,8 @@ pub enum CertificateError {
         not_before: jiff::Timestamp,
     },
 
-    /// The signing time is after the certificate's `notAfter`.
+    /// The signing time is after the `notAfter` of the signing certificate or
+    /// of a certificate in its chain.
     #[error("certificate had expired at {time} (not after {not_after})")]
     Expired {
         /// The authenticated signing time
