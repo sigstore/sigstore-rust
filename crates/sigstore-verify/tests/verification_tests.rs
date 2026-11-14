@@ -1103,7 +1103,7 @@ const COSIGN_V3_BLOB_BUNDLE: &str =
 /// These mutations exercise parsing only, not certificate authentication.
 #[test]
 fn test_fulcio_issuer_extension_versions() {
-    use sigstore_crypto::parse_certificate_info;
+    use sigstore_verify::crypto::parse_certificate_info;
     use x509_cert::der::{asn1::OctetString, Decode, Encode};
     use x509_cert::Certificate;
 
@@ -1964,4 +1964,256 @@ fn test_certificate_checked_against_every_verified_timestamp() {
         msg.contains("certificate") || msg.contains("Cert"),
         "expected a certificate validity failure, got: {msg}"
     );
+}
+
+// ==== Caller-established validation time ====
+
+/// Signing time logged for `V03_BUNDLE_DSSE` (2025-01-28T10:28:16Z).
+const V03_BUNDLE_DSSE_INTEGRATED_TIME: i64 = 1738060096;
+
+fn seconds(s: i64) -> jiff::Timestamp {
+    jiff::Timestamp::from_second(s).unwrap()
+}
+
+/// The production root without any Rekor key, so nothing in the bundle's
+/// transparency log entries can be authenticated.
+fn production_root_without_tlogs() -> TrustedRoot {
+    let mut root = production_root();
+    root.tlogs.clear();
+    root
+}
+
+fn v03_dsse_leaf() -> sigstore_verify::crypto::CertificateInfo {
+    let bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
+    sigstore_verify::crypto::parse_certificate_info(bundle.signing_certificate().unwrap()).unwrap()
+}
+
+/// A short-lived certificate verifies at the time the caller vouches for,
+/// against a root that holds no Rekor key at all.
+#[test]
+fn caller_validation_time_verifies_without_rekor_keys() {
+    let bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
+    let digest = extract_artifact_digest(&bundle).unwrap();
+    let root = production_root_without_tlogs();
+    let time = seconds(V03_BUNDLE_DSSE_INTEGRATED_TIME);
+
+    // Without the option the bundle's SET cannot be authenticated.
+    let err = verify(digest, &bundle, &VerificationPolicy::any_identity(), &root).unwrap_err();
+    assert!(
+        matches!(err, sigstore_verify::Error::TransparencyLog(_)),
+        "unexpected error: {err}"
+    );
+
+    let policy = VerificationPolicy::any_identity().with_validation_time_unsafe(time);
+    assert!(
+        !policy.verifies_tlog(),
+        "a caller time implies the tlog skip"
+    );
+    let result = verify(digest, &bundle, &policy, &root).unwrap();
+    assert!(result.certificate_verified());
+    assert!(result.sct_verified());
+    assert!(!result.tlog_verified());
+    assert_eq!(result.integrated_time(), None);
+    assert!(result.verified_timestamps().is_empty());
+    assert_eq!(result.caller_validation_time(), Some(time));
+}
+
+/// The caller's time is the only validation time: after the leaf's
+/// `notAfter`, verification fails even though the bundle's own SET would
+/// have vouched for a time inside the validity window.
+#[test]
+fn caller_validation_time_after_not_after_is_rejected() {
+    let bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
+    let digest = extract_artifact_digest(&bundle).unwrap();
+    let late = v03_dsse_leaf().not_after + jiff::SignedDuration::from_secs(1);
+
+    let policy = VerificationPolicy::any_identity().with_validation_time_unsafe(late);
+    let err = verify(digest, &bundle, &policy, &production_root()).unwrap_err();
+    // Chain verification runs first and reports the expiry: as a typed
+    // `Expired` once webpki errors are mapped, as `ChainInvalid` before.
+    assert!(
+        matches!(
+            &err,
+            sigstore_verify::Error::Certificate(sigstore_verify::CertificateError::Expired { .. })
+        ) || matches!(
+            &err,
+            sigstore_verify::Error::Certificate(sigstore_verify::CertificateError::ChainInvalid(msg))
+                if msg.contains("CertExpired")
+        ),
+        "unexpected error: {err:?}"
+    );
+}
+
+/// A bundle without transparency log entries carries no signing-time
+/// evidence. It still fails by default, and verifies at the leaf's
+/// `notBefore` once the caller supplies the time.
+#[test]
+fn caller_validation_time_waives_signing_time_evidence() {
+    let mut bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
+    bundle.verification_material.tlog_entries.clear();
+    let digest = extract_artifact_digest(&bundle).unwrap();
+    let root = production_root();
+
+    let err = verify(
+        digest,
+        &bundle,
+        &VerificationPolicy::any_identity().skip_tlog_unsafe(),
+        &root,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            sigstore_verify::Error::Bundle(
+                sigstore_verify::bundle::Error::MissingSigningTimeEvidence
+            )
+        ),
+        "the default must stay strict: {err}"
+    );
+
+    let policy =
+        VerificationPolicy::any_identity().with_validation_time_unsafe(v03_dsse_leaf().not_before);
+    verify(digest, &bundle, &policy, &root).unwrap();
+}
+
+/// A v0.1 bundle without an inclusion promise is likewise accepted only with
+/// a caller time.
+#[test]
+fn caller_validation_time_waives_v01_inclusion_promise() {
+    let mut bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
+    bundle.media_type = MediaType::Bundle0_1;
+    bundle.verification_material.tlog_entries.clear();
+    let digest = extract_artifact_digest(&bundle).unwrap();
+    let root = production_root();
+
+    let err = verify(
+        digest,
+        &bundle,
+        &VerificationPolicy::any_identity().skip_tlog_unsafe(),
+        &root,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            sigstore_verify::Error::Bundle(
+                sigstore_verify::bundle::Error::MissingInclusionPromise(_)
+            )
+        ),
+        "the default must stay strict: {err}"
+    );
+
+    let policy =
+        VerificationPolicy::any_identity().with_validation_time_unsafe(v03_dsse_leaf().not_before);
+    verify(digest, &bundle, &policy, &root).unwrap();
+}
+
+/// The signature and the artifact binding are still checked.
+#[test]
+fn caller_validation_time_still_checks_signature_and_artifact() {
+    let bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
+    let digest = extract_artifact_digest(&bundle).unwrap();
+    let root = production_root_without_tlogs();
+    let policy = VerificationPolicy::any_identity()
+        .with_validation_time_unsafe(seconds(V03_BUNDLE_DSSE_INTEGRATED_TIME));
+
+    let wrong = Sha256Hash::new([0x42; 32]);
+    let err = verify(wrong, &bundle, &policy, &root).unwrap_err();
+    assert!(
+        matches!(err, sigstore_verify::Error::ArtifactMismatch(_)),
+        "unexpected error: {err}"
+    );
+
+    let mut tampered = bundle.clone();
+    tampered.verification_material.tlog_entries.clear();
+    let sigstore_verify::types::SignatureContent::DsseEnvelope(envelope) = &mut tampered.content
+    else {
+        panic!("expected a DSSE bundle");
+    };
+    let mut sig = envelope.signature.sig.as_bytes().to_vec();
+    let last = sig.len() - 1;
+    sig[last] ^= 1;
+    envelope.signature.sig = sigstore_types::SignatureBytes::new(sig);
+    let err = verify(digest, &tampered, &policy, &root).unwrap_err();
+    assert!(
+        matches!(err, sigstore_verify::Error::SignatureInvalid(_)),
+        "unexpected error: {err}"
+    );
+}
+
+/// Log entries that travel in the bundle are still checked for consistency
+/// with it, even though they are not authenticated.
+#[test]
+fn caller_validation_time_still_checks_tlog_consistency() {
+    let bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
+    let digest = extract_artifact_digest(&bundle).unwrap();
+    let policy = VerificationPolicy::any_identity()
+        .with_validation_time_unsafe(seconds(V03_BUNDLE_DSSE_INTEGRATED_TIME));
+
+    // Borrow the log entry of an unrelated DSSE bundle.
+    let mut mixed = bundle.clone();
+    let other = Bundle::from_json(CONDA_ATTESTATION_BUNDLE).unwrap();
+    mixed.verification_material.tlog_entries = other.verification_material.tlog_entries;
+    let err = verify(digest, &mixed, &policy, &production_root_without_tlogs()).unwrap_err();
+    assert!(
+        matches!(err, sigstore_verify::Error::TransparencyLog(_)),
+        "unexpected error: {err}"
+    );
+}
+
+/// The ocx keyless golden: a cosign v3 DSSE bundle from a private Sigstore
+/// stack whose leaf expired ten minutes after signing. It only verifies at
+/// its logged time. The fixtures live in an ocx checkout, so this test is
+/// ignored; run it with `--ignored` when one is present at `~/Programs/ocx`.
+#[test]
+#[ignore = "needs the ocx golden fixtures in ~/Programs/ocx"]
+fn caller_validation_time_ocx_keyless_golden() {
+    let ocx = std::path::PathBuf::from(std::env::var("HOME").unwrap()).join("Programs/ocx/test");
+    let bundle = Bundle::from_json(
+        &std::fs::read_to_string(ocx.join("tests/fixtures/golden/keyless_bundle.json")).unwrap(),
+    )
+    .unwrap();
+    let mut root = TrustedRoot::from_json(
+        &std::fs::read_to_string(ocx.join("sigstore/trusted_root.json")).unwrap(),
+    )
+    .unwrap();
+    root.tlogs.clear();
+    let subject =
+        Sha256Hash::from_hex("47f8439476b73b7e7bb389322dd6d5c6eef89efc61c86bfef8bade66774b36fe")
+            .unwrap();
+    let integrated = seconds(1787969275);
+
+    let policy = VerificationPolicy::any_identity().with_validation_time_unsafe(integrated);
+    let result = verify(subject, &bundle, &policy, &root).unwrap();
+    assert_eq!(
+        result.identity().map(|i| i.as_str()),
+        Some("ocx-test@example.com")
+    );
+
+    let late = VerificationPolicy::any_identity()
+        .with_validation_time_unsafe(integrated + jiff::SignedDuration::from_hours(1));
+    assert!(matches!(
+        verify(subject, &bundle, &late, &root),
+        Err(sigstore_verify::Error::Certificate(_))
+    ));
+
+    let mut unlogged = bundle.clone();
+    unlogged.verification_material.tlog_entries.clear();
+    let leaf =
+        sigstore_verify::crypto::parse_certificate_info(unlogged.signing_certificate().unwrap())
+            .unwrap();
+    let at_not_before =
+        VerificationPolicy::any_identity().with_validation_time_unsafe(leaf.not_before);
+    verify(subject, &unlogged, &at_not_before, &root).unwrap();
+    assert!(matches!(
+        verify(
+            subject,
+            &unlogged,
+            &VerificationPolicy::any_identity().skip_tlog_unsafe(),
+            &root
+        ),
+        Err(sigstore_verify::Error::Bundle(
+            sigstore_verify::bundle::Error::MissingSigningTimeEvidence
+        ))
+    ));
 }

@@ -36,6 +36,14 @@ pub struct ValidationOptions {
     /// Require RFC 3161 timestamp verification data to be present. The
     /// timestamps themselves are not verified here.
     pub require_timestamp: bool,
+    /// Require evidence of the signing time: an inclusion promise for v0.1
+    /// bundles, and at least one transparency log entry or RFC 3161
+    /// timestamp for every version. Defaults to `true`.
+    ///
+    /// Only turn this off when the caller establishes the signing time
+    /// itself, as `sigstore-verify` does for a policy with a caller-supplied
+    /// validation time.
+    pub require_signing_time_evidence: bool,
 }
 
 impl ValidationOptions {
@@ -55,6 +63,13 @@ impl ValidationOptions {
         self.require_timestamp = require;
         self
     }
+
+    /// Set whether evidence of the signing time must be present; see
+    /// [`Self::require_signing_time_evidence`].
+    pub fn with_require_signing_time_evidence(mut self, require: bool) -> Self {
+        self.require_signing_time_evidence = require;
+        self
+    }
 }
 
 impl Default for ValidationOptions {
@@ -62,6 +77,7 @@ impl Default for ValidationOptions {
         Self {
             require_inclusion_proof: true,
             require_timestamp: false,
+            require_signing_time_evidence: true,
         }
     }
 }
@@ -90,7 +106,8 @@ pub fn validate_bundle(bundle: &Bundle) -> Result<()> {
 ///
 /// - The media type is a known bundle version (v0.1, v0.2, v0.3).
 /// - Version-specific shape requirements:
-///   - v0.1: an inclusion promise (SET) must be present.
+///   - v0.1: an inclusion promise (SET) must be present (if
+///     [`ValidationOptions::require_signing_time_evidence`] is set).
 ///   - v0.2/v0.3: an inclusion proof must be present (if
 ///     [`ValidationOptions::require_inclusion_proof`] is set).
 ///   - v0.3: the verification material must be a single certificate or a
@@ -101,7 +118,8 @@ pub fn validate_bundle(bundle: &Bundle) -> Result<()> {
 ///   checkpoint. (Consistency between two fields of the same bundle is a
 ///   well-formedness check, not a trust decision.)
 /// - At least one transparency log entry or RFC 3161 timestamp is present
-///   (depending on options).
+///   (depending on options; waived when
+///   [`ValidationOptions::require_signing_time_evidence`] is unset).
 ///
 /// # What is NOT checked
 ///
@@ -129,7 +147,7 @@ pub fn validate_bundle_with_options(bundle: &Bundle, options: &ValidationOptions
 /// Structurally validate a v0.1 bundle
 fn validate_v0_1(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
     // v0.1 requires inclusion promise (SET)
-    if !bundle.has_inclusion_promise() {
+    if options.require_signing_time_evidence && !bundle.has_inclusion_promise() {
         return Err(Error::MissingInclusionPromise(bundle.media_type));
     }
 
@@ -192,7 +210,10 @@ fn validate_common(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
 
     // Bundles verified without transparency-log requirements may establish
     // signing time from RFC3161 timestamp data alone.
-    if !has_tlog_entries && (options.require_inclusion_proof || !has_timestamp) {
+    if options.require_signing_time_evidence
+        && !has_tlog_entries
+        && (options.require_inclusion_proof || !has_timestamp)
+    {
         return Err(Error::MissingSigningTimeEvidence);
     }
 
@@ -262,5 +283,6 @@ mod tests {
         let opts = ValidationOptions::default();
         assert!(opts.require_inclusion_proof);
         assert!(!opts.require_timestamp);
+        assert!(opts.require_signing_time_evidence);
     }
 }

@@ -237,6 +237,7 @@ pub struct VerificationPolicy {
     issuer: Option<String>,
     verify_tlog: bool,
     certificate: CertificatePolicy,
+    validation_time: Option<jiff::Timestamp>,
 }
 
 impl VerificationPolicy {
@@ -260,6 +261,7 @@ impl VerificationPolicy {
             issuer: None,
             verify_tlog: true,
             certificate: CertificatePolicy::Verify { verify_sct: true },
+            validation_time: None,
         }
     }
 
@@ -324,6 +326,53 @@ impl VerificationPolicy {
         self
     }
 
+    /// Validate the signing certificate at `time`, a signing time the caller
+    /// has already established, instead of deriving it from the bundle.
+    ///
+    /// This is for callers that prove the signing time themselves, for
+    /// example by checking a transparency log entry with their own keys, or
+    /// that accept an unlogged signature on explicit opt-in (cosign's
+    /// `--insecure-ignore-tlog`).
+    ///
+    /// Setting a validation time **implies [`Self::skip_tlog_unsafe`]**:
+    ///
+    /// - The bundle's RFC 3161 timestamps and Rekor SETs are not verified, and
+    ///   the inclusion proof and checkpoint are not checked. `time` is the only
+    ///   validation time.
+    /// - The bundle no longer needs to carry evidence of the signing time: a
+    ///   bundle without transparency log entries or timestamps, or a v0.1
+    ///   bundle without an inclusion promise, passes structural validation.
+    ///   Every other structural check still runs.
+    ///
+    /// What still holds: the certificate chains to the trusted root and is
+    /// valid at `time`, its SCT is verified (unless skipped), the identity and
+    /// issuer match the policy, the signature verifies, the artifact is bound,
+    /// and any transparency log entries in the bundle are checked for
+    /// consistency with the bundle they travel in.
+    ///
+    /// The result reports `time` through
+    /// [`VerificationResult::caller_validation_time`], not
+    /// [`VerificationResult::verified_timestamps`], which only lists times the
+    /// verifier authenticated itself.
+    ///
+    /// WARNING: The caller vouches for `time`. Nothing in the bundle proves
+    /// the signature was made then. A wrong time lets an expired or
+    /// not-yet-valid certificate through, and with Fulcio's ten-minute
+    /// certificates a time picked by anyone who controls the input defeats
+    /// certificate expiry altogether. Only pass a time you established from
+    /// evidence you verified, or that the user explicitly accepted.
+    pub fn with_validation_time_unsafe(mut self, time: jiff::Timestamp) -> Self {
+        self.validation_time = Some(time);
+        self.verify_tlog = false;
+        self
+    }
+
+    /// The caller-supplied validation time, if any; see
+    /// [`Self::with_validation_time_unsafe`].
+    pub fn validation_time(&self) -> Option<jiff::Timestamp> {
+        self.validation_time
+    }
+
     /// The required identity, if any.
     pub fn identity(&self) -> Option<&IdentityMatcher> {
         self.identity.as_ref()
@@ -370,6 +419,7 @@ pub struct VerificationResult {
     tlog_verified: bool,
     identity_policy_checked: bool,
     verified_timestamps: Vec<jiff::Timestamp>,
+    caller_validation_time: Option<jiff::Timestamp>,
 }
 
 impl VerificationResult {
@@ -385,6 +435,7 @@ impl VerificationResult {
             tlog_verified: false,
             identity_policy_checked: false,
             verified_timestamps: Vec::new(),
+            caller_validation_time: None,
         }
     }
 
@@ -436,6 +487,15 @@ impl VerificationResult {
     /// Managed-key verification does not use TSA tokens for certificate validation.
     pub fn verified_timestamps(&self) -> &[jiff::Timestamp] {
         &self.verified_timestamps
+    }
+    /// The caller-supplied time the certificate was validated at, if the
+    /// policy set one with
+    /// [`VerificationPolicy::with_validation_time_unsafe`].
+    ///
+    /// The verifier did not authenticate this time; when it is set,
+    /// [`Self::verified_timestamps`] is empty.
+    pub fn caller_validation_time(&self) -> Option<jiff::Timestamp> {
+        self.caller_validation_time
     }
 }
 
@@ -595,7 +655,10 @@ impl Verifier {
     /// 8. Verify the transparency log entry's consistency against the other
     ///    materials, to prevent variants of CVE-2022-36056.
     ///
-    /// The policy can skip steps 1–2 and 4–6 (see its `skip_*` methods).
+    /// The policy can skip steps 1–2 and 4–6 (see its `skip_*` methods), and
+    /// can replace step 0 with a time the caller established (see
+    /// [`VerificationPolicy::with_validation_time_unsafe`], which also skips
+    /// steps 4–6).
     ///
     /// With a [`PublicKeyVerificationPolicy`], there is no certificate, so
     /// steps 1–3 and 6 do not apply. The inclusion proof, checkpoint and
@@ -698,13 +761,21 @@ impl Verifier {
         // validate the certificate chain, so this step comes first.
         // These include TSA timestamps and (in the case of rekor v1 entries)
         // rekor log integrated time.
-        let signature = crate::verify_impl::helpers::extract_signature(&bundle.content)?;
-        let validation_times = crate::verify_impl::helpers::determine_validation_times(
-            bundle,
-            &signature,
-            &self.trusted_root,
-            &self.rekor_keys,
-        )?;
+        //      A policy with a caller-supplied time replaces this step: the
+        //      caller vouches for the time, and the bundle's timestamps are
+        //      not consulted.
+        let validation_times = match policy.validation_time {
+            Some(time) => vec![time],
+            None => {
+                let signature = crate::verify_impl::helpers::extract_signature(&bundle.content)?;
+                crate::verify_impl::helpers::determine_validation_times(
+                    bundle,
+                    &signature,
+                    &self.trusted_root,
+                    &self.rekor_keys,
+                )?
+            }
+        };
 
         // (1): Verify that the signing certificate chains to the root of trust,
         //      is valid at EVERY verified signing time, and has CODE_SIGNING EKU.
@@ -754,7 +825,11 @@ impl Verifier {
             }
             result.certificate_verified = true;
         }
-        result.verified_timestamps = validation_times;
+        if policy.validation_time.is_some() {
+            result.caller_validation_time = policy.validation_time;
+        } else {
+            result.verified_timestamps = validation_times;
+        }
 
         // (3): Verify against the given `VerificationPolicy`.
 
@@ -1029,12 +1104,17 @@ fn signing_scheme_for_content(
     }
 }
 
-fn validate_structure(bundle: &Bundle, verify_tlog: bool) -> Result<()> {
+fn validate_structure(
+    bundle: &Bundle,
+    verify_tlog: bool,
+    require_signing_time_evidence: bool,
+) -> Result<()> {
     validate_bundle_with_options(
         bundle,
         &ValidationOptions::new()
             .with_require_inclusion_proof(verify_tlog)
-            .with_require_timestamp(false),
+            .with_require_timestamp(false)
+            .with_require_signing_time_evidence(require_signing_time_evidence),
     )
     .map_err(Error::Bundle)
 }
@@ -1043,7 +1123,7 @@ fn prepare_certificate(
     bundle: &Bundle,
     policy: &VerificationPolicy,
 ) -> Result<sigstore_crypto::CertificateInfo> {
-    validate_structure(bundle, policy.verify_tlog)?;
+    validate_structure(bundle, policy.verify_tlog, policy.validation_time.is_none())?;
     let cert = bundle
         .signing_certificate()
         .ok_or_else(|| Error::InvalidBundle("bundle has no signing certificate".into()))?;
@@ -1063,7 +1143,7 @@ fn prepare_public_key(
             "bundle contains a certificate but public-key verification was requested".into(),
         ));
     }
-    validate_structure(bundle, policy.verify_tlog)?;
+    validate_structure(bundle, policy.verify_tlog, true)?;
     signing_scheme_for_content(
         KeyAlgorithm::from_spki(&policy.public_key)?,
         &bundle.content,
