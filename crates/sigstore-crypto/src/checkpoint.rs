@@ -48,10 +48,7 @@ impl CheckpointVerifyExt for Checkpoint {
                 Err(e) => last_error = Some(e),
             }
         }
-        Err(match last_error {
-            Some(e) => Error::Checkpoint(format!("Signature verification failed: {}", e)),
-            None => Error::Checkpoint("No signature found matching key hint".to_string()),
-        })
+        Err(last_error.unwrap_or(Error::CheckpointKeyNotFound))
     }
 }
 
@@ -116,6 +113,17 @@ mod tests {
         let only_bogus = format!("{body}\n{}", note_line("bogus", &[0u8; 64]));
         let checkpoint = Checkpoint::from_text(&only_bogus).unwrap();
         let error = checkpoint.verify_signature(&public_key).unwrap_err();
-        assert!(error.to_string().contains("Signature verification failed"));
+        assert!(matches!(error, Error::SignatureInvalid { .. }), "{error}");
+
+        // A note with no signature for this key's hint is a different error.
+        let other_hint = sigstore_types::KeyHint::try_from([0xff_u8; 4].as_slice()).unwrap();
+        let mut bytes = other_hint.as_bytes().to_vec();
+        bytes.extend_from_slice(valid.as_bytes());
+        let unrelated = format!("{body}\n\u{2014} other {}\n", engine.encode(bytes));
+        let checkpoint = Checkpoint::from_text(&unrelated).unwrap();
+        assert!(matches!(
+            checkpoint.verify_signature(&public_key),
+            Err(Error::CheckpointKeyNotFound)
+        ));
     }
 }
