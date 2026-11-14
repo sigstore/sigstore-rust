@@ -157,10 +157,28 @@ pub enum TransparencyLogError {
     #[error("invalid inclusion proof: {0}")]
     InclusionProof(String),
 
-    /// The checkpoint (signed tree head) is missing, malformed or not signed
-    /// by a trusted log key.
+    /// The checkpoint (signed tree head) is missing, malformed, inconsistent
+    /// with the inclusion proof, or carries an invalid signature.
     #[error("invalid checkpoint: {0}")]
     Checkpoint(String),
+
+    /// No trusted log key matches any signature on the checkpoint.
+    ///
+    /// Unlike [`Self::Checkpoint`], the checkpoint may be fine: the verifier
+    /// lacks the key, for example because a private log's key is not in the
+    /// trusted root.
+    #[error("no trusted log key matches the checkpoint signatures")]
+    NoCheckpointKey,
+
+    /// The entry's log is known, but none of its trusted keys was valid at the
+    /// entry's integrated time.
+    #[error("no key for transparency log {log_id} is valid at {time}")]
+    LogKeyNotValidAt {
+        /// The log ID from the entry
+        log_id: String,
+        /// The entry's integrated time
+        time: jiff::Timestamp,
+    },
 
     /// The inclusion promise (Signed Entry Timestamp) is missing or invalid.
     #[error("invalid inclusion promise: {0}")]
@@ -171,10 +189,28 @@ pub enum TransparencyLogError {
     #[error("log entry does not match the bundle: {0}")]
     EntryMismatch(String),
 
-    /// The entry's integrated time is in the future or outside the signing
-    /// certificate's validity.
-    #[error("invalid integrated time: {0}")]
-    IntegratedTime(String),
+    /// The entry's integrated time is after the current time.
+    #[error("integrated time {time} is in the future (now {now})")]
+    IntegratedTimeInFuture {
+        /// The entry's integrated time
+        time: jiff::Timestamp,
+        /// The current time when it was checked
+        now: jiff::Timestamp,
+    },
+
+    /// The entry's integrated time is outside the signing certificate's
+    /// validity window.
+    #[error(
+        "integrated time {time} is outside the certificate validity ({not_before} to {not_after})"
+    )]
+    IntegratedTimeOutsideCertificate {
+        /// The entry's integrated time
+        time: jiff::Timestamp,
+        /// The certificate's `notBefore`
+        not_before: jiff::Timestamp,
+        /// The certificate's `notAfter`
+        not_after: jiff::Timestamp,
+    },
 
     /// The log entry body could not be parsed or has an unsupported kind.
     #[error("malformed log entry: {0}")]
@@ -230,8 +266,17 @@ impl Error {
     pub(crate) fn entry_mismatch(detail: String) -> Self {
         TransparencyLogError::EntryMismatch(detail).into()
     }
-    pub(crate) fn integrated_time(detail: String) -> Self {
-        TransparencyLogError::IntegratedTime(detail).into()
+    pub(crate) fn integrated_time_outside_certificate(
+        time: jiff::Timestamp,
+        not_before: jiff::Timestamp,
+        not_after: jiff::Timestamp,
+    ) -> Self {
+        TransparencyLogError::IntegratedTimeOutsideCertificate {
+            time,
+            not_before,
+            not_after,
+        }
+        .into()
     }
     pub(crate) fn malformed_entry(detail: String) -> Self {
         TransparencyLogError::MalformedEntry(detail).into()
