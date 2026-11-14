@@ -351,13 +351,34 @@ pub fn verify_certificate_chain(
             None, // No CRL/OCSP revocation checking (matches sigstore-python)
             None, // No custom path validation callback needed
         )
-        .map_err(|e| {
-            Error::cert_chain_invalid(format!("certificate chain validation failed: {}", e))
-        })?;
+        .map_err(chain_error)?;
 
     tracing::debug!("Certificate chain validated successfully with CODE_SIGNING EKU");
 
     issuer_spki_from_path(&path)
+}
+
+/// Map a webpki path-validation error, keeping validity-window failures typed.
+fn chain_error(error: webpki::Error) -> Error {
+    let timestamp = |time: UnixTime| {
+        i64::try_from(time.as_secs())
+            .ok()
+            .and_then(|secs| jiff::Timestamp::from_second(secs).ok())
+    };
+    match error {
+        webpki::Error::CertExpired { time, not_after } => {
+            if let (Some(time), Some(not_after)) = (timestamp(time), timestamp(not_after)) {
+                return crate::error::CertificateError::Expired { time, not_after }.into();
+            }
+        }
+        webpki::Error::CertNotValidYet { time, not_before } => {
+            if let (Some(time), Some(not_before)) = (timestamp(time), timestamp(not_before)) {
+                return crate::error::CertificateError::NotYetValid { time, not_before }.into();
+            }
+        }
+        _ => {}
+    }
+    Error::cert_chain_invalid(format!("certificate chain validation failed: {error}"))
 }
 
 /// Extract the leaf's direct-issuer SubjectPublicKeyInfo (full DER) from a
@@ -389,6 +410,43 @@ fn issuer_spki_from_path(path: &webpki::VerifiedPath) -> Result<DerPublicKey> {
 mod tests {
     use super::*;
     use sigstore_types::Bundle;
+
+    /// A signing time outside the leaf's validity window is reported as a
+    /// typed `Expired` / `NotYetValid`, not as an opaque chain failure.
+    #[test]
+    fn chain_validity_failures_are_typed() {
+        use crate::error::CertificateError;
+        let trusted_root =
+            TrustedRoot::from_json(sigstore_trust_root::SIGSTORE_PRODUCTION_TRUSTED_ROOT).unwrap();
+        let anchors = crate::Verifier::new(&trusted_root).unwrap().fulcio_anchors;
+        let bundle = Bundle::from_json(include_str!(
+            "../../test_data/bundles/conda-attestation.sigstore.json"
+        ))
+        .unwrap();
+        let leaf =
+            sigstore_crypto::parse_certificate_info(bundle.signing_certificate().unwrap()).unwrap();
+        let chain =
+            SigningCertificateChain::from_material(&bundle.verification_material.content).unwrap();
+        let second = jiff::SignedDuration::from_secs(1);
+
+        verify_certificate_chain(chain, leaf.not_before, &anchors).unwrap();
+
+        let late = leaf.not_after + second;
+        match verify_certificate_chain(chain, late, &anchors) {
+            Err(Error::Certificate(CertificateError::Expired { time, not_after })) => {
+                assert_eq!((time, not_after), (late, leaf.not_after));
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+
+        let early = leaf.not_before - second;
+        match verify_certificate_chain(chain, early, &anchors) {
+            Err(Error::Certificate(CertificateError::NotYetValid { time, not_before })) => {
+                assert_eq!((time, not_before), (early, leaf.not_before));
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
 
     /// The certificate must be validated against *every* verified timestamp
     /// in the bundle, so the timestamp collector must not collapse multiple

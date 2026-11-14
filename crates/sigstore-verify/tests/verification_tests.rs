@@ -2039,3 +2039,61 @@ fn tlog_checks_reject_tampering_and_missing_evidence() {
     assert!(tlog::verify_set_with_key(&bare, &key).is_err());
     assert!(tlog::verify_entry_inclusion_with_key(&bare, &key).is_err());
 }
+
+// ==== Typed transparency log errors ====
+
+/// A log whose only key starts after the entry was integrated reports which
+/// log and which time, so callers can tell "missing key" from "bad evidence".
+#[test]
+fn log_key_not_valid_at_integrated_time_is_typed() {
+    let bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
+    let digest = extract_artifact_digest(&bundle).unwrap();
+    let mut json: serde_json::Value =
+        serde_json::from_str(SIGSTORE_PRODUCTION_TRUSTED_ROOT).unwrap();
+    for log in json["tlogs"].as_array_mut().unwrap() {
+        log["publicKey"]["validFor"] = serde_json::json!({"start": "2030-01-01T00:00:00Z"});
+    }
+    let root = TrustedRoot::from_json(&json.to_string()).unwrap();
+
+    let err = verify(digest, &bundle, &VerificationPolicy::any_identity(), &root).unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            sigstore_verify::Error::TransparencyLog(
+                sigstore_verify::TransparencyLogError::LogKeyNotValidAt { time, .. }
+            ) if time.as_second() == 1738060096
+        ),
+        "unexpected error: {err:?}"
+    );
+}
+
+/// No trusted key for a checkpoint is a typed condition; a matching key with
+/// a bad signature is not.
+#[test]
+fn missing_checkpoint_key_is_typed() {
+    use sigstore_verify::{tlog, TransparencyLogError};
+    let bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
+    let entry = &bundle.verification_material.tlog_entries[0];
+
+    let err = tlog::verify_checkpoint(entry, &sigstore_verify::crypto::Keyring::new()).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            sigstore_verify::Error::TransparencyLog(TransparencyLogError::NoCheckpointKey)
+        ),
+        "unexpected error: {err:?}"
+    );
+
+    let other = sigstore_verify::crypto::KeyPair::generate_ecdsa_p256().unwrap();
+    let other =
+        sigstore_verify::crypto::VerificationKey::from_spki(&other.public_key_der().unwrap())
+            .unwrap();
+    let err = tlog::verify_checkpoint_with_key(entry, &other).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            sigstore_verify::Error::TransparencyLog(TransparencyLogError::Checkpoint(_))
+        ),
+        "unexpected error: {err:?}"
+    );
+}

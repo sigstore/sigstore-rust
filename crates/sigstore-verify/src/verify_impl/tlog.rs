@@ -81,18 +81,10 @@ fn validate_integrated_time(
     validate_integrated_time_not_in_future(time, now)?;
 
     // Check that integrated time is within certificate validity period
-    if time < not_before {
-        return Err(Error::integrated_time(format!(
-            "integrated time {} is before certificate validity (not_before: {})",
-            time, not_before
-        )));
-    }
-
-    if time > not_after {
-        return Err(Error::integrated_time(format!(
-            "integrated time {} is after certificate validity (not_after: {})",
-            time, not_after
-        )));
+    if time < not_before || time > not_after {
+        return Err(Error::integrated_time_outside_certificate(
+            time, not_before, not_after,
+        ));
     }
 
     Ok(())
@@ -103,10 +95,9 @@ pub(crate) fn validate_integrated_time_not_in_future(
     now: jiff::Timestamp,
 ) -> Result<()> {
     if time > now {
-        return Err(Error::integrated_time(format!(
-            "integrated time {} is in the future (current time: {})",
-            time, now
-        )));
+        return Err(
+            crate::error::TransparencyLogError::IntegratedTimeInFuture { time, now }.into(),
+        );
     }
     Ok(())
 }
@@ -233,12 +224,13 @@ pub(crate) fn verify_checkpoint_with(
         }
     }
 
-    let message = if found_matching_key {
-        "No valid Rekor signature found on checkpoint"
+    if found_matching_key {
+        Err(Error::checkpoint(
+            "no valid Rekor signature found on checkpoint".to_string(),
+        ))
     } else {
-        "No matching Rekor key found for checkpoint signature"
-    };
-    Err(Error::checkpoint(message.to_string()))
+        Err(crate::error::TransparencyLogError::NoCheckpointKey.into())
+    }
 }
 
 fn is_rekor_v2(entry: &TransparencyLogEntry) -> bool {
@@ -278,10 +270,10 @@ pub(crate) fn verify_set_with(entry: &TransparencyLogEntry, keys: LogKeys<'_>) -
                 .map_err(|e| Error::malformed_entry(format!("invalid Rekor log ID: {e}")))?;
             if let Some(integrated_ts) = entry.integrated_time {
                 keyring.key_at(&key_id, integrated_ts).ok_or_else(|| {
-                    Error::inclusion_promise(format!(
-                        "No log key valid at integrated time {} for log ID {}",
-                        integrated_ts, entry.log_id.key_id
-                    ))
+                    crate::error::TransparencyLogError::LogKeyNotValidAt {
+                        log_id: entry.log_id.key_id.to_string(),
+                        time: integrated_ts,
+                    }
                 })?
             } else {
                 keyring
@@ -335,7 +327,29 @@ mod tests {
         // Even one second in the future must be rejected.
         let err = validate_integrated_time(ts(NOW + 1), ts(NOW), ts(NOW - 600), ts(NOW + 600))
             .unwrap_err();
-        assert!(err.to_string().contains("is in the future"));
+        assert!(matches!(
+            err,
+            Error::TransparencyLog(crate::error::TransparencyLogError::IntegratedTimeInFuture {
+                time,
+                now
+            }) if time == ts(NOW + 1) && now == ts(NOW)
+        ));
+    }
+
+    #[test]
+    fn test_integrated_time_outside_certificate_is_typed() {
+        let err = validate_integrated_time(ts(NOW - 601), ts(NOW), ts(NOW - 600), ts(NOW + 600))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::TransparencyLog(
+                crate::error::TransparencyLogError::IntegratedTimeOutsideCertificate {
+                    time,
+                    not_before,
+                    not_after,
+                }
+            ) if time == ts(NOW - 601) && not_before == ts(NOW - 600) && not_after == ts(NOW + 600)
+        ));
     }
 
     #[test]
