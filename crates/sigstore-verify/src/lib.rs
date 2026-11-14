@@ -28,6 +28,7 @@
 
 mod artifact;
 pub mod error;
+pub mod tlog;
 mod verify;
 
 // Private submodules for verification logic
