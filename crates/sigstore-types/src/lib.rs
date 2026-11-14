@@ -30,7 +30,7 @@ pub use encoding::{
     LogIndex, LogKeyId, PayloadBytes, PemContent, Sha256Hash, Sha384Hash, Sha512Hash,
     SignatureBytes, SignedTimestamp, TimestampToken,
 };
-pub use error::{Error, Result};
+pub use error::{Encoding, Error, Result};
 pub use hash::HashAlgorithm;
 pub use intoto::{Digest, Statement, Subject};
 pub use time_range::TimeRange;

@@ -17,12 +17,15 @@ impl ArtifactDigest {
     pub fn new(algorithm: HashAlgorithm, value: impl Into<DigestBytes>) -> Result<Self, Error> {
         let value = value.into();
         if value.as_bytes().len() != algorithm.digest_size() {
-            return Err(Error::Validation(format!(
-                "{} digest must be {} bytes, got {}",
-                algorithm,
-                algorithm.digest_size(),
-                value.as_bytes().len()
-            )));
+            return Err(Error::InvalidLength {
+                what: match algorithm {
+                    HashAlgorithm::Sha2256 => "SHA-256 digest",
+                    HashAlgorithm::Sha2384 => "SHA-384 digest",
+                    HashAlgorithm::Sha2512 => "SHA-512 digest",
+                },
+                expected: algorithm.digest_size(),
+                actual: value.as_bytes().len(),
+            });
         }
         Ok(Self { algorithm, value })
     }
