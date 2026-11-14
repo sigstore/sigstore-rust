@@ -223,6 +223,18 @@ impl KeyPair {
         Ok(Self(default_provider().key_pair_from_pkcs8_der(pkcs8)?))
     }
 
+    /// Load a key pair from cosign's encrypted private key PEM (the
+    /// `cosign.key` file `cosign generate-key-pair` writes).
+    ///
+    /// `password` may be empty. See [`crate::cosign_key::decrypt_pem`] for
+    /// the format and the errors. Only ECDSA P-256 keys are supported by the
+    /// built-in provider today.
+    #[cfg(feature = "cosign-key")]
+    pub fn from_cosign_encrypted_pem(pem: &str, password: &[u8]) -> Result<Self> {
+        let pkcs8 = crate::cosign_key::decrypt_pem(pem, password)?;
+        Self::from_pkcs8_der(&pkcs8)
+    }
+
     /// The key algorithm of this key pair.
     pub fn algorithm(&self) -> KeyAlgorithm {
         self.0.algorithm()
