@@ -116,15 +116,12 @@ pub(crate) fn parse_timestamp_token(timestamp_token_bytes: &[u8]) -> Result<(Tst
             if resp.status.status != PkiStatus::Granted as u8
                 && resp.status.status != PkiStatus::GrantedWithMods as u8
             {
-                return Err(Error::Parse(format!(
-                    "Timestamp request not granted: {}",
-                    resp.status.status
-                )));
+                return Err(Error::NotGranted {
+                    status: resp.status.status,
+                });
             }
 
-            let token_any = resp.time_stamp_token.ok_or(Error::Parse(
-                "TimeStampResp missing timeStampToken".to_string(),
-            ))?;
+            let token_any = resp.time_stamp_token.ok_or(Error::NoToken)?;
             // We need the DER bytes of the token for ContentInfo parsing
             let bytes = token_any
                 .to_der()
@@ -295,7 +292,7 @@ fn verify_message_imprint(tst_info: &TstInfo, signature_bytes: &[u8]) -> Result<
 
     // Hash the signature bytes using the algorithm specified in the message imprint
     let computed_hash = hash_for_oid(hash_alg_oid, signature_bytes)
-        .ok_or_else(|| Error::Parse(format!("unsupported hash algorithm: {}", hash_alg_oid)))?;
+        .ok_or_else(|| Error::UnsupportedHashAlgorithm(hash_alg_oid.to_string()))?;
 
     let expected_hash = message_imprint.hashed_message.as_bytes();
 
@@ -319,13 +316,12 @@ fn get_signed_attrs_for_verification(attrs: &x509_cert::attr::Attributes) -> Res
 
     // Convert the attributes into a Vec first, then construct SetOfVec
     let attrs_vec: Vec<x509_cert::attr::Attribute> = attrs.iter().cloned().collect();
-    let generic_set = SetOfVec::try_from(attrs_vec).map_err(|e| {
-        Error::SignatureVerificationError(format!("failed to create SetOfVec: {}", e))
-    })?;
+    let generic_set = SetOfVec::try_from(attrs_vec)
+        .map_err(|e| Error::SignatureInvalid(format!("failed to create SetOfVec: {}", e)))?;
 
-    generic_set.to_der().map_err(|e| {
-        Error::SignatureVerificationError(format!("failed to re-encode attributes: {}", e))
-    })
+    generic_set
+        .to_der()
+        .map_err(|e| Error::SignatureInvalid(format!("failed to re-encode attributes: {}", e)))
 }
 
 /// Verify the CMS signature and return the signer certificate
@@ -339,7 +335,7 @@ fn verify_cms_signature(
         .signer_infos
         .0
         .get(0)
-        .ok_or_else(|| Error::SignatureVerificationError("no signer info found".to_string()))?;
+        .ok_or_else(|| Error::SignatureInvalid("no signer info found".to_string()))?;
 
     // Resolve the signer exclusively among the authority's trusted leaves.
     // Certificates embedded in the CMS envelope are untrusted input.
@@ -349,18 +345,17 @@ fn verify_cms_signature(
         .iter()
         .map(|certificate| {
             Certificate::from_der(certificate.as_ref()).map_err(|e| {
-                Error::SignatureVerificationError(format!(
-                    "failed to parse trusted TSA certificate: {e}"
-                ))
+                Error::SignatureInvalid(format!("failed to parse trusted TSA certificate: {e}"))
             })
         })
         .collect::<Result<Vec<_>>>()?;
     let signer_cert = find_signer_certificate(&signer_info.sid, &trusted_signers)?;
 
     // Get signed attributes and verify the message-digest attribute
-    let signed_attrs = signer_info.signed_attrs.as_ref().ok_or_else(|| {
-        Error::SignatureVerificationError("no signed attributes found".to_string())
-    })?;
+    let signed_attrs = signer_info
+        .signed_attrs
+        .as_ref()
+        .ok_or_else(|| Error::SignatureInvalid("no signed attributes found".to_string()))?;
 
     // Get the digest algorithm OID from signer_info
     let digest_alg_oid = &signer_info.digest_alg.oid;
@@ -400,7 +395,7 @@ fn find_signer_certificate(
                     return Ok(cert.clone());
                 }
             }
-            Err(Error::SignatureVerificationError(
+            Err(Error::SignatureInvalid(
                 "CMS signer does not match any trusted TSA certificate".to_string(),
             ))
         }
@@ -425,7 +420,7 @@ fn find_signer_certificate(
                     }
                 }
             }
-            Err(Error::SignatureVerificationError(
+            Err(Error::SignatureInvalid(
                 "CMS signer does not match any trusted TSA certificate".to_string(),
             ))
         }
@@ -450,32 +445,30 @@ fn verify_message_digest_attribute(
         .iter()
         .find(|attr| attr.oid == OID_MESSAGE_DIGEST)
         .ok_or_else(|| {
-            Error::SignatureVerificationError(
+            Error::SignatureInvalid(
                 "message-digest attribute not found in signed_attrs".to_string(),
             )
         })?;
 
     // The attribute values should contain exactly one OCTET STRING
     if message_digest_attr.values.len() != 1 {
-        return Err(Error::SignatureVerificationError(
+        return Err(Error::SignatureInvalid(
             "message-digest attribute should have exactly one value".to_string(),
         ));
     }
 
     // Decode the attribute value as OCTET STRING
     let message_digest_any = message_digest_attr.values.get(0).ok_or_else(|| {
-        Error::SignatureVerificationError(
-            "failed to get message-digest attribute value".to_string(),
-        )
+        Error::SignatureInvalid("failed to get message-digest attribute value".to_string())
     })?;
     let message_digest_der = message_digest_any.to_der().map_err(|e| {
-        Error::SignatureVerificationError(format!(
+        Error::SignatureInvalid(format!(
             "failed to encode message-digest attribute value: {}",
             e
         ))
     })?;
     let message_digest_octets = OctetStringRef::from_der(&message_digest_der).map_err(|e| {
-        Error::SignatureVerificationError(format!(
+        Error::SignatureInvalid(format!(
             "failed to decode message-digest as OCTET STRING: {}",
             e
         ))
@@ -513,34 +506,34 @@ fn verify_ecdsa_signature(
 
     let spki = &certificate.tbs_certificate.subject_public_key_info;
     let public_key = DerPublicKey::new(spki.to_der().map_err(|e| {
-        Error::SignatureVerificationError(format!("failed to encode signer public key: {e}"))
+        Error::SignatureInvalid(format!("failed to encode signer public key: {e}"))
     })?);
 
-    let algorithm = KeyAlgorithm::from_spki(&public_key)
-        .map_err(|e| Error::SignatureVerificationError(e.to_string()))?;
+    let algorithm =
+        KeyAlgorithm::from_spki(&public_key).map_err(|e| Error::SignatureInvalid(e.to_string()))?;
     if !matches!(algorithm, KeyAlgorithm::EcdsaP256 | KeyAlgorithm::EcdsaP384) {
-        return Err(Error::SignatureVerificationError("not an EC key".into()));
+        return Err(Error::SignatureInvalid("not an EC key".into()));
     }
     let hash = match *digest_alg_oid {
         OID_SHA256 => sigstore_types::HashAlgorithm::Sha2256,
         OID_SHA384 => sigstore_types::HashAlgorithm::Sha2384,
         OID_SHA512 => sigstore_types::HashAlgorithm::Sha2512,
         _ => {
-            return Err(Error::SignatureVerificationError(format!(
+            return Err(Error::SignatureInvalid(format!(
                 "unsupported digest algorithm: {digest_alg_oid}"
             )))
         }
     };
     let scheme = algorithm
         .resolve_signing_scheme(hash)
-        .map_err(|e| Error::SignatureVerificationError(e.to_string()))?;
+        .map_err(|e| Error::SignatureInvalid(e.to_string()))?;
     verify_signature(
         &public_key,
         message,
         &SignatureBytes::from_bytes(signature),
         scheme,
     )
-    .map_err(|e| Error::SignatureVerificationError(e.to_string()))
+    .map_err(|e| Error::SignatureInvalid(e.to_string()))
 }
 
 /// Validate the TSA certificate chain
@@ -554,22 +547,19 @@ fn validate_tsa_certificate_chain(
 
     // If no roots are provided, fail certificate chain validation
     if opts.roots.is_empty() {
-        return Err(Error::CertificateValidationError(
+        return Err(Error::CertificateInvalid(
             "No trusted roots provided for TSA certificate validation".to_string(),
         ));
     }
 
     // Convert the signer certificate to DER format for webpki
     let signer_cert_der = signer_cert.to_der().map_err(|e| {
-        Error::CertificateValidationError(format!(
-            "failed to encode signer certificate to DER: {}",
-            e
-        ))
+        Error::CertificateInvalid(format!("failed to encode signer certificate to DER: {}", e))
     })?;
 
     let signer_cert_der = CertificateDer::from(signer_cert_der);
     let end_entity_cert = EndEntityCert::try_from(&signer_cert_der).map_err(|e| {
-        Error::CertificateValidationError(format!("failed to parse end-entity certificate: {}", e))
+        Error::CertificateInvalid(format!("failed to parse end-entity certificate: {}", e))
     })?;
 
     // Build trust anchors from the provided roots
@@ -580,10 +570,7 @@ fn validate_tsa_certificate_chain(
             anchor_from_trusted_cert(cert)
                 .map(|anchor| anchor.to_owned())
                 .map_err(|e| {
-                    Error::CertificateValidationError(format!(
-                        "failed to create trust anchor: {}",
-                        e
-                    ))
+                    Error::CertificateInvalid(format!("failed to create trust anchor: {}", e))
                 })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -621,10 +608,7 @@ fn validate_tsa_certificate_chain(
             None, // No custom path validation callback needed
         )
         .map_err(|e| {
-            Error::CertificateValidationError(format!(
-                "TSA certificate chain validation failed: {}",
-                e
-            ))
+            Error::CertificateInvalid(format!("TSA certificate chain validation failed: {}", e))
         })?;
 
     tracing::debug!("TSA certificate chain validated successfully");
@@ -753,8 +737,7 @@ mod tests {
             } else {
                 // Status text must not make a rejected response acceptable,
                 // even when it carries an otherwise valid signed token.
-                assert!(matches!(result, Err(Error::Parse(message))
-                    if message.contains("not granted")));
+                assert!(matches!(result, Err(Error::NotGranted { status: 2 })));
             }
         }
 
@@ -783,7 +766,7 @@ mod tests {
             "Timestamp verification without roots should fail"
         );
         match result.unwrap_err() {
-            Error::CertificateValidationError(msg) => {
+            Error::CertificateInvalid(msg) => {
                 assert!(msg.contains("No trusted roots provided"));
             }
             other => panic!(
@@ -834,7 +817,7 @@ mod tests {
 
         let result = verify_timestamp_response(&timestamp_token, &signature, opts);
         match result.unwrap_err() {
-            Error::SignatureVerificationError(msg) => {
+            Error::SignatureInvalid(msg) => {
                 assert!(
                     msg.contains("does not match any trusted TSA certificate"),
                     "unexpected message: {msg}"
@@ -935,7 +918,7 @@ mod tests {
             &authority,
         );
         match result.unwrap_err() {
-            Error::SignatureVerificationError(msg) => {
+            Error::SignatureInvalid(msg) => {
                 assert!(
                     msg.contains("does not match any trusted TSA certificate"),
                     "unexpected message: {msg}"

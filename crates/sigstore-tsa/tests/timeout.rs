@@ -37,6 +37,36 @@ async fn request_timeout_covers_stalled_headers_and_body() {
         )
         .await;
         server.abort();
-        assert!(matches!(result.expect("request hung"), Err(Error::Http(_))));
+        assert!(matches!(
+            result.expect("request hung"),
+            Err(Error::Transport(_))
+        ));
     }
+}
+
+/// A non-success HTTP status is reported with its code, apart from
+/// transport failures.
+#[tokio::test]
+async fn error_status_is_reported_with_its_code() {
+    use tokio::io::AsyncReadExt;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf).await;
+        stream
+            .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+    });
+    let client = TimestampClient::new(url).unwrap();
+    let result = client
+        .timestamp_signature(&SignatureBytes::from_bytes(b"signature"))
+        .await;
+    server.await.unwrap();
+    assert!(
+        matches!(result, Err(Error::Status { status: 503, .. })),
+        "unexpected result: {result:?}"
+    );
 }
