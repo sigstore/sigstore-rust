@@ -106,7 +106,7 @@ impl Keyring {
     ) -> Result<()> {
         let key = self
             .key(key_id)
-            .ok_or_else(|| Error::Verification(format!("key not found: {}", key_id.to_hex())))?;
+            .ok_or(Error::KeyNotFound { key_id: *key_id })?;
         key.verify(data, signature)
     }
 
@@ -119,11 +119,14 @@ impl Keyring {
         signature: &SignatureBytes,
     ) -> Result<()> {
         let key = self.key_at(key_id, time).ok_or_else(|| {
-            Error::Verification(format!(
-                "key not found or not valid at {}: {}",
-                time,
-                key_id.to_hex()
-            ))
+            if self.keys.contains_key(key_id) {
+                Error::KeyNotValidAt {
+                    key_id: *key_id,
+                    time,
+                }
+            } else {
+                Error::KeyNotFound { key_id: *key_id }
+            }
         })?;
         key.verify(data, signature)
     }
@@ -142,9 +145,7 @@ impl Keyring {
                 return Ok(*key_id);
             }
         }
-        Err(Error::Verification(
-            "no key in keyring verified the signature".to_string(),
-        ))
+        Err(Error::NoKeyVerified)
     }
 
     /// Get the number of keys in the keyring.
