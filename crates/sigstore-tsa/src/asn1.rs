@@ -84,7 +84,7 @@ impl TryFrom<HashAlgorithm> for AlgorithmIdentifier {
             HashAlgorithm::Sha2256 => Ok(Self::sha256()),
             HashAlgorithm::Sha2384 => Ok(Self::sha384()),
             HashAlgorithm::Sha2512 => Ok(Self::sha512()),
-            other => Err(crate::Error::Asn1(format!(
+            other => Err(crate::Error::UnsupportedHashAlgorithm(format!(
                 "no RFC 3161 algorithm identifier for {other}"
             ))),
         }
