@@ -24,7 +24,10 @@ impl HexLogId {
 
     /// Decode to raw bytes
     pub fn decode(&self) -> Result<Vec<u8>> {
-        hex::decode(&self.0).map_err(|e| Error::InvalidEncoding(format!("invalid hex: {}", e)))
+        hex::decode(&self.0).map_err(|e| Error::InvalidEncoding {
+            encoding: sigstore_types::Encoding::Hex,
+            source: Box::new(e),
+        })
     }
 
     /// The same ID in the bundle's representation.
@@ -79,7 +82,10 @@ impl HexHash {
 
     /// Decode to raw bytes
     pub fn decode(&self) -> Result<Vec<u8>> {
-        hex::decode(&self.0).map_err(|e| Error::InvalidEncoding(format!("invalid hex: {}", e)))
+        hex::decode(&self.0).map_err(|e| Error::InvalidEncoding {
+            encoding: sigstore_types::Encoding::Hex,
+            source: Box::new(e),
+        })
     }
 
     /// Decode as a SHA-256 hash (validates the length).

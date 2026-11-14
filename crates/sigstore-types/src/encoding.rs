@@ -9,7 +9,7 @@
 //! - Types handle their own encoding/decoding via serde
 //! - Clear type names prevent mixing up different kinds of data
 
-use crate::error::{Error, Result};
+use crate::error::{Encoding, Error, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
@@ -147,7 +147,7 @@ macro_rules! base64_newtype {
             /// Create from base64-encoded string
             pub fn from_base64(s: &str) -> Result<Self> {
                 let bytes = decode_protojson_base64(s)
-                    .map_err(|e| Error::InvalidEncoding(format!("invalid base64: {}", e)))?;
+                    .map_err(|e| Error::encoding(Encoding::Base64, e))?;
                 Ok(Self(bytes))
             }
 
@@ -252,14 +252,13 @@ impl DerCertificate {
     /// Validates that the PEM block has a `CERTIFICATE` header.
     /// Returns an error if the PEM is invalid or has the wrong type.
     pub fn from_pem(pem_str: &str) -> Result<Self> {
-        let parsed = pem::parse(pem_str)
-            .map_err(|e| Error::InvalidEncoding(format!("failed to parse PEM: {}", e)))?;
+        let parsed = pem::parse(pem_str).map_err(|e| Error::encoding(Encoding::Pem, e))?;
 
         if parsed.tag() != "CERTIFICATE" {
-            return Err(Error::InvalidEncoding(format!(
-                "expected CERTIFICATE PEM block, got {}",
-                parsed.tag()
-            )));
+            return Err(Error::UnexpectedPemLabel {
+                expected: "CERTIFICATE",
+                actual: parsed.tag().to_string(),
+            });
         }
 
         Ok(Self::new(parsed.contents().to_vec()))
@@ -298,14 +297,13 @@ impl DerPublicKey {
     /// Validates that the PEM block has a `PUBLIC KEY` header.
     /// Returns an error if the PEM is invalid or has the wrong type.
     pub fn from_pem(pem_str: &str) -> Result<Self> {
-        let parsed = pem::parse(pem_str)
-            .map_err(|e| Error::InvalidEncoding(format!("failed to parse PEM: {}", e)))?;
+        let parsed = pem::parse(pem_str).map_err(|e| Error::encoding(Encoding::Pem, e))?;
 
         if parsed.tag() != "PUBLIC KEY" {
-            return Err(Error::InvalidEncoding(format!(
-                "expected PUBLIC KEY PEM block, got {}",
-                parsed.tag()
-            )));
+            return Err(Error::UnexpectedPemLabel {
+                expected: "PUBLIC KEY",
+                actual: parsed.tag().to_string(),
+            });
         }
 
         Ok(Self::new(parsed.contents().to_vec()))
@@ -430,7 +428,7 @@ impl LogIndex {
     /// Create a log index; fails if it does not fit a protobuf `int64`.
     pub fn new(index: u64) -> Result<Self> {
         if index > i64::MAX as u64 {
-            return Err(Error::Validation("log index exceeds protobuf int64".into()));
+            return Err(Error::InvalidLogIndex(index.to_string()));
         }
         Ok(Self(index))
     }
@@ -458,7 +456,7 @@ impl TryFrom<i64> for LogIndex {
     fn try_from(index: i64) -> Result<Self> {
         u64::try_from(index)
             .map(Self)
-            .map_err(|_| Error::Validation("log index must not be negative".into()))
+            .map_err(|_| Error::InvalidLogIndex(index.to_string()))
     }
 }
 
@@ -473,7 +471,7 @@ impl std::str::FromStr for LogIndex {
     fn from_str(s: &str) -> Result<Self> {
         let index = s
             .parse::<u64>()
-            .map_err(|e| Error::Validation(format!("invalid log index {s:?}: {e}")))?;
+            .map_err(|_| Error::InvalidLogIndex(s.to_string()))?;
         Self::new(index)
     }
 }
@@ -594,11 +592,10 @@ impl TryFrom<&[u8]> for KeyHint {
 
     /// The slice must be exactly 4 bytes.
     fn try_from(slice: &[u8]) -> Result<Self> {
-        let bytes: [u8; 4] = slice.try_into().map_err(|_| {
-            Error::Validation(format!(
-                "key hint must be exactly 4 bytes, got {}",
-                slice.len()
-            ))
+        let bytes: [u8; 4] = slice.try_into().map_err(|_| Error::InvalidLength {
+            what: "key hint",
+            expected: 4,
+            actual: slice.len(),
         })?;
         Ok(KeyHint(bytes))
     }
@@ -678,14 +675,14 @@ macro_rules! fixed_hash {
             /// Parse a hex-encoded digest.
             pub fn from_hex(hex_str: &str) -> Result<Self> {
                 let bytes = hex::decode(hex_str)
-                    .map_err(|e| Error::InvalidEncoding(format!("invalid hex: {e}")))?;
+                    .map_err(|e| Error::encoding(Encoding::Hex, e))?;
                 Self::try_from(bytes.as_slice())
             }
 
             /// Parse a base64-encoded digest (standard or URL-safe, padded or not).
             pub fn from_base64(s: &str) -> Result<Self> {
                 let bytes = decode_protojson_base64(s)
-                    .map_err(|e| Error::InvalidEncoding(format!("invalid base64: {e}")))?;
+                    .map_err(|e| Error::encoding(Encoding::Base64, e))?;
                 Self::try_from(bytes.as_slice())
             }
 
@@ -722,11 +719,10 @@ macro_rules! fixed_hash {
             type Error = Error;
 
             fn try_from(bytes: &[u8]) -> Result<Self> {
-                let bytes: [u8; $len] = bytes.try_into().map_err(|_| {
-                    Error::InvalidEncoding(format!(
-                        concat!($label, " hash must be ", $len, " bytes, got {}"),
-                        bytes.len()
-                    ))
+                let bytes: [u8; $len] = bytes.try_into().map_err(|_| Error::InvalidLength {
+                    what: concat!($label, " hash"),
+                    expected: $len,
+                    actual: bytes.len(),
                 })?;
                 Ok(Self(bytes))
             }
@@ -922,7 +918,7 @@ impl DigestBytes {
     pub fn from_hex(value: &str) -> Result<Self> {
         hex::decode(value)
             .map(Self)
-            .map_err(|e| Error::InvalidEncoding(e.to_string()))
+            .map_err(|e| Error::encoding(Encoding::Hex, e))
     }
 
     /// Lowercase hex encoding.
@@ -1094,12 +1090,55 @@ mod tests {
     #[test]
     fn test_certificate_from_pem_wrong_type() {
         let pem = "-----BEGIN PRIVATE KEY-----\nYWJjZA==\n-----END PRIVATE KEY-----";
-        let result = DerCertificate::from_pem(pem);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("expected CERTIFICATE"));
+        assert!(matches!(
+            DerCertificate::from_pem(pem),
+            Err(Error::UnexpectedPemLabel { expected: "CERTIFICATE", actual }) if actual == "PRIVATE KEY"
+        ));
+    }
+
+    #[test]
+    fn errors_are_typed() {
+        assert!(matches!(
+            Sha256Hash::try_from([0u8; 31].as_slice()),
+            Err(Error::InvalidLength {
+                expected: 32,
+                actual: 31,
+                ..
+            })
+        ));
+        assert!(matches!(
+            KeyHint::try_from([0u8; 5].as_slice()),
+            Err(Error::InvalidLength {
+                what: "key hint",
+                expected: 4,
+                actual: 5
+            })
+        ));
+        assert!(matches!(
+            LogIndex::try_from(-1i64),
+            Err(Error::InvalidLogIndex(value)) if value == "-1"
+        ));
+        assert!(matches!(
+            "nope".parse::<LogIndex>(),
+            Err(Error::InvalidLogIndex(value)) if value == "nope"
+        ));
+        assert!(matches!(
+            LogIndex::new(u64::MAX),
+            Err(Error::InvalidLogIndex(_))
+        ));
+        for (result, expected) in [
+            (Sha256Hash::from_hex("zz").map(|_| ()), Encoding::Hex),
+            (LogKeyId::from_base64("!!").map(|_| ()), Encoding::Base64),
+            (DerPublicKey::from_pem("not pem").map(|_| ()), Encoding::Pem),
+        ] {
+            match result {
+                Err(Error::InvalidEncoding { encoding, source }) => {
+                    assert_eq!(encoding, expected);
+                    assert!(!source.to_string().is_empty());
+                }
+                other => panic!("unexpected result: {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -1124,12 +1163,10 @@ mod tests {
     #[test]
     fn test_public_key_from_pem_wrong_type() {
         let pem = "-----BEGIN PRIVATE KEY-----\nYWJjZA==\n-----END PRIVATE KEY-----";
-        let result = DerPublicKey::from_pem(pem);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("expected PUBLIC KEY"));
+        assert!(matches!(
+            DerPublicKey::from_pem(pem),
+            Err(Error::UnexpectedPemLabel { expected: "PUBLIC KEY", actual }) if actual == "PRIVATE KEY"
+        ));
     }
 
     #[test]
