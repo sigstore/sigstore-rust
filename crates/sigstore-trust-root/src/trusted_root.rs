@@ -15,6 +15,10 @@ use sigstore_types::{
 #[non_exhaustive]
 pub struct TrustedRoot {
     /// Media type of the trusted root
+    ///
+    /// Empty when the document omits it, as proto3 JSON writers do for an
+    /// empty string.
+    #[serde(default)]
     pub media_type: String,
 
     /// Transparency logs (Rekor)
@@ -39,11 +43,16 @@ pub struct TrustedRoot {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct TransparencyLog {
-    /// Base URL of the transparency log
+    /// Base URL of the transparency log (empty if omitted)
+    #[serde(default)]
     pub base_url: String,
 
-    /// Hash algorithm used
-    pub hash_algorithm: HashAlgorithm,
+    /// Hash algorithm used, if the document specifies one
+    ///
+    /// `None` when the field is omitted: proto3 JSON writers omit the enum's
+    /// default value, `HASH_ALGORITHM_UNSPECIFIED`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash_algorithm: Option<HashAlgorithm>,
 
     /// Public key for verification
     pub public_key: PublicKey,
@@ -61,7 +70,8 @@ pub struct CertificateAuthority {
     #[serde(default)]
     pub subject: CertificateSubject,
 
-    /// URI of the CA
+    /// URI of the CA (empty if omitted)
+    #[serde(default)]
     pub uri: String,
 
     /// Certificate chain
@@ -77,11 +87,16 @@ pub struct CertificateAuthority {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct CertificateTransparencyLog {
-    /// Base URL of the CT log
+    /// Base URL of the CT log (empty if omitted)
+    #[serde(default)]
     pub base_url: String,
 
-    /// Hash algorithm used
-    pub hash_algorithm: HashAlgorithm,
+    /// Hash algorithm used, if the document specifies one
+    ///
+    /// `None` when the field is omitted: proto3 JSON writers omit the enum's
+    /// default value, `HASH_ALGORITHM_UNSPECIFIED`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash_algorithm: Option<HashAlgorithm>,
 
     /// Public key for verification
     pub public_key: PublicKey,
@@ -116,7 +131,9 @@ pub struct TimestampAuthority {
 ///
 /// Kept as the specification's string, so trust roots listing algorithms this
 /// crate does not know still parse.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+///
+/// Empty when the document omits it (proto3's `PUBLIC_KEY_DETAILS_UNSPECIFIED`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct PublicKeyDetails(String);
 
@@ -146,7 +163,8 @@ pub struct PublicKey {
     /// Raw bytes of the public key (DER-encoded)
     pub raw_bytes: DerPublicKey,
 
-    /// Key details/type
+    /// Key details/type (empty if omitted)
+    #[serde(default)]
     pub key_details: PublicKeyDetails,
 
     /// Validity period for this key
@@ -439,6 +457,47 @@ impl TrustedRoot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Proto3 JSON writers (e.g. `cosign trusted-root create`) omit empty
+    /// strings and unspecified enums; such a root must still parse, and with
+    /// the same verification material.
+    #[test]
+    fn proto3_omitted_defaults_parse() {
+        let mut json: serde_json::Value =
+            serde_json::from_str(crate::SIGSTORE_PRODUCTION_TRUSTED_ROOT).unwrap();
+        json.as_object_mut().unwrap().remove("mediaType");
+        for list in ["tlogs", "ctlogs"] {
+            for log in json[list].as_array_mut().unwrap() {
+                let log = log.as_object_mut().unwrap();
+                log.remove("baseUrl");
+                log.remove("hashAlgorithm");
+                log["publicKey"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("keyDetails");
+            }
+        }
+        for ca in json["certificateAuthorities"].as_array_mut().unwrap() {
+            ca.as_object_mut().unwrap().remove("uri");
+        }
+
+        let stripped = TrustedRoot::from_json(&json.to_string()).unwrap();
+        let full = TrustedRoot::from_json(crate::SIGSTORE_PRODUCTION_TRUSTED_ROOT).unwrap();
+        assert_eq!(stripped.media_type, "");
+        assert_eq!(stripped.tlogs[0].hash_algorithm, None);
+        assert_eq!(full.tlogs[0].hash_algorithm, Some(HashAlgorithm::Sha2256));
+        assert_eq!(stripped.certificate_authorities[0].uri, "");
+        assert_eq!(stripped.tlogs[0].public_key.key_details.as_str(), "");
+        assert_eq!(
+            stripped.rekor_keys().unwrap().len(),
+            full.rekor_keys().unwrap().len()
+        );
+        assert_eq!(stripped.fulcio_certs(), full.fulcio_certs());
+
+        // Omitted fields stay omitted when serialized again.
+        let reserialized = serde_json::to_value(&stripped).unwrap();
+        assert!(reserialized["tlogs"][0].get("hashAlgorithm").is_none());
+    }
 
     const SAMPLE_TRUSTED_ROOT: &str = r#"{
         "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",

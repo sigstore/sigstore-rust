@@ -1965,3 +1965,26 @@ fn test_certificate_checked_against_every_verified_timestamp() {
         "expected a certificate validity failure, got: {msg}"
     );
 }
+
+/// A trusted root written by a proto3 JSON writer omits empty strings and
+/// unspecified enums. It parses, and verifies exactly like the full root.
+#[test]
+fn proto3_root_with_omitted_fields_verifies() {
+    let mut json: serde_json::Value =
+        serde_json::from_str(SIGSTORE_PRODUCTION_TRUSTED_ROOT).unwrap();
+    json.as_object_mut().unwrap().remove("mediaType");
+    for ca in json["certificateAuthorities"].as_array_mut().unwrap() {
+        ca.as_object_mut().unwrap().remove("uri");
+    }
+    for log in json["tlogs"].as_array_mut().unwrap() {
+        log.as_object_mut().unwrap().remove("hashAlgorithm");
+        log["publicKey"]
+            .as_object_mut()
+            .unwrap()
+            .remove("keyDetails");
+    }
+    let root = TrustedRoot::from_json(&json.to_string()).unwrap();
+
+    let bundle = Bundle::from_json(CONDA_ATTESTATION_BUNDLE).unwrap();
+    verify(CONDA_PACKAGE, &bundle, &conda_attestation_policy(), &root).unwrap();
+}
