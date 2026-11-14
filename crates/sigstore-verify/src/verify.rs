@@ -440,12 +440,27 @@ impl VerificationResult {
 }
 
 /// A verifier for Sigstore signatures
+///
+/// Cloning is cheap enough to add per-bundle material, such as a Rekor key
+/// learned at runtime, to a copy of a shared verifier (see
+/// [`Verifier::with_rekor_key`]).
+#[derive(Clone)]
 pub struct Verifier {
     /// Trusted root containing verification material
     trusted_root: TrustedRoot,
     rekor_keys: sigstore_crypto::Keyring,
     pub(crate) ct_keys: Vec<(SigningScheme, sigstore_crypto::Keyring)>,
     pub(crate) fulcio_anchors: Vec<crate::verify_impl::helpers::FulcioAnchor>,
+}
+
+impl std::fmt::Debug for Verifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Verifier")
+            .field("trusted_root", &self.trusted_root)
+            .field("rekor_keys", &self.rekor_keys.len())
+            .field("fulcio_anchors", &self.fulcio_anchors.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Verifier {
@@ -532,6 +547,45 @@ impl Verifier {
             ct_keys,
             fulcio_anchors,
         })
+    }
+
+    /// Trust an additional Rekor log key, identified by `log_id`.
+    ///
+    /// The key verifies inclusion promises (SETs) and checkpoints of entries
+    /// whose log ID is `log_id`, exactly like a key from the trusted root,
+    /// with no validity window. Sigstore log IDs are the SHA-256 digest of the
+    /// key's DER-encoded SubjectPublicKeyInfo, so `log_id` must be 32 bytes.
+    ///
+    /// Fails if `log_id` is not 32 bytes, if the key is malformed or of an
+    /// unsupported algorithm, or if a key with this log ID is already trusted;
+    /// a trusted key is never replaced.
+    ///
+    /// This is trust-on-first-use territory: a key added here is trusted on
+    /// the caller's word, without the TUF-distributed trusted root vouching
+    /// for it. Use it for private Sigstore deployments whose log key is
+    /// fetched or pinned out of band, and make sure that channel is
+    /// authenticated. To trust a key for a single verification only, add it
+    /// to a clone of a shared verifier.
+    pub fn with_rekor_key(
+        mut self,
+        log_id: sigstore_types::LogKeyId,
+        public_key: &sigstore_types::DerPublicKey,
+    ) -> Result<Self> {
+        let id = sigstore_types::Sha256Hash::try_from(log_id.as_bytes()).map_err(|_| {
+            Error::InvalidTrustRoot(format!(
+                "Rekor log ID must be 32 bytes, got {}",
+                log_id.as_bytes().len()
+            ))
+        })?;
+        if self.rekor_keys.key(&id).is_some() {
+            return Err(Error::InvalidTrustRoot(format!(
+                "duplicate trusted log ID: {}",
+                id.to_hex()
+            )));
+        }
+        let key = sigstore_crypto::VerificationKey::from_spki(public_key)?;
+        self.rekor_keys.add_key(id, key);
+        Ok(self)
     }
 
     /// Verify an artifact against a bundle.
