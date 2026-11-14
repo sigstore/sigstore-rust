@@ -10,6 +10,8 @@ rust-version.workspace = true
 [features]
 default = ["aws-lc-rs"]
 aws-lc-rs = ["dep:aws-lc-rs"]
+# Read and write cosign's encrypted private key format.
+cosign-key = ["dep:scrypt", "dep:crypto_secretbox", "dep:serde", "dep:serde_json", "dep:base64", "dep:pem", "dep:rand", "dep:zeroize"]
 
 [dependencies]
 sigstore-types = { workspace = true }
@@ -22,6 +24,14 @@ x509-cert = { workspace = true }
 jiff = { workspace = true }
 futures-io = { workspace = true }
 rustls-pki-types = { workspace = true }
+scrypt = { workspace = true, optional = true }
+crypto_secretbox = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+pem = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 base64 = { workspace = true }

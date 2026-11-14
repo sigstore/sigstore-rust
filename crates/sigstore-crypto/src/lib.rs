@@ -9,6 +9,8 @@
 mod aws_lc;
 
 pub mod checkpoint;
+#[cfg(feature = "cosign-key")]
+pub mod cosign_key;
 pub mod error;
 pub mod hash;
 pub mod keyring;

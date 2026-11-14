@@ -45,6 +45,11 @@ pub enum Error {
     /// Invalid key error
     #[error("Invalid key: {0}")]
     InvalidKey(String),
+
+    /// An encrypted private key could not be decrypted: the password is
+    /// wrong or the ciphertext is corrupted.
+    #[error("key decryption error: {0}")]
+    KeyDecryption(String),
 }
 
 /// Result type for cryptographic operations

@@ -37,6 +37,9 @@ thiserror = "2.0"
 aws-lc-rs = { version = "1.18" }
 boring = { version = "5", features = ["mldsa"] }
 rand = "0.10.0"
+# cosign encrypted private keys (scrypt + NaCl secretbox)
+scrypt = { version = "0.12", default-features = false }
+crypto_secretbox = { version = "0.1", default-features = false, features = ["alloc", "salsa20"] }
 
 # ASN.1 / X.509
 der = { version = "0.7", features = ["alloc", "derive", "oid"] }
@@ -116,3 +119,10 @@ sigstore-fulcio = { path = "crates/sigstore-fulcio", version = "0.16.0", default
 sigstore-oidc = { path = "crates/sigstore-oidc", version = "0.16.0", default-features = false }
 sigstore-verify = { path = "crates/sigstore-verify", version = "0.16.0", default-features = false }
 sigstore-sign = { path = "crates/sigstore-sign", version = "0.16.0", default-features = false }
+
+# scrypt (cosign encrypted keys) is unusably slow unoptimized; keep debug
+# builds and tests fast.
+[profile.dev.package.scrypt]
+opt-level = 3
+[profile.dev.package.salsa20]
+opt-level = 3
