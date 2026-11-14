@@ -7,8 +7,9 @@ use thiserror::Error;
 #[non_exhaustive]
 pub enum Error {
     /// The request could not be sent or the response could not be read
-    #[error("HTTP error: {0}")]
-    Http(String),
+    /// (connection, TLS, timeout). Retrying may succeed.
+    #[error("Fulcio request failed: {0}")]
+    Transport(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     /// Fulcio answered with a non-success HTTP status
     #[error("Fulcio returned HTTP {status}: {message}")]
@@ -26,7 +27,7 @@ pub enum Error {
     /// The key pair could not produce the request (public key export or
     /// proof of possession)
     #[error("failed to prepare the certificate request: {0}")]
-    Signing(String),
+    Signing(#[source] sigstore_crypto::Error),
 
     /// JSON error
     #[error("JSON error: {0}")]
