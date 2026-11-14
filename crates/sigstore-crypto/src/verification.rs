@@ -127,6 +127,7 @@ pub fn validate_raw_public_key(scheme: SigningScheme, spki_pubkey_bytes: &[u8]) 
 }
 
 /// A public key for verification
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerificationKey {
     /// Raw public key bytes (format depends on scheme)
     bytes: Vec<u8>,
@@ -375,6 +376,21 @@ mod tests {
             VerificationKey::from_spki(&key),
             Err(Error::InvalidKey(_))
         ));
+    }
+
+    #[test]
+    fn verification_key_is_clone_and_debug() {
+        fn assert_traits<T: Clone + std::fmt::Debug + PartialEq>() {}
+        assert_traits::<VerificationKey>();
+        fn assert_debug_clone<T: Clone + std::fmt::Debug>() {}
+        assert_debug_clone::<crate::Keyring>();
+
+        let key = VerificationKey {
+            bytes: vec![4u8; 65],
+            scheme: SigningScheme::EcdsaP256Sha256,
+        };
+        assert_eq!(key.clone(), key);
+        assert!(format!("{key:?}").contains("EcdsaP256Sha256"));
     }
 
     #[test]
