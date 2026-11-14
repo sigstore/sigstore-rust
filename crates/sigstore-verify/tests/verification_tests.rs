@@ -1965,3 +1965,77 @@ fn test_certificate_checked_against_every_verified_timestamp() {
         "expected a certificate validity failure, got: {msg}"
     );
 }
+
+// ==== Low-level transparency log checks ====
+
+fn v03_dsse_entry_and_key() -> (
+    sigstore_types::TransparencyLogEntry,
+    sigstore_verify::crypto::VerificationKey,
+) {
+    let bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
+    let entry = bundle.verification_material.tlog_entries[0].clone();
+    let rekor = production_root()
+        .tlogs
+        .into_iter()
+        .find(|log| log.log_id.key_id == entry.log_id.key_id)
+        .unwrap();
+    let key =
+        sigstore_verify::crypto::VerificationKey::from_spki(&rekor.public_key.raw_bytes).unwrap();
+    (entry, key)
+}
+
+#[test]
+fn tlog_checks_with_a_keyring() {
+    use sigstore_verify::tlog;
+    let (entry, _) = v03_dsse_entry_and_key();
+    let keys = production_root().rekor_keys().unwrap();
+
+    tlog::verify_inclusion_proof(&entry).unwrap();
+    tlog::verify_checkpoint(&entry, &keys).unwrap();
+    tlog::verify_set(&entry, &keys).unwrap();
+    tlog::verify_entry_inclusion(&entry, &keys).unwrap();
+
+    let empty = sigstore_verify::crypto::Keyring::new();
+    assert!(tlog::verify_checkpoint(&entry, &empty).is_err());
+    assert!(tlog::verify_set(&entry, &empty).is_err());
+    assert!(tlog::verify_entry_inclusion(&entry, &empty).is_err());
+}
+
+#[test]
+fn tlog_checks_with_a_single_key() {
+    use sigstore_verify::tlog;
+    let (entry, key) = v03_dsse_entry_and_key();
+
+    tlog::verify_checkpoint_with_key(&entry, &key).unwrap();
+    tlog::verify_set_with_key(&entry, &key).unwrap();
+    tlog::verify_entry_inclusion_with_key(&entry, &key).unwrap();
+
+    // Any other key fails, even though no log ID lookup happens.
+    let other = sigstore_verify::crypto::KeyPair::generate_ecdsa_p256().unwrap();
+    let other =
+        sigstore_verify::crypto::VerificationKey::from_spki(&other.public_key_der().unwrap())
+            .unwrap();
+    assert!(tlog::verify_checkpoint_with_key(&entry, &other).is_err());
+    assert!(tlog::verify_set_with_key(&entry, &other).is_err());
+}
+
+#[test]
+fn tlog_checks_reject_tampering_and_missing_evidence() {
+    use sigstore_verify::tlog;
+    let (entry, key) = v03_dsse_entry_and_key();
+
+    let mut tampered = entry.clone();
+    let mut body = tampered.canonicalized_body.as_bytes().to_vec();
+    body.push(b' ');
+    tampered.canonicalized_body = sigstore_types::CanonicalizedBody::new(body);
+    assert!(tlog::verify_inclusion_proof(&tampered).is_err());
+    assert!(tlog::verify_set_with_key(&tampered, &key).is_err());
+
+    let mut bare = entry;
+    bare.inclusion_proof = None;
+    bare.inclusion_promise = None;
+    assert!(tlog::verify_inclusion_proof(&bare).is_err());
+    assert!(tlog::verify_checkpoint_with_key(&bare, &key).is_err());
+    assert!(tlog::verify_set_with_key(&bare, &key).is_err());
+    assert!(tlog::verify_entry_inclusion_with_key(&bare, &key).is_err());
+}
