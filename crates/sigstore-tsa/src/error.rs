@@ -6,28 +6,45 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
-    /// HTTP request error
-    #[error("HTTP error: {0}")]
-    Http(String),
+    /// The TSA answered with a non-success HTTP status.
+    #[error("TSA returned HTTP {status}: {message}")]
+    Status {
+        /// The HTTP status code
+        status: u16,
+        /// The status reason or response detail
+        message: String,
+    },
 
-    /// ASN.1 encoding/decoding error
-    #[error("ASN.1 error: {0}")]
-    Asn1(String),
+    /// The request could not be sent or the response could not be read
+    /// (connection, TLS, timeout). Retrying may succeed.
+    #[error("TSA request failed: {0}")]
+    Transport(#[source] Box<dyn std::error::Error + Send + Sync>),
 
-    /// Timestamp verification error
-    #[error("Timestamp verification error: {0}")]
-    Verification(String),
+    /// The TSA's response does not answer the request: this field differs.
+    #[error("TSA response does not match the request: {field} differs")]
+    ResponseMismatch {
+        /// The mismatching field
+        field: ResponseField,
+    },
 
-    /// Invalid timestamp response
-    #[error("Invalid timestamp response: {0}")]
-    InvalidResponse(String),
+    /// The timestamp request was not granted; `status` is the RFC 3161
+    /// `PKIStatus`.
+    #[error("timestamp request not granted (status {status})")]
+    NotGranted {
+        /// The `PKIStatus` value
+        status: u8,
+    },
 
-    /// Failed to verify timestamp signature
-    #[error("Failed to verify timestamp signature: {0}")]
-    SignatureVerificationError(String),
+    /// The timestamp response carries no timestamp token.
+    #[error("no timestamp token in response")]
+    NoToken,
 
-    /// Timestamp message hash does not match signature
-    #[error("Timestamp message hash mismatch: expected {expected}, got {actual}")]
+    /// The timestamp token carries no TSTInfo.
+    #[error("no TSTInfo in timestamp token")]
+    NoTstInfo,
+
+    /// The message imprint in the token does not match the timestamped data.
+    #[error("timestamp message hash mismatch: expected {expected}, got {actual}")]
     HashMismatch {
         /// The hex-encoded digest the token commits to
         expected: String,
@@ -35,28 +52,27 @@ pub enum Error {
         actual: String,
     },
 
-    /// Timestamp response indicates failure status
-    #[error("Timestamp response indicates failure status")]
-    ResponseFailure,
+    /// The token's signature does not verify, or its signer cannot be
+    /// determined.
+    #[error("invalid timestamp signature: {0}")]
+    SignatureInvalid(String),
 
-    /// No timestamp token in response
-    #[error("No timestamp token in response")]
-    NoToken,
+    /// The TSA certificate does not chain to a trusted authority or is
+    /// otherwise unacceptable.
+    #[error("TSA certificate is invalid: {0}")]
+    CertificateInvalid(String),
 
-    /// No TSTInfo in timestamp token
-    #[error("No TSTInfo in timestamp token")]
-    NoTstInfo,
+    /// The leaf certificate lacks the timeStamping extended key usage.
+    #[error("leaf certificate does not have the timeStamping extended key usage")]
+    MissingTimestampingEku,
 
-    /// Leaf certificate does not have TimeStamping EKU
-    #[error("Leaf certificate does not have TimeStamping Extended Key Usage")]
-    InvalidEKU,
+    /// The hash algorithm has no RFC 3161 encoding here, or the token uses
+    /// one this crate does not support.
+    #[error("unsupported hash algorithm: {0}")]
+    UnsupportedHashAlgorithm(String),
 
-    /// TSA certificate validation failed
-    #[error("TSA certificate validation failed: {0}")]
-    CertificateValidationError(String),
-
-    /// The timestamp response or token could not be parsed
-    #[error("Failed to parse timestamp response: {0}")]
+    /// The timestamp response or token could not be parsed.
+    #[error("failed to parse timestamp response: {0}")]
     Parse(String),
 
     /// The token is authentic, but its signed time falls outside the
@@ -68,6 +84,32 @@ pub enum Error {
         /// The authenticated signed time of the token
         time: jiff::Timestamp,
     },
+
+    /// Any other failure, such as an internal encoding error.
+    #[error(transparent)]
+    Other(Box<dyn std::error::Error + Send + Sync>),
+}
+
+/// A field of a timestamp response that must echo the request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ResponseField {
+    /// The message imprint's hash algorithm
+    HashAlgorithm,
+    /// The message imprint's digest
+    MessageImprint,
+    /// The request nonce
+    Nonce,
+}
+
+impl std::fmt::Display for ResponseField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::HashAlgorithm => "hash algorithm",
+            Self::MessageImprint => "message imprint",
+            Self::Nonce => "nonce",
+        })
+    }
 }
 
 /// Result type for TSA operations
