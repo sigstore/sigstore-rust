@@ -153,9 +153,10 @@ pub(crate) fn verify_merkle_inclusion(
     proof: &InclusionProof,
 ) -> Result<()> {
     let (leaf_index, tree_size, root_hash) = if is_rekor_v2(entry) {
-        let checkpoint = proof.checkpoint.checkpoint().ok_or_else(|| {
-            Error::checkpoint("Rekor v2 inclusion proof has no checkpoint".to_string())
-        })?;
+        let checkpoint = proof
+            .checkpoint
+            .checkpoint()
+            .ok_or_else(|| Error::from(crate::error::TransparencyLogError::MissingCheckpoint))?;
         let leaf_index = entry.log_index.get();
         (leaf_index, checkpoint.tree_size(), *checkpoint.root_hash())
     } else {
@@ -186,7 +187,7 @@ pub(crate) fn verify_checkpoint_with(
 ) -> Result<()> {
     // Parse the checkpoint (signed note)
     let checkpoint = Checkpoint::from_text(checkpoint_envelope)
-        .map_err(|e| Error::checkpoint(format!("Failed to parse checkpoint: {}", e)))?;
+        .map_err(|e| Error::checkpoint(format!("failed to parse checkpoint: {e}")))?;
 
     // Rekor v1 requires internal consistency with its duplicate proof root.
     // Rekor v2 explicitly treats that field as unauthenticated and ignores it.
@@ -194,11 +195,11 @@ pub(crate) fn verify_checkpoint_with(
     let proof_root_hash = &inclusion_proof.root_hash;
 
     if !is_v2 && checkpoint_root_hash.as_bytes() != proof_root_hash.as_bytes() {
-        return Err(Error::checkpoint(format!(
-            "Checkpoint root hash mismatch: expected {}, got {}",
-            checkpoint_root_hash.to_hex(),
-            proof_root_hash.to_hex()
-        )));
+        return Err(crate::error::TransparencyLogError::CheckpointRootMismatch {
+            checkpoint_root: *checkpoint_root_hash,
+            proof_root: *proof_root_hash,
+        }
+        .into());
     }
 
     // A checkpoint can contain log and witness signatures. TrustedRoot keeps
@@ -257,7 +258,7 @@ pub(crate) fn verify_set_with(entry: &TransparencyLogEntry, keys: LogKeys<'_>) -
     let promise = entry
         .inclusion_promise
         .as_ref()
-        .ok_or(Error::inclusion_promise("Missing inclusion promise".into()))?;
+        .ok_or(crate::error::TransparencyLogError::MissingInclusionPromise)?;
 
     // Find the key for the log ID. When the entry carries an integrated
     // time, require the log key's validity window to cover it: an entry must
