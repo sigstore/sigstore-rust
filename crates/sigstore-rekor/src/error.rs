@@ -7,8 +7,9 @@ use thiserror::Error;
 #[non_exhaustive]
 pub enum Error {
     /// The request could not be sent or the response could not be read
-    #[error("HTTP error: {0}")]
-    Http(String),
+    /// (connection, TLS, timeout). Retrying may succeed.
+    #[error("Rekor request failed: {0}")]
+    Transport(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     /// Rekor answered with a non-success HTTP status (for example 409 when
     /// the entry already exists)
@@ -29,7 +30,7 @@ pub enum Error {
     Merkle(#[from] sigstore_merkle::Error),
 
     /// The response did not have the expected shape
-    #[error("Invalid response: {0}")]
+    #[error("invalid response: {0}")]
     InvalidResponse(String),
 }
 
