@@ -33,15 +33,15 @@ pub enum Error {
     InvalidStatement(#[source] serde_json::Error),
 
     /// Types error
-    #[error("Types error: {0}")]
+    #[error("types error: {0}")]
     Types(#[from] sigstore_types::Error),
 
     /// Key generation or signing failed.
-    #[error("Crypto error: {0}")]
+    #[error("crypto error: {0}")]
     Crypto(#[from] sigstore_crypto::Error),
 
     /// Bundle error
-    #[error("Bundle error: {0}")]
+    #[error("bundle error: {0}")]
     Bundle(#[from] sigstore_bundle::Error),
 
     /// The transparency log rejected the entry or returned an invalid

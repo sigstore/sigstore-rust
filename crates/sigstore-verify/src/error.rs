@@ -75,19 +75,19 @@ pub enum Error {
     InvalidTrustRoot(String),
 
     /// Types error
-    #[error("Types error: {0}")]
+    #[error("types error: {0}")]
     Types(#[from] sigstore_types::Error),
 
     /// Crypto error
-    #[error("Crypto error: {0}")]
+    #[error("crypto error: {0}")]
     Crypto(#[from] sigstore_crypto::Error),
 
     /// Bundle error
-    #[error("Bundle error: {0}")]
+    #[error("bundle error: {0}")]
     Bundle(#[from] sigstore_bundle::Error),
 
     /// Invalid trust-root configuration.
-    #[error("Trust root error: {0}")]
+    #[error("trust root error: {0}")]
     TrustRoot(#[from] sigstore_trust_root::Error),
 
     /// A configured authority certificate could not be parsed.
