@@ -1050,7 +1050,12 @@ fn test_verify_conda_package_tampered_from_reader() {
         )
         .unwrap_err();
     assert!(
-        matches!(err, sigstore_verify::Error::ArtifactMismatch(_)),
+        matches!(
+            err,
+            sigstore_verify::Error::ArtifactMismatch {
+                binding: sigstore_verify::ArtifactBinding::StatementSubject
+            }
+        ),
         "unexpected error: {err}"
     );
 }
@@ -1089,7 +1094,12 @@ fn test_verify_conda_package_tampered() {
 
     let result = verify(tampered_package, &bundle, &policy, &production_root());
     assert!(
-        matches!(result, Err(sigstore_verify::Error::ArtifactMismatch(_))),
+        matches!(
+            result,
+            Err(sigstore_verify::Error::ArtifactMismatch {
+                binding: sigstore_verify::ArtifactBinding::StatementSubject
+            })
+        ),
         "Verification should fail with tampered package: {result:?}"
     );
 }
@@ -1455,7 +1465,12 @@ fn test_foreign_tlog_entry_rejected_even_when_tlog_skipped() {
     let err = verify(artifact, &bundle, &policy, &production_root())
         .expect_err("a log entry from an unrelated signature must not verify");
     assert!(
-        err.to_string().contains("hashedrekord"),
+        matches!(
+            err,
+            sigstore_verify::Error::ArtifactMismatch {
+                binding: sigstore_verify::ArtifactBinding::LogEntryDigest
+            }
+        ),
         "expected the entry to be rejected as inconsistent with the bundle, got: {err}"
     );
 }
@@ -2093,6 +2108,72 @@ fn missing_checkpoint_key_is_typed() {
         matches!(
             err,
             sigstore_verify::Error::TransparencyLog(TransparencyLogError::Checkpoint(_))
+        ),
+        "unexpected error: {err:?}"
+    );
+}
+
+/// Missing or inconsistent log evidence has its own variants.
+#[test]
+fn missing_and_inconsistent_log_evidence_is_typed() {
+    use sigstore_verify::{tlog, TransparencyLogError as T};
+    let (entry, key) = v03_dsse_entry_and_key();
+
+    let mut bare = entry.clone();
+    bare.inclusion_proof = None;
+    bare.inclusion_promise = None;
+    assert!(matches!(
+        tlog::verify_inclusion_proof(&bare),
+        Err(sigstore_verify::Error::TransparencyLog(
+            T::MissingInclusionProof
+        ))
+    ));
+    assert!(matches!(
+        tlog::verify_set_with_key(&bare, &key),
+        Err(sigstore_verify::Error::TransparencyLog(
+            T::MissingInclusionPromise
+        ))
+    ));
+    assert!(matches!(
+        tlog::verify_entry_inclusion_with_key(&bare, &key),
+        Err(sigstore_verify::Error::TransparencyLog(
+            T::NoInclusionEvidence
+        ))
+    ));
+
+    let mut mismatched = entry;
+    let proof = mismatched.inclusion_proof.as_mut().unwrap();
+    let checkpoint_root = proof.root_hash;
+    proof.root_hash = Sha256Hash::new([7; 32]);
+    let err = tlog::verify_checkpoint_with_key(&mismatched, &key).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            sigstore_verify::Error::TransparencyLog(T::CheckpointRootMismatch {
+                checkpoint_root: c,
+                proof_root: p,
+            }) if c == checkpoint_root && p == Sha256Hash::new([7; 32])
+        ),
+        "unexpected error: {err:?}"
+    );
+}
+
+/// GitHub's private-instance certificates carry no SCT, so requiring one
+/// reports the missing SCT as such.
+#[test]
+fn missing_sct_is_typed() {
+    let bundle = Bundle::from_json(GITHUB_PRIVATE_ATTESTATION_BUNDLE).unwrap();
+    let digest =
+        Sha256Hash::from_hex("76f1fe8593bf227cca2c089e3c16dc95014a8d3e89c5dd220530469ca043c428")
+            .unwrap();
+    let root = TrustedRoot::from_embedded(SigstoreInstance::GitHub).unwrap();
+    let policy = VerificationPolicy::any_identity().skip_tlog_unsafe();
+
+    let err = verify(digest, &bundle, &policy, &root).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            sigstore_verify::Error::Certificate(sigstore_verify::CertificateError::SctMissing)
         ),
         "unexpected error: {err:?}"
     );
