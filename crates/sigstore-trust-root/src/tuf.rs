@@ -300,7 +300,7 @@ impl TufClient {
                     } else {
                         "failed to fetch target"
                     };
-                    Error::Tuf(format!("{context} '{name}': {}", error_chain(&e)))
+                    Error::from_tuf(format!("{context} '{name}'"), e)
                 })?;
             results.push(bytes);
         }
@@ -314,16 +314,19 @@ impl TufClient {
             TufBootstrap::TrustedRoot(root) => Ok(root.clone()),
             TufBootstrap::UnsafeCachedRoot => {
                 if self.config.disable_cache {
-                    return Err(Error::Tuf(
-                        "TufBootstrap::UnsafeCachedRoot requires caching to be enabled".into(),
+                    return Err(Error::tuf(
+                        "TufBootstrap::UnsafeCachedRoot requires caching to be enabled",
                     ));
                 }
                 let path = self.get_cache_dir()?.join("root.json");
                 std::fs::read(&path).map_err(|e| {
-                    Error::Tuf(format!(
-                        "could not read explicitly trusted cached TUF root '{}': {e}",
-                        path.display()
-                    ))
+                    Error::tuf_caused_by(
+                        format!(
+                            "could not read explicitly trusted cached TUF root '{}'",
+                            path.display()
+                        ),
+                        e,
+                    )
                 })
             }
         }
@@ -337,27 +340,27 @@ impl TufClient {
     /// written through to the per-URL cache directory so a later `offline()`
     /// run can serve them.
     async fn build_updater(&self, validation_time: jiff::Timestamp) -> Result<Updater> {
-        let mut repo =
-            HttpRepository::new(&self.config.url).map_err(|e| Error::Tuf(error_chain(&e)))?;
+        let mut repo = HttpRepository::new(&self.config.url)
+            .map_err(|e| Error::from_tuf("invalid TUF repository", e))?;
         if let Some(client) = &self.config.http_client {
             repo = repo.with_http_client(client.clone());
         }
         let root_bytes = self.get_root_json()?;
         let mut updater =
-            Updater::new(repo, &root_bytes).map_err(|e| Error::Tuf(error_chain(&e)))?;
+            Updater::new(repo, &root_bytes).map_err(|e| Error::from_tuf("invalid TUF root", e))?;
 
         if !self.config.disable_cache {
             let cache_dir = self.get_cache_dir()?;
             tokio::fs::create_dir_all(&cache_dir)
                 .await
-                .map_err(|e| Error::Tuf(format!("Failed to create cache directory: {e}")))?;
+                .map_err(|e| Error::tuf_caused_by("failed to create cache directory", e))?;
             updater = updater.with_store(FileStore::new(cache_dir));
         }
 
         updater
             .refresh(validation_time)
             .await
-            .map_err(|e| Error::Tuf(format!("TUF repository load failed: {}", error_chain(&e))))?;
+            .map_err(|e| Error::from_tuf("TUF repository load failed", e))?;
         Ok(updater)
     }
 
@@ -372,22 +375,20 @@ impl TufClient {
     /// verified targets metadata.
     async fn build_offline_updater(&self, validation_time: jiff::Timestamp) -> Result<Updater> {
         if self.config.disable_cache {
-            return Err(Error::Tuf(
-                "offline mode requires a local TUF cache, but caching is disabled".into(),
+            return Err(Error::tuf(
+                "offline mode requires a local TUF cache, but caching is disabled",
             ));
         }
         let root_bytes = self.get_root_json()?;
         let cache_dir = self.get_cache_dir()?;
         let store = FileStore::new(&cache_dir);
         let mut updater = Updater::new(StoreRepository::new(store.clone()), &root_bytes)
-            .map_err(|e| Error::Tuf(error_chain(&e)))?
+            .map_err(|e| Error::from_tuf("invalid TUF root", e))?
             .with_store(store);
-        updater.refresh(validation_time).await.map_err(|e| {
-            Error::Tuf(format!(
-                "offline verification of cached metadata: {}",
-                error_chain(&e)
-            ))
-        })?;
+        updater
+            .refresh(validation_time)
+            .await
+            .map_err(|e| Error::from_tuf("offline verification of cached metadata", e))?;
         Ok(updater)
     }
 
@@ -402,7 +403,7 @@ impl TufClient {
 
         // Use platform-specific cache directory with URL namespace
         let project_dirs = directories::ProjectDirs::from("dev", "sigstore", "sigstore-rust")
-            .ok_or_else(|| Error::Tuf("Could not determine cache directory".into()))?;
+            .ok_or_else(|| Error::tuf("could not determine cache directory"))?;
 
         // Create URL-namespaced subdirectory
         let namespace = url_to_dirname(&self.config.url);
@@ -519,7 +520,7 @@ impl TrustedRoot {
         let client = TufClient::new(config);
         let bytes = client.fetch_target_at(target_name, validation_time).await?;
         let json = String::from_utf8(bytes)
-            .map_err(|e| Error::Tuf(format!("Invalid UTF-8 in {}: {}", target_name, e)))?;
+            .map_err(|e| Error::tuf_caused_by(format!("invalid UTF-8 in {target_name}"), e))?;
         Self::from_json(&json)
     }
 }
@@ -628,7 +629,7 @@ impl SigningConfig {
             .fetch_target_at(SIGNING_CONFIG_TARGET, validation_time)
             .await?;
         let json = String::from_utf8(bytes).map_err(|e| {
-            Error::Tuf(format!("Invalid UTF-8 in {}: {}", SIGNING_CONFIG_TARGET, e))
+            Error::tuf_caused_by(format!("invalid UTF-8 in {SIGNING_CONFIG_TARGET}"), e)
         })?;
         Self::from_json(&json)
     }
@@ -670,28 +671,15 @@ pub async fn fetch_trust_material_at(
         .await?;
 
     let root_json = String::from_utf8(results[0].clone())
-        .map_err(|e| Error::Tuf(format!("Invalid UTF-8 in {}: {}", TRUSTED_ROOT_TARGET, e)))?;
-    let config_json = String::from_utf8(results[1].clone())
-        .map_err(|e| Error::Tuf(format!("Invalid UTF-8 in {}: {}", SIGNING_CONFIG_TARGET, e)))?;
+        .map_err(|e| Error::tuf_caused_by(format!("invalid UTF-8 in {TRUSTED_ROOT_TARGET}"), e))?;
+    let config_json = String::from_utf8(results[1].clone()).map_err(|e| {
+        Error::tuf_caused_by(format!("invalid UTF-8 in {SIGNING_CONFIG_TARGET}"), e)
+    })?;
 
     let root = TrustedRoot::from_json(&root_json)?;
     let config = SigningConfig::from_json(&config_json)?;
 
     Ok((root, config))
-}
-
-/// Render a `sigstore-tuf` error followed by its sources. Its `Display` omits
-/// the underlying cause (an HTTP or I/O error), and [`Error::Tuf`] carries only
-/// a message, so the cause would otherwise be lost.
-fn error_chain(error: &sigstore_tuf::Error) -> String {
-    let mut message = error.to_string();
-    let mut source = std::error::Error::source(error);
-    while let Some(cause) = source {
-        message.push_str(": ");
-        message.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    message
 }
 
 #[cfg(test)]
@@ -1073,9 +1061,18 @@ mod tests {
         let client = TufClient::new(config);
 
         let err = client.fetch_target(TRUSTED_ROOT_TARGET).await.unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("offline verification of cached metadata"));
-        assert!(msg.contains("expired"));
+        assert!(err
+            .to_string()
+            .contains("offline verification of cached metadata"));
+        // The reason is the error's source, not part of its message.
+        let Error::Tuf {
+            source: Some(source),
+            ..
+        } = &err
+        else {
+            panic!("expected a TUF verification error: {err:?}");
+        };
+        assert!(source.to_string().contains("expired"), "{source}");
     }
 
     #[tokio::test]
@@ -1133,6 +1130,27 @@ mod tests {
         assert!(err
             .to_string()
             .contains("offline verification of cached metadata"));
+    }
+
+    /// A repository that cannot be reached is a transport error, which
+    /// callers can retry, not a verification failure.
+    #[tokio::test]
+    async fn unreachable_repository_is_a_transport_error() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        drop(listener);
+        let tmp = tempfile::tempdir().unwrap();
+        let root = signed_cache::write(tmp.path(), b"root", signed_cache::FAR_FUTURE);
+        let config = TufConfig::custom(url, TufBootstrap::trusted(&root)).without_cache();
+
+        let err = TufClient::new(config)
+            .fetch_target(TRUSTED_ROOT_TARGET)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::TufTransport { .. }),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[tokio::test]
