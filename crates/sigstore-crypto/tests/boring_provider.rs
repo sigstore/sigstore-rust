@@ -244,7 +244,7 @@ impl CryptoProvider for BoringProvider {
             }
             _ => Err(()),
         };
-        res.map_err(|()| Error::Verification(format!("{} signature invalid", scheme.name())))
+        res.map_err(|()| Error::SignatureInvalid { scheme })
     }
 
     fn verify_prehashed(
@@ -274,14 +274,13 @@ impl CryptoProvider for BoringProvider {
             SigningScheme::RsaPssSha256
             | SigningScheme::RsaPssSha384
             | SigningScheme::RsaPssSha512 => {
-                let md = message_digest(hash_alg).map_err(|_| {
-                    Error::Verification(format!("{} signature invalid", scheme.name()))
-                })?;
+                let md =
+                    message_digest(hash_alg).map_err(|_| Error::SignatureInvalid { scheme })?;
                 verify_rsa_pss_prehashed(spki_pubkey_bytes, md, digest, signature)
             }
             _ => Err(()),
         };
-        res.map_err(|()| Error::Verification(format!("{} signature invalid", scheme.name())))
+        res.map_err(|()| Error::SignatureInvalid { scheme })
     }
 
     fn generate_key_pair(&self, algorithm: KeyAlgorithm) -> Result<Box<dyn SigningKeyPair>> {
