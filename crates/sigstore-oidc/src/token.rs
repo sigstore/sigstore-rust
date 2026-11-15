@@ -162,10 +162,7 @@ impl IdentityToken {
         match Detector::new().detect("sigstore").await {
             Ok(Some(token)) => Self::from_jwt(token.reveal()).map(Some),
             Ok(None) => Ok(None),
-            Err(e) => Err(Error::Token(format!(
-                "failed to detect ambient credentials: {}",
-                e
-            ))),
+            Err(e) => Err(Error::Ambient(Box::new(e))),
         }
     }
 
