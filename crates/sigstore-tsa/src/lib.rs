@@ -13,7 +13,7 @@ mod verify;
 
 #[cfg(feature = "client")]
 pub use client::{TimestampClient, TimestampClientBuilder};
-pub use error::{Error, Result};
+pub use error::{Error, ResponseField, Result};
 /// The HTTP client crate used by [`TimestampClientBuilder::with_http_client`].
 #[cfg(feature = "client")]
 pub use reqwest;
