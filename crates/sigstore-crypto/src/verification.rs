@@ -138,6 +138,7 @@ pub fn validate_raw_public_key(scheme: SigningScheme, spki_pubkey_bytes: &[u8]) 
 }
 
 /// A public key for verification
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerificationKey {
     /// Raw public key bytes (format depends on scheme)
     bytes: Vec<u8>,
