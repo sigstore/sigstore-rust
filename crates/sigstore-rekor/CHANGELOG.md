@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-rekor-v0.16.0...sigstore-rekor-v0.17.0) - 2026-11-15
+
+### Other
+
+- *(rekor)* [**breaking**] transport errors keep their source ([#358](https://github.com/sigstore/sigstore-rust/pull/358))
+
 ## [0.15.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-rekor-v0.14.0...sigstore-rekor-v0.15.0) - 2026-10-13
 
 ### Fixed
