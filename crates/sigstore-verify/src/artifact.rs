@@ -97,9 +97,9 @@ impl ArtifactRequirements {
                     .sha512()
                     .is_ok_and(|digest| statement.matches_sha512(&digest));
             if !matches {
-                return Err(Error::ArtifactMismatch(
-                    "artifact hash does not match any subject in attestation".into(),
-                ));
+                return Err(Error::ArtifactMismatch {
+                    binding: crate::ArtifactBinding::StatementSubject,
+                });
             }
         }
         Ok(())

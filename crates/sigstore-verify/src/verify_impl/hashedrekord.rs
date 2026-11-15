@@ -90,9 +90,9 @@ pub(crate) fn verify_hashedrekord_entry(
 /// Validate artifact hash matches expected hash
 fn validate_artifact_hash(artifact_hash: &Sha256Hash, expected_hash: &Sha256Hash) -> Result<()> {
     if artifact_hash != expected_hash {
-        return Err(Error::ArtifactMismatch(
-            "artifact hash mismatch for hashedrekord entry".to_string(),
-        ));
+        return Err(Error::ArtifactMismatch {
+            binding: crate::ArtifactBinding::LogEntryDigest,
+        });
     }
 
     Ok(())

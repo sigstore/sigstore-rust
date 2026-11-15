@@ -947,9 +947,9 @@ fn verify_message_digest_binding(
     if let Some(digest) = &msg_sig.message_digest {
         let artifact_digest = artifact.digest(digest.algorithm)?;
         if digest.digest != artifact_digest.as_bytes() {
-            return Err(Error::ArtifactMismatch(
-                "message digest in bundle does not match artifact hash".to_string(),
-            ));
+            return Err(Error::ArtifactMismatch {
+                binding: crate::ArtifactBinding::MessageDigest,
+            });
         }
     }
     Ok(())
@@ -964,8 +964,12 @@ fn verify_dsse_envelope_signature(
     // Compute the PAE that was signed
     let pae = envelope.pae();
 
-    sigstore_crypto::verify_signature(public_key, &pae, &envelope.signature.sig, scheme)
-        .map_err(|e| Error::SignatureInvalid(format!("DSSE signature verification failed: {}", e)))
+    sigstore_crypto::verify_signature(public_key, &pae, &envelope.signature.sig, scheme).map_err(
+        |source| Error::SignatureInvalid {
+            content: crate::SignedContent::DsseEnvelope,
+            source,
+        },
+    )
 }
 
 /// Verify `signature` over `artifact` with an already-resolved signing scheme.
@@ -992,7 +996,10 @@ fn verify_signature_over_artifact(
     } else {
         return Err(Error::UnsupportedArtifact(format!("cannot verify signature from a digest or reader - scheme {} does not support prehashed mode", scheme.name())));
     };
-    result.map_err(|e| Error::SignatureInvalid(format!("signature verification failed: {}", e)))
+    result.map_err(|source| Error::SignatureInvalid {
+        content: crate::SignedContent::Artifact,
+        source,
+    })
 }
 
 /// Cryptographically verify a `MessageSignature`'s signature over the artifact
@@ -1335,8 +1342,13 @@ mod tests {
         let err = verify_dsse_envelope_signature(&envelope, &public_key, keypair.default_scheme())
             .expect_err("an invalid signature must fail verification");
         assert!(
-            err.to_string()
-                .contains("DSSE signature verification failed"),
+            matches!(
+                err,
+                Error::SignatureInvalid {
+                    content: crate::SignedContent::DsseEnvelope,
+                    ..
+                }
+            ),
             "unexpected error: {err}"
         );
     }

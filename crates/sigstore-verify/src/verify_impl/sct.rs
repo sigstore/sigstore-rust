@@ -148,11 +148,7 @@ pub fn extract_sct(
     // Extract the SCT list extension from the certificate
     let scts: SignedCertificateTimestampList = match cert.tbs_certificate.get() {
         Ok(Some((_, ext))) => ext,
-        _ => {
-            return Err(Error::sct(
-                "certificate is missing SCT extension (Signed Certificate Timestamp)".to_string(),
-            ))
-        }
+        _ => return Err(crate::error::CertificateError::SctMissing.into()),
     };
 
     // Parse the SCT structures
@@ -165,7 +161,7 @@ pub fn extract_sct(
         [single] => single
             .parse_timestamp()
             .map_err(|e| Error::sct(format!("failed to parse SCT: {:?}", e)))?,
-        [] => return Err(Error::sct("no SCTs found in certificate".to_string())),
+        [] => return Err(crate::error::CertificateError::SctMissing.into()),
         _ => {
             return Err(Error::sct(
                 "certificate contains multiple SCTs, expected exactly one".to_string(),
