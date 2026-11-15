@@ -6,9 +6,19 @@
 use crate::error::{Error, Result};
 use serde::Serialize;
 use sigstore_crypto::Checkpoint;
-use sigstore_crypto::Keyring;
+use sigstore_crypto::{Keyring, VerificationKey};
 use sigstore_types::bundle::InclusionProof;
 use sigstore_types::{Bundle, KindVersion, Sha256Hash, SignatureBytes, TransparencyLogEntry};
+
+/// Where the log keys for SET and checkpoint verification come from.
+#[derive(Clone, Copy)]
+pub(crate) enum LogKeys<'a> {
+    /// Look keys up by log ID (SETs) or key hint (checkpoints), honoring
+    /// their validity windows.
+    Keyring(&'a Keyring),
+    /// Use this key, whatever the entry's log ID or the checkpoint's hints.
+    Single(&'a VerificationKey),
+}
 
 /// Verify transparency log entries (checkpoints, Merkle inclusion proofs and SETs)
 ///
@@ -116,18 +126,25 @@ pub(crate) fn validate_integrated_time_not_in_future(
 /// Time-related checks (integrated time vs. certificate validity) are not
 /// performed here; see [`verify_tlog_entries`].
 pub fn verify_entry_inclusion(entry: &TransparencyLogEntry, rekor_keys: &Keyring) -> Result<()> {
+    verify_entry_inclusion_with(entry, LogKeys::Keyring(rekor_keys))
+}
+
+pub(crate) fn verify_entry_inclusion_with(
+    entry: &TransparencyLogEntry,
+    keys: LogKeys<'_>,
+) -> Result<()> {
     if let Some(ref inclusion_proof) = entry.inclusion_proof {
         verify_merkle_inclusion(entry, inclusion_proof)?;
-        verify_checkpoint(
+        verify_checkpoint_with(
             inclusion_proof.checkpoint.envelope(),
             inclusion_proof,
             is_rekor_v2(entry),
-            rekor_keys,
+            keys,
         )?;
     }
 
     if entry.inclusion_promise.is_some() {
-        verify_set(entry, rekor_keys)?;
+        verify_set_with(entry, keys)?;
     }
 
     Ok(())
@@ -140,7 +157,10 @@ pub fn verify_entry_inclusion(entry: &TransparencyLogEntry, rekor_keys: &Keyring
 /// hash. Rekor v2 takes the index, tree size, and root from the top-level entry
 /// and signed checkpoint rather than unauthenticated duplicate proof fields.
 /// The checkpoint signature check authenticates the selected root.
-fn verify_merkle_inclusion(entry: &TransparencyLogEntry, proof: &InclusionProof) -> Result<()> {
+pub(crate) fn verify_merkle_inclusion(
+    entry: &TransparencyLogEntry,
+    proof: &InclusionProof,
+) -> Result<()> {
     let (leaf_index, tree_size, root_hash) = if is_rekor_v2(entry) {
         let checkpoint = proof.checkpoint.checkpoint().ok_or_else(|| {
             Error::checkpoint("Rekor v2 inclusion proof has no checkpoint".to_string())
@@ -165,12 +185,13 @@ fn verify_merkle_inclusion(entry: &TransparencyLogEntry, proof: &InclusionProof)
     .map_err(|e| Error::inclusion_proof(format!("inclusion proof verification failed: {}", e)))
 }
 
-/// Verify a checkpoint signature using the trusted root
-pub fn verify_checkpoint(
+/// Verify a checkpoint's signature with the given log keys, and for Rekor v1
+/// its consistency with the proof's duplicated root hash.
+pub(crate) fn verify_checkpoint_with(
     checkpoint_envelope: &str,
     inclusion_proof: &InclusionProof,
     is_v2: bool,
-    rekor_keys: &Keyring,
+    keys: LogKeys<'_>,
 ) -> Result<()> {
     // Parse the checkpoint (signed note)
     let checkpoint = Checkpoint::from_text(checkpoint_envelope)
@@ -198,7 +219,13 @@ pub fn verify_checkpoint(
     let now = jiff::Timestamp::now();
     let mut found_matching_key = false;
     for sig in checkpoint.signatures() {
-        for key in rekor_keys.keys_by_hint(&sig.key_id, now) {
+        let candidates: Box<dyn Iterator<Item = &VerificationKey>> = match keys {
+            LogKeys::Keyring(keyring) => Box::new(keyring.keys_by_hint(&sig.key_id, now)),
+            // A single caller-chosen key: hints only narrow down lookups, so
+            // try it against every signature on the note.
+            LogKeys::Single(key) => Box::new(std::iter::once(key)),
+        };
+        for key in candidates {
             found_matching_key = true;
             if key.verify(message, &sig.signature).is_ok() {
                 return Ok(());
@@ -231,6 +258,10 @@ struct RekorPayload {
 
 /// Verify SET (Signed Entry Timestamp)
 pub fn verify_set(entry: &TransparencyLogEntry, rekor_keys: &Keyring) -> Result<()> {
+    verify_set_with(entry, LogKeys::Keyring(rekor_keys))
+}
+
+pub(crate) fn verify_set_with(entry: &TransparencyLogEntry, keys: LogKeys<'_>) -> Result<()> {
     let promise = entry
         .inclusion_promise
         .as_ref()
@@ -240,20 +271,24 @@ pub fn verify_set(entry: &TransparencyLogEntry, rekor_keys: &Keyring) -> Result<
     // time, require the log key's validity window to cover it: an entry must
     // have been integrated while the log key was valid.
     let decoded_key_id = entry.log_id.key_id.as_bytes();
-    let key_id = Sha256Hash::try_from(decoded_key_id)
-        .map_err(|e| Error::malformed_entry(format!("invalid Rekor log ID: {e}")))?;
-    let keyring = rekor_keys;
-    let log_key = if let Some(integrated_ts) = entry.integrated_time {
-        keyring.key_at(&key_id, integrated_ts).ok_or_else(|| {
-            Error::inclusion_promise(format!(
-                "No log key valid at integrated time {} for log ID {}",
-                integrated_ts, entry.log_id.key_id
-            ))
-        })?
-    } else {
-        keyring
-            .key_started_by(&key_id, jiff::Timestamp::now())
-            .ok_or_else(|| Error::unknown_log(entry.log_id.key_id.to_string()))?
+    let log_key = match keys {
+        LogKeys::Single(key) => key,
+        LogKeys::Keyring(keyring) => {
+            let key_id = Sha256Hash::try_from(decoded_key_id)
+                .map_err(|e| Error::malformed_entry(format!("invalid Rekor log ID: {e}")))?;
+            if let Some(integrated_ts) = entry.integrated_time {
+                keyring.key_at(&key_id, integrated_ts).ok_or_else(|| {
+                    Error::inclusion_promise(format!(
+                        "No log key valid at integrated time {} for log ID {}",
+                        integrated_ts, entry.log_id.key_id
+                    ))
+                })?
+            } else {
+                keyring
+                    .key_started_by(&key_id, jiff::Timestamp::now())
+                    .ok_or_else(|| Error::unknown_log(entry.log_id.key_id.to_string()))?
+            }
+        }
     };
 
     // Construct the payload (base64-encoded body)
