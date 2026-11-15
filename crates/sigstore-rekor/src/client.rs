@@ -44,7 +44,7 @@ fn default_http_client() -> Result<reqwest::Client> {
         .timeout(DEFAULT_TIMEOUT)
         .user_agent(USER_AGENT)
         .build()
-        .map_err(|e| Error::Http(format!("failed to build HTTP client: {e}")))
+        .map_err(|e| Error::Transport(Box::new(e)))
 }
 
 /// Send a request and turn a non-success status into [`Error::Status`].
@@ -52,7 +52,7 @@ async fn send(request: reqwest::RequestBuilder, what: &str) -> Result<reqwest::R
     let response = request
         .send()
         .await
-        .map_err(|e| Error::Http(e.to_string()))?;
+        .map_err(|e| Error::Transport(Box::new(e)))?;
     let status = response.status();
     if status.is_success() {
         return Ok(response);
@@ -74,7 +74,7 @@ async fn read_json<T: DeserializeOwned>(response: reqwest::Response, what: &str)
     let body = response
         .bytes()
         .await
-        .map_err(|e| Error::Http(e.to_string()))?;
+        .map_err(|e| Error::Transport(Box::new(e)))?;
     serde_json::from_slice(&body).map_err(|e| Error::InvalidResponse(format!("{what}: {e}")))
 }
 
@@ -290,7 +290,7 @@ impl RekorV2Client {
             .bytes()
             .await
             .map(|bytes| bytes.to_vec())
-            .map_err(|e| Error::Http(e.to_string()))
+            .map_err(|e| Error::Transport(Box::new(e)))
     }
 }
 

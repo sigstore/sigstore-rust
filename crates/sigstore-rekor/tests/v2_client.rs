@@ -135,7 +135,7 @@ async fn create_entry_rejects_malformed_or_incomplete_v2_responses() {
             .unwrap_err();
         received.recv().unwrap();
         assert!(
-            error.to_string().contains("Invalid response"),
+            error.to_string().contains("invalid response"),
             "unexpected error: {error}"
         );
     }
@@ -166,7 +166,7 @@ async fn create_entry_rejects_mismatched_algorithm_semantics() {
             .await
             .unwrap_err();
         assert!(
-            error.to_string().contains("Invalid response"),
+            error.to_string().contains("invalid response"),
             "unexpected error: {error}"
         );
     }
@@ -258,4 +258,22 @@ async fn reads_v2_checkpoint_and_tile_storage_paths() {
         .recv()
         .unwrap()
         .starts_with("GET /api/v2/tile/entries/001 "));
+}
+
+/// A log that cannot be reached is a transport error, not a status or
+/// response error.
+#[tokio::test]
+async fn unreachable_log_is_a_transport_error() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let error = RekorV2Client::new(url)
+        .unwrap()
+        .create_entry(request())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, sigstore_rekor::Error::Transport(_)),
+        "unexpected error: {error:?}"
+    );
 }
