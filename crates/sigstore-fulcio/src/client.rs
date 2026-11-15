@@ -53,7 +53,7 @@ impl FulcioClient {
             .get(&url)
             .send()
             .await
-            .map_err(|e| Error::Http(e.to_string()))?;
+            .map_err(|e| Error::Transport(Box::new(e)))?;
 
         if !response.status().is_success() {
             return Err(Error::Status {
@@ -65,7 +65,7 @@ impl FulcioClient {
         let body = response
             .bytes()
             .await
-            .map_err(|e| Error::Http(e.to_string()))?;
+            .map_err(|e| Error::Transport(Box::new(e)))?;
         serde_json::from_slice(&body)
             .map_err(|e| Error::InvalidResponse(format!("configuration: {e}")))
     }
@@ -88,15 +88,12 @@ impl FulcioClient {
         let url = format!("{}/api/v2/signingCert", self.url);
 
         // Extract public key and convert to PEM for the API
-        let public_key_pem = key_pair
-            .public_key_der()
-            .map_err(|e| Error::Signing(format!("failed to export public key: {}", e)))?
-            .to_pem();
+        let public_key_pem = key_pair.public_key_der().map_err(Error::Signing)?.to_pem();
 
         // Create proof of possession by signing the identity (email or subject)
         let proof_of_possession = key_pair
             .sign(identity_token.identity().as_bytes())
-            .map_err(|e| Error::Signing(format!("failed to create proof of possession: {}", e)))?;
+            .map_err(Error::Signing)?;
 
         let request = CreateSigningCertificateRequest {
             credentials: Credentials {
@@ -117,7 +114,7 @@ impl FulcioClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| Error::Http(e.to_string()))?;
+            .map_err(|e| Error::Transport(Box::new(e)))?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -131,7 +128,7 @@ impl FulcioClient {
         let body = response
             .bytes()
             .await
-            .map_err(|e| Error::Http(e.to_string()))?;
+            .map_err(|e| Error::Transport(Box::new(e)))?;
         let wire: SigningCertificateWire = serde_json::from_slice(&body)
             .map_err(|e| Error::InvalidResponse(format!("signing certificate: {e}")))?;
         SigningCertificate::try_from(wire)
@@ -148,7 +145,7 @@ impl FulcioClient {
             .get(&url)
             .send()
             .await
-            .map_err(|e| Error::Http(e.to_string()))?;
+            .map_err(|e| Error::Transport(Box::new(e)))?;
 
         if !response.status().is_success() {
             return Err(Error::Status {
@@ -160,7 +157,7 @@ impl FulcioClient {
         let body = response
             .bytes()
             .await
-            .map_err(|e| Error::Http(e.to_string()))?;
+            .map_err(|e| Error::Transport(Box::new(e)))?;
         TrustBundle::from_json(&body)
     }
 }
@@ -216,7 +213,7 @@ impl FulcioClientBuilder {
                 .timeout(DEFAULT_TIMEOUT)
                 .user_agent(USER_AGENT)
                 .build()
-                .map_err(|e| Error::Http(format!("failed to build HTTP client: {e}")))?,
+                .map_err(|e| Error::Transport(Box::new(e)))?,
         };
         Ok(FulcioClient {
             url: self.url,
