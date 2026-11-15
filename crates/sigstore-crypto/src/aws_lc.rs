@@ -9,9 +9,10 @@ use aws_lc_rs::{
     signature::{
         EcdsaKeyPair, KeyPair as AwsKeyPair, UnparsedPublicKey, VerificationAlgorithm,
         ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA256_ASN1_SIGNING, ECDSA_P256_SHA384_ASN1,
-        ECDSA_P384_SHA256_ASN1, ECDSA_P384_SHA384_ASN1, ED25519, ML_DSA_44, ML_DSA_65, ML_DSA_87,
-        RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
-        RSA_PSS_2048_8192_SHA256, RSA_PSS_2048_8192_SHA384, RSA_PSS_2048_8192_SHA512,
+        ECDSA_P384_SHA256_ASN1, ECDSA_P384_SHA384_ASN1, ECDSA_P521_SHA512_ASN1, ED25519, ML_DSA_44,
+        ML_DSA_65, ML_DSA_87, RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384,
+        RSA_PKCS1_2048_8192_SHA512, RSA_PSS_2048_8192_SHA256, RSA_PSS_2048_8192_SHA384,
+        RSA_PSS_2048_8192_SHA512,
     },
 };
 use sigstore_types::HashAlgorithm;
@@ -78,6 +79,7 @@ fn verification_algorithm(scheme: SigningScheme) -> &'static dyn VerificationAlg
         SigningScheme::EcdsaP256Sha384 => &ECDSA_P256_SHA384_ASN1,
         SigningScheme::EcdsaP384Sha256 => &ECDSA_P384_SHA256_ASN1,
         SigningScheme::EcdsaP384Sha384 => &ECDSA_P384_SHA384_ASN1,
+        SigningScheme::EcdsaP521Sha512 => &ECDSA_P521_SHA512_ASN1,
         SigningScheme::Ed25519 => &ED25519,
         SigningScheme::RsaPssSha256 => &RSA_PSS_2048_8192_SHA256,
         SigningScheme::RsaPssSha384 => &RSA_PSS_2048_8192_SHA384,

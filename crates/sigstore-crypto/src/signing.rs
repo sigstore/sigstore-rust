@@ -4,7 +4,9 @@ use crate::error::{Error, Result};
 use crate::hash::Sha256Hasher;
 use crate::provider::{default_provider, SigningKeyPair};
 use crate::verification::{ID_ED25519, ID_ML_DSA_44, ID_ML_DSA_65, ID_ML_DSA_87};
-use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, RSA_ENCRYPTION, SECP_256_R_1, SECP_384_R_1};
+use const_oid::db::rfc5912::{
+    ID_EC_PUBLIC_KEY, RSA_ENCRYPTION, SECP_256_R_1, SECP_384_R_1, SECP_521_R_1,
+};
 use der::{asn1::BitString, Encode as _};
 use sigstore_types::{DerPublicKey, HashAlgorithm, Sha256Hash, SignatureBytes};
 use spki::{AlgorithmIdentifier, SubjectPublicKeyInfo};
@@ -21,6 +23,8 @@ pub enum SigningScheme {
     EcdsaP384Sha256,
     /// ECDSA P-384 with SHA-384
     EcdsaP384Sha384,
+    /// ECDSA P-521 with SHA-512
+    EcdsaP521Sha512,
     /// Ed25519
     Ed25519,
     /// RSA PSS with SHA-256
@@ -49,6 +53,7 @@ impl SigningScheme {
         match self {
             Self::EcdsaP256Sha256 | Self::EcdsaP256Sha384 => KeyAlgorithm::EcdsaP256,
             Self::EcdsaP384Sha256 | Self::EcdsaP384Sha384 => KeyAlgorithm::EcdsaP384,
+            Self::EcdsaP521Sha512 => KeyAlgorithm::EcdsaP521,
             Self::Ed25519 => KeyAlgorithm::Ed25519,
             Self::RsaPssSha256
             | Self::RsaPssSha384
@@ -69,6 +74,7 @@ impl SigningScheme {
             SigningScheme::EcdsaP256Sha384 => "ECDSA_P256_SHA384",
             SigningScheme::EcdsaP384Sha256 => "ECDSA_P384_SHA256",
             SigningScheme::EcdsaP384Sha384 => "ECDSA_P384_SHA384",
+            SigningScheme::EcdsaP521Sha512 => "ECDSA_P521_SHA512",
             SigningScheme::Ed25519 => "ED25519",
             SigningScheme::RsaPssSha256 => "RSA_PSS_SHA256",
             SigningScheme::RsaPssSha384 => "RSA_PSS_SHA384",
@@ -107,7 +113,9 @@ impl SigningScheme {
             | Self::EcdsaP384Sha384
             | Self::RsaPssSha384
             | Self::RsaPkcs1Sha384 => Some(HashAlgorithm::Sha2384),
-            Self::RsaPssSha512 | Self::RsaPkcs1Sha512 => Some(HashAlgorithm::Sha2512),
+            Self::EcdsaP521Sha512 | Self::RsaPssSha512 | Self::RsaPkcs1Sha512 => {
+                Some(HashAlgorithm::Sha2512)
+            }
             Self::Ed25519 | Self::MlDsa44 | Self::MlDsa65 | Self::MlDsa87 => None,
         }
     }
@@ -121,6 +129,8 @@ pub enum KeyAlgorithm {
     EcdsaP256,
     /// ECDSA P-384
     EcdsaP384,
+    /// ECDSA P-521
+    EcdsaP521,
     /// Ed25519
     Ed25519,
     /// RSA
@@ -139,6 +149,7 @@ impl KeyAlgorithm {
         match self {
             KeyAlgorithm::EcdsaP256 => SigningScheme::EcdsaP256Sha256,
             KeyAlgorithm::EcdsaP384 => SigningScheme::EcdsaP384Sha384,
+            KeyAlgorithm::EcdsaP521 => SigningScheme::EcdsaP521Sha512,
             KeyAlgorithm::Ed25519 => SigningScheme::Ed25519,
             KeyAlgorithm::Rsa => SigningScheme::RsaPkcs1Sha256,
             KeyAlgorithm::MlDsa44 => SigningScheme::MlDsa44,
@@ -166,6 +177,13 @@ impl KeyAlgorithm {
                 sigstore_types::HashAlgorithm::Sha2384 => Ok(SigningScheme::EcdsaP384Sha384),
                 _ => Err(Error::UnsupportedAlgorithm(format!(
                     "ECDSA P-384 does not support hash algorithm {:?}",
+                    hash_algo
+                ))),
+            },
+            KeyAlgorithm::EcdsaP521 => match hash_algo {
+                sigstore_types::HashAlgorithm::Sha2512 => Ok(SigningScheme::EcdsaP521Sha512),
+                _ => Err(Error::UnsupportedAlgorithm(format!(
+                    "ECDSA P-521 does not support hash algorithm {:?}",
                     hash_algo
                 ))),
             },
@@ -285,6 +303,12 @@ impl KeyPair {
                 oid: ID_EC_PUBLIC_KEY,
                 parameters: Some(
                     der::Any::encode_from(&SECP_384_R_1).map_err(|e| Error::Der(e.to_string()))?,
+                ),
+            },
+            KeyAlgorithm::EcdsaP521 => AlgorithmIdentifier {
+                oid: ID_EC_PUBLIC_KEY,
+                parameters: Some(
+                    der::Any::encode_from(&SECP_521_R_1).map_err(|e| Error::Der(e.to_string()))?,
                 ),
             },
             KeyAlgorithm::Rsa => AlgorithmIdentifier {

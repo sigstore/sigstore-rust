@@ -3,7 +3,9 @@
 use crate::error::{Error, Result};
 use crate::provider::default_provider;
 use crate::signing::{KeyAlgorithm, SigningScheme};
-use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, RSA_ENCRYPTION, SECP_256_R_1, SECP_384_R_1};
+use const_oid::db::rfc5912::{
+    ID_EC_PUBLIC_KEY, RSA_ENCRYPTION, SECP_256_R_1, SECP_384_R_1, SECP_521_R_1,
+};
 use const_oid::ObjectIdentifier;
 use der::Decode;
 use sigstore_types::{DerPublicKey, HashAlgorithm, SignatureBytes};
@@ -46,6 +48,7 @@ fn key_algorithm(spki: &SubjectPublicKeyInfoRef<'_>) -> Result<KeyAlgorithm> {
         ID_EC_PUBLIC_KEY => match algorithm.parameters_oid() {
             Ok(SECP_256_R_1) => Ok(KeyAlgorithm::EcdsaP256),
             Ok(SECP_384_R_1) => Ok(KeyAlgorithm::EcdsaP384),
+            Ok(SECP_521_R_1) => Ok(KeyAlgorithm::EcdsaP521),
             Ok(curve) => Err(Error::UnsupportedAlgorithm(format!(
                 "unsupported EC curve: {curve}"
             ))),
@@ -99,12 +102,12 @@ struct RsaPublicKey<'a> {
 ///
 /// Enforces key-format invariants that some cryptographic backends do not check
 /// by default:
-/// - ECDSA P-256 and P-384 public keys must use uncompressed SEC1 point encoding (`0x04` prefix).
+/// - ECDSA P-256, P-384 and P-521 public keys must use uncompressed SEC1 point encoding (`0x04` prefix).
 /// - RSA public keys must be valid DER-encoded PKCS#1 `RSAPublicKey` structures with no trailing
 ///   bytes and a 2048–8192 bit modulus.
 pub fn validate_raw_public_key(scheme: SigningScheme, spki_pubkey_bytes: &[u8]) -> Result<()> {
     match scheme.key_algorithm() {
-        KeyAlgorithm::EcdsaP256 | KeyAlgorithm::EcdsaP384 => {
+        KeyAlgorithm::EcdsaP256 | KeyAlgorithm::EcdsaP384 | KeyAlgorithm::EcdsaP521 => {
             if spki_pubkey_bytes.first() != Some(&0x04) {
                 return Err(Error::InvalidKey(
                     "ECDSA public key must use uncompressed SEC1 point encoding".into(),
