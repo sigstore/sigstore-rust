@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-crypto-v0.16.0...sigstore-crypto-v0.17.0) - 2026-11-15
+
+### Added
+
+- *(crypto)* verify ECDSA P-521 signatures ([#361](https://github.com/sigstore/sigstore-rust/pull/361))
+
+### Fixed
+
+- *(crypto)* report unsupported key algorithms as UnsupportedAlgorithm ([#360](https://github.com/sigstore/sigstore-rust/pull/360))
+
 ## [0.15.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-crypto-v0.14.0...sigstore-crypto-v0.15.0) - 2026-10-13
 
 ### Other
