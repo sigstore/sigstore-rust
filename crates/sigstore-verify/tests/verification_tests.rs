@@ -1965,3 +1965,49 @@ fn test_certificate_checked_against_every_verified_timestamp() {
         "expected a certificate validity failure, got: {msg}"
     );
 }
+
+// ==== Rekor keys added at runtime ====
+
+/// A Rekor key added to the verifier verifies log entries like one from the
+/// trusted root.
+#[test]
+fn rekor_key_added_at_runtime_verifies_log_entries() {
+    let bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
+    let digest = extract_artifact_digest(&bundle).unwrap();
+    let entry_log_id = bundle.verification_material.tlog_entries[0]
+        .log_id
+        .key_id
+        .clone();
+    let rekor = production_root()
+        .tlogs
+        .into_iter()
+        .find(|log| log.log_id.key_id == entry_log_id)
+        .expect("the production root holds the bundle's log key");
+
+    let mut root_without_tlogs = production_root();
+    root_without_tlogs.tlogs.clear();
+    let verifier = Verifier::new(&root_without_tlogs).unwrap();
+    let policy = VerificationPolicy::any_identity();
+    assert!(matches!(
+        verifier.verify(digest, &bundle, &policy),
+        Err(sigstore_verify::Error::TransparencyLog(_))
+    ));
+
+    let verifier = verifier
+        .with_rekor_key(entry_log_id.clone(), &rekor.public_key.raw_bytes)
+        .unwrap();
+    let result = verifier.verify(digest, &bundle, &policy).unwrap();
+    assert!(result.tlog_verified());
+
+    // A trusted key is never replaced, and log IDs must be SHA-256 sized.
+    assert!(verifier
+        .clone()
+        .with_rekor_key(entry_log_id, &rekor.public_key.raw_bytes)
+        .is_err());
+    assert!(verifier
+        .with_rekor_key(
+            sigstore_types::LogKeyId::new(vec![1; 4]),
+            &rekor.public_key.raw_bytes
+        )
+        .is_err());
+}
