@@ -441,17 +441,50 @@ pub(crate) struct HashedRekordSignatureV2 {
     pub(crate) verifier: HashedRekordVerifierV2,
 }
 
-/// Signature algorithms accepted by the Rekor v2 hashedrekord service.
+/// Signature algorithms of Rekor v2 hashedrekord entries.
 ///
-/// The current request API accepts a SHA-256 digest, so it exposes only the
-/// matching algorithm. Supporting additional algorithms requires carrying
-/// their SHA-384 or SHA-512 digests instead of merely changing this value.
+/// The key details determine the digest algorithm of the logged digest: a
+/// Rekor v2 log derives it from this value and rejects digests of any other
+/// length, so a P-384 entry always carries a 48-byte SHA-384 digest.
+///
+/// [`HashedRekordV2`] requests carry a SHA-256 digest, so only
+/// [`RekorV2KeyDetails::PkixEcdsaP256Sha256`] produces a valid request. The
+/// other variants are needed to parse and verify entries logged by other
+/// clients.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum RekorV2KeyDetails {
     /// ECDSA over P-256 with SHA-256, PKIX-encoded key.
     #[serde(rename = "PKIX_ECDSA_P256_SHA_256")]
     PkixEcdsaP256Sha256,
+    /// ECDSA over P-384 with SHA-384, PKIX-encoded key.
+    #[serde(rename = "PKIX_ECDSA_P384_SHA_384")]
+    PkixEcdsaP384Sha384,
+}
+
+impl RekorV2KeyDetails {
+    /// The algorithm of the digest logged for a signature with these key
+    /// details.
+    pub fn hash_algorithm(self) -> HashAlgorithm {
+        match self {
+            RekorV2KeyDetails::PkixEcdsaP256Sha256 => HashAlgorithm::Sha2256,
+            RekorV2KeyDetails::PkixEcdsaP384Sha384 => HashAlgorithm::Sha2384,
+        }
+    }
+
+    /// The name used on the wire, e.g. `PKIX_ECDSA_P384_SHA_384`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RekorV2KeyDetails::PkixEcdsaP256Sha256 => "PKIX_ECDSA_P256_SHA_256",
+            RekorV2KeyDetails::PkixEcdsaP384Sha384 => "PKIX_ECDSA_P384_SHA_384",
+        }
+    }
+}
+
+impl std::fmt::Display for RekorV2KeyDetails {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Verifier in a Rekor v2 hashedrekord request.
@@ -616,6 +649,32 @@ mod tests {
         assert_eq!(verifier["keyDetails"], "PKIX_ECDSA_P256_SHA_256");
         assert_eq!(verifier["publicKey"]["rawBytes"], "AwQ=");
         assert!(verifier.get("x509Certificate").is_none());
+    }
+
+    #[test]
+    fn v2_key_details_round_trip_and_name_their_digest_algorithm() {
+        for (details, name, algorithm) in [
+            (
+                RekorV2KeyDetails::PkixEcdsaP256Sha256,
+                "PKIX_ECDSA_P256_SHA_256",
+                HashAlgorithm::Sha2256,
+            ),
+            (
+                RekorV2KeyDetails::PkixEcdsaP384Sha384,
+                "PKIX_ECDSA_P384_SHA_384",
+                HashAlgorithm::Sha2384,
+            ),
+        ] {
+            let json = serde_json::to_string(&details).unwrap();
+            assert_eq!(json, format!("\"{name}\""));
+            assert_eq!(
+                serde_json::from_str::<RekorV2KeyDetails>(&json).unwrap(),
+                details
+            );
+            assert_eq!(details.to_string(), name);
+            assert_eq!(details.hash_algorithm(), algorithm);
+        }
+        assert!(serde_json::from_str::<RekorV2KeyDetails>("\"PKIX_ECDSA_P384_SHA_256\"").is_err());
     }
 
     #[test]
