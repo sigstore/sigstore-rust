@@ -65,7 +65,7 @@ url = "2.5"
 tokio = { version = "1.47" }
 
 # Time
-jiff = { version = "0.2", features = ["serde"] }
+jiff = { version = "1.0", features = ["serde"] }
 zeroize = "1"
 
 # Testing
