@@ -74,6 +74,14 @@ const MANAGED_KEY_BUNDLE: &str = include_str!("../test_data/managed-key/bundle.s
 const MANAGED_KEY_PUBLIC_KEY: &str = include_str!("../test_data/managed-key/key.pub");
 const MANAGED_KEY_ARTIFACT: &[u8] = include_bytes!("../test_data/managed-key/artifact.txt");
 
+// Cosign v3.1.4 attest-blob with a P-384 key, logged at
+// log2025-1.rekor.sigstore.dev index 203224330.
+const MANAGED_KEY_P384_BUNDLE: &str =
+    include_str!("../test_data/managed-key-p384/bundle.sigstore.json");
+const MANAGED_KEY_P384_PUBLIC_KEY: &str = include_str!("../test_data/managed-key-p384/key.pub");
+const MANAGED_KEY_P384_ARTIFACT: &[u8] =
+    include_bytes!("../test_data/managed-key-p384/artifact.txt");
+
 // Edge case bundles
 const BUNDLE_NO_CERT_V1: &str = include_str!("../test_data/bundles/bundle_no_cert_v1.txt.sigstore");
 const BUNDLE_NO_CHECKPOINT: &str =
@@ -1772,6 +1780,22 @@ fn managed_dsse_verifier_is_bound_even_when_tlog_verification_is_skipped() {
 
 fn managed_key_public_key() -> sigstore_types::DerPublicKey {
     sigstore_types::DerPublicKey::from_pem(MANAGED_KEY_PUBLIC_KEY).expect("managed key parses")
+}
+
+#[test]
+fn test_verify_managed_key_p384_rekor_v2_bundle() {
+    let bundle = Bundle::from_json(MANAGED_KEY_P384_BUNDLE).unwrap();
+    let key = sigstore_types::DerPublicKey::from_pem(MANAGED_KEY_P384_PUBLIC_KEY)
+        .expect("P-384 managed key parses");
+    let policy = PublicKeyVerificationPolicy::new(key);
+
+    verify(
+        MANAGED_KEY_P384_ARTIFACT,
+        &bundle,
+        &policy,
+        &production_root(),
+    )
+    .unwrap();
 }
 
 #[test]
