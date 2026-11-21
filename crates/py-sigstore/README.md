@@ -4,10 +4,11 @@ Python bindings for [sigstore-rust](https://github.com/prefix-dev/sigstore-rust)
 
 > **Status: alpha.** The API may change before 1.0.
 >
-> **Naming:** the import name `sigstore` is the same as the PyPI package
-> [`sigstore`](https://pypi.org/project/sigstore/) (sigstore-python). The two
-> cannot be installed in the same environment. This package is a separate,
-> Rust-backed implementation with its own (not drop-in compatible) API.
+> **Naming:** like py-rattler, the package is
+> installed as `py-sigstore`; it is imported as `py_sigstore`. It is a separate,
+> Rust-backed implementation and is not a drop-in replacement for the PyPI
+> package [`sigstore`](https://pypi.org/project/sigstore/) (sigstore-python),
+> although the two can be installed side by side.
 
 ## Installation
 
@@ -20,7 +21,7 @@ pip install py-sigstore
 ### Verification
 
 ```python
-import sigstore as sr
+import py_sigstore as sr
 
 bundle = sr.Bundle.from_json(open("artifact.sigstore.json").read())
 policy = sr.Identity(
@@ -50,7 +51,7 @@ such as GitHub's attestation instance) and the **unsafe** `skip_tlog_unsafe` /
 ### Signing (CI / ambient OIDC)
 
 ```python
-import sigstore as sr
+import py_sigstore as sr
 
 token = sr.IdentityToken.detect_ambient()
 signer = sr.Signer.production(token)
@@ -88,7 +89,7 @@ The underlying Rust error chain is available as `__cause__`.
 ### One-shot convenience API
 
 ```python
-import sigstore as sr
+import py_sigstore as sr
 
 # Verify
 sr.verify(artifact_bytes, bundle_json_str, identity="user@example.com",

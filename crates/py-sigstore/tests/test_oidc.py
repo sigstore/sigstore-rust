@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from sigstore import IdentityToken, IdentityTokenError
+from py_sigstore import IdentityToken, IdentityTokenError
 
 
 class TestIdentityTokenFromJwt:

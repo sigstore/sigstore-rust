@@ -1,7 +1,7 @@
 """Tests for the Bundle Python API."""
 import pytest
 
-from sigstore import Bundle, BundleError
+from py_sigstore import Bundle, BundleError
 
 
 class TestBundleParsing:

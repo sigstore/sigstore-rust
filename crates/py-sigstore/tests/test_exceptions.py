@@ -1,7 +1,7 @@
 """Tests for the exception hierarchy Python API."""
 import pytest
 
-from sigstore import (
+from py_sigstore import (
     Bundle,
     Identity,
     IdentityToken,
@@ -123,9 +123,9 @@ class TestExceptionMessages:
 # Specific exception classes
 # ---------------------------------------------------------------------------
 
-import sigstore
+import py_sigstore
 from .conftest import COSIGN_IDENTITY, COSIGN_ISSUER
-from sigstore import (
+from py_sigstore import (
     ArtifactMismatchError,
     FulcioError,
     IdentityMismatchError,
@@ -154,14 +154,14 @@ _HIERARCHY = {
 class TestSpecificHierarchy:
     @pytest.mark.parametrize("child,parent", sorted(_HIERARCHY.items()))
     def test_parent(self, child, parent):
-        assert issubclass(getattr(sigstore, child), getattr(sigstore, parent))
+        assert issubclass(getattr(py_sigstore, child), getattr(py_sigstore, parent))
 
     @pytest.mark.parametrize("name", sorted(_HIERARCHY))
     def test_exported(self, name):
-        assert name in sigstore.__all__
+        assert name in py_sigstore.__all__
 
     def test_runtime_module_matches_stubs(self):
-        from sigstore import _exceptions
+        from py_sigstore import _exceptions
 
         assert _exceptions.RekorError is RekorError
 

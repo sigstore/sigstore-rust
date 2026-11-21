@@ -24,7 +24,7 @@ use sigstore_types::{Artifact, ArtifactDigest, HashAlgorithm};
 ///     h = Hashed(hashlib.sha256(data).digest())
 ///     verifier.verify_artifact(h, bundle, policy)
 #[gen_stub_pyclass]
-#[pyclass(name = "Hashed", module = "sigstore._internal", frozen, skip_from_py_object)]
+#[pyclass(name = "Hashed", module = "py_sigstore._internal", frozen, skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyHashed {
     pub inner: ArtifactDigest,

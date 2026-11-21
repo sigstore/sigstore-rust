@@ -1,7 +1,7 @@
 """Tests for the Verifier Python API."""
 import pytest
 
-from sigstore import (
+from py_sigstore import (
     Bundle,
     Identity,
     TrustedRoot,

@@ -4,7 +4,7 @@ import hashlib
 
 import pytest
 
-from sigstore import (
+from py_sigstore import (
     Bundle,
     Hashed,
     Identity,
@@ -69,7 +69,7 @@ class TestHashed:
         assert result.identity == COSIGN_IDENTITY
 
     def test_wrong_digest_fails(self, verifier, cosign_bundle):
-        from sigstore import VerificationError
+        from py_sigstore import VerificationError
 
         h = Hashed(hashlib.sha256(b"something else").digest())
         with pytest.raises(VerificationError):

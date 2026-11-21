@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from sigstore import (
+from py_sigstore import (
     Bundle,
     Identity,
     IdentityToken,
@@ -95,7 +95,7 @@ class TestSignerCi:
     def test_sign_hashed_then_verify(self, ambient_token):
         import hashlib
 
-        from sigstore import Hashed
+        from py_sigstore import Hashed
 
         artifact = b"hashed artifact"
         h = Hashed(hashlib.sha256(artifact).digest())

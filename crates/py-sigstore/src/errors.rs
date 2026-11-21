@@ -31,7 +31,7 @@ use std::error::Error as StdError;
 macro_rules! exceptions {
     ($($name:ident : $base:ident = $doc:literal;)+) => {
         $(
-            pyo3::create_exception!(sigstore, $name, $base, $doc);
+            pyo3::create_exception!(py_sigstore, $name, $base, $doc);
         )+
 
         /// Register every exception class on the extension module.
@@ -46,7 +46,7 @@ macro_rules! exceptions {
 }
 
 pyo3::create_exception!(
-    sigstore,
+    py_sigstore,
     SigstoreError,
     PyException,
     "Base exception for all py-sigstore errors."

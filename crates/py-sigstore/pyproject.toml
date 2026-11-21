@@ -45,5 +45,5 @@ markers = [
 # Mixed layout: Rust extension + pure Python package
 python-source = "python"
 # The compiled extension is named _internal; re-exported by __init__.py
-module-name = "sigstore._internal"
+module-name = "py_sigstore._internal"
 bindings = "pyo3"
