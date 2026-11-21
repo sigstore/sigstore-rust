@@ -7,6 +7,7 @@
 use pyo3::prelude::*;
 use pyo3_stub_gen::define_stub_info_gatherer;
 
+mod artifact;
 mod bundle;
 mod errors;
 mod oidc;
@@ -33,6 +34,8 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<trust_root::PyTrustedRoot>()?;
     m.add_class::<verify::PyIdentity>()?;
     m.add_class::<verify::PyVerifier>()?;
+    m.add_class::<verify::PyVerificationResult>()?;
+    m.add_class::<artifact::PyHashed>()?;
 
     // Signing + OIDC
     m.add_class::<oidc::PyIdentityToken>()?;

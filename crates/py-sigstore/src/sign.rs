@@ -1,13 +1,14 @@
 //! Python bindings for signing: `PySigner` and the module-level `sign()`
 //! convenience function.
 
+use crate::artifact::extract_artifact;
 use crate::bundle::PyBundle;
 use crate::errors::{sign_error, token_error, IdentityTokenError};
 use crate::oidc::PyIdentityToken;
 use crate::runtime::get_runtime;
 use pyo3::prelude::*;
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pymethods, gen_stub_pyfunction};
-use sigstore_sign::{Signer, SigningContext};
+use sigstore_sign::{Attestation, Signer, SigningContext};
 
 /// Build a signer for the given instance, fetching the signing config via TUF.
 ///
@@ -34,6 +35,55 @@ fn build_signer(
         })
         .map_err(sign_error)?;
     Ok(ctx.signer(token))
+}
+
+
+/// Convert a Python predicate (JSON text or a JSON-serializable object) to JSON.
+fn predicate_to_json(py: Python<'_>, predicate: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    let text: String = if let Ok(s) = predicate.extract::<String>() {
+        s
+    } else if let Ok(b) = predicate.cast::<pyo3::types::PyBytes>() {
+        String::from_utf8(b.as_bytes().to_vec())
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("predicate is not UTF-8: {e}")))?
+    } else {
+        py.import("json")?.call_method1("dumps", (predicate,))?.extract()?
+    };
+    serde_json::from_str(&text)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid predicate JSON: {e}")))
+}
+
+/// Build an in-toto subject digest from an `{"sha256": hex, ...}` mapping.
+fn subject_digest(
+    digests: &std::collections::HashMap<String, String>,
+) -> PyResult<sigstore_types::Digest> {
+    use pyo3::exceptions::PyValueError;
+    use sigstore_types::{Digest, Sha256Hash, Sha512Hash};
+
+    let mut out: Option<Digest> = None;
+    for (alg, hex) in digests {
+        match alg.as_str() {
+            "sha256" => {
+                let h = Sha256Hash::from_hex(hex).map_err(|e| PyValueError::new_err(e.to_string()))?;
+                match out.as_mut() {
+                    Some(d) => d.sha256 = Some(h),
+                    None => out = Some(Digest::sha256(h)),
+                }
+            }
+            "sha512" => {
+                let h = Sha512Hash::from_hex(hex).map_err(|e| PyValueError::new_err(e.to_string()))?;
+                match out.as_mut() {
+                    Some(d) => d.sha512 = Some(h),
+                    None => out = Some(Digest::sha512(h)),
+                }
+            }
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unsupported subject digest algorithm {other:?}; expected sha256 or sha512"
+                )))
+            }
+        }
+    }
+    out.ok_or_else(|| PyValueError::new_err("subject digest mapping is empty"))
 }
 
 // ---------------------------------------------------------------------------
@@ -109,17 +159,18 @@ impl PySigner {
     /// I/O.
     ///
     /// Args:
-    ///     input: The raw artifact bytes to sign.
+    ///     input: The artifact to sign: raw ``bytes`` or a pre-computed
+    ///            :class:`Hashed` digest.
     ///
     /// Returns:
     ///     A :class:`Bundle` containing the signature and verification material.
     ///
     /// Raises :exc:`SigningError` on any failure.
-    fn sign_artifact(&self, py: Python<'_>, input: &Bound<'_, pyo3::types::PyBytes>) -> PyResult<PyBundle> {
-        // Extract the slice before detach() — Bound<'_, PyBytes> is !Send and
-        // cannot be captured by the Ungil closure.
-        let data = input.as_bytes().to_vec();
-        py.detach(|| get_runtime().block_on(self.inner.sign(&data)))
+    fn sign_artifact(&self, py: Python<'_>, input: &Bound<'_, PyAny>) -> PyResult<PyBundle> {
+        // Extract before detach() — Bound is !Send and cannot be captured by
+        // the Ungil closure.
+        let data = extract_artifact(input)?;
+        py.detach(|| get_runtime().block_on(self.inner.sign(data.as_artifact())))
             .map(|inner| PyBundle { inner })
             .map_err(sign_error)
     }
@@ -164,6 +215,40 @@ impl PySigner {
             .map(|inner| PyBundle { inner })
             .map_err(sign_error)
     }
+
+    /// Sign an in-toto attestation and return a Sigstore bundle.
+    ///
+    /// Builds the in-toto statement from the arguments, wraps it in a DSSE
+    /// envelope and signs it.
+    ///
+    /// Args:
+    ///     predicate_type: The predicate type URI, e.g.
+    ///         ``"https://slsa.dev/provenance/v1"``.
+    ///     predicate:      The predicate: a JSON ``str``/``bytes`` document, or
+    ///         any JSON-serializable Python object (``dict``, ``list``, ...).
+    ///     subjects:       A list of ``(name, digest)`` pairs, where ``digest``
+    ///         is a mapping of algorithm to hex digest
+    ///         (``{"sha256": "..."}``; ``sha512`` is also accepted).
+    ///
+    /// Raises:
+    ///     ValueError:   If a subject digest or the predicate is malformed.
+    ///     SigningError: On any signing failure.
+    fn sign_attestation(
+        &self,
+        py: Python<'_>,
+        predicate_type: &str,
+        predicate: &Bound<'_, PyAny>,
+        subjects: Vec<(String, std::collections::HashMap<String, String>)>,
+    ) -> PyResult<PyBundle> {
+        let predicate_value = predicate_to_json(py, predicate)?;
+        let mut attestation = Attestation::new(predicate_type, predicate_value);
+        for (name, digests) in subjects {
+            attestation = attestation.add_subject(name, subject_digest(&digests)?);
+        }
+        py.detach(|| get_runtime().block_on(self.inner.sign_attestation(attestation)))
+            .map(|inner| PyBundle { inner })
+            .map_err(sign_error)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -177,7 +262,7 @@ impl PySigner {
 /// :class:`Signer` once and reusing it.
 ///
 /// Args:
-///     input:   The raw artifact bytes to sign.
+///     input:   The artifact: raw ``bytes`` or a :class:`Hashed` digest.
 ///     token:   An :class:`IdentityToken` or a raw JWT string. If ``None``,
 ///              ambient OIDC detection is attempted (suitable for CI).
 ///     staging: If ``True``, use the Sigstore staging infrastructure instead
@@ -195,7 +280,7 @@ impl PySigner {
 #[pyo3(signature = (input, token=None, *, staging=false))]
 pub fn py_sign(
     py: Python<'_>,
-    input: &Bound<'_, pyo3::types::PyBytes>,
+    input: &Bound<'_, PyAny>,
     token: Option<&Bound<'_, PyAny>>,
     staging: bool,
 ) -> PyResult<PyBundle> {
@@ -229,8 +314,8 @@ pub fn py_sign(
     let signer = build_signer(py, identity_token, staging)?;
 
     // Extract before detach() — Bound is !Send.
-    let input_data = input.as_bytes().to_vec();
-    py.detach(|| get_runtime().block_on(signer.sign(&input_data)))
+    let input_data = extract_artifact(input)?;
+    py.detach(|| get_runtime().block_on(signer.sign(input_data.as_artifact())))
         .map(|inner| PyBundle { inner })
         .map_err(sign_error)
 }

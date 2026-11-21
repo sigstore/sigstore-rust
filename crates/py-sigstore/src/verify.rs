@@ -1,6 +1,7 @@
 //! Python bindings for verification: `PyIdentity`, `PyVerifier`, and the
 //! module-level `verify()` convenience function.
 
+use crate::artifact::extract_artifact;
 use crate::bundle::PyBundle;
 use crate::errors::{bundle_error, trust_root_error, verify_error, VerificationError};
 use crate::runtime::get_runtime;
@@ -8,8 +9,118 @@ use crate::trust_root::PyTrustedRoot;
 use pyo3::prelude::*;
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pymethods, gen_stub_pyfunction};
 use sigstore_trust_root::TrustedRoot;
-use sigstore_types::Artifact;
-use sigstore_verify::{VerificationPolicy, Verifier};
+use sigstore_verify::{VerificationPolicy, VerificationResult, Verifier};
+
+// ---------------------------------------------------------------------------
+// PyVerificationResult
+// ---------------------------------------------------------------------------
+
+/// Convert a Unix timestamp (seconds) to an aware UTC ``datetime``.
+fn utc_datetime<'py>(py: Python<'py>, seconds: i64) -> PyResult<Bound<'py, PyAny>> {
+    let datetime = py.import("datetime")?;
+    let utc = datetime.getattr("timezone")?.getattr("utc")?;
+    datetime
+        .getattr("datetime")?
+        .call_method1("fromtimestamp", (seconds, utc))
+}
+
+/// Details of a successful verification.
+///
+/// Returned by :meth:`Verifier.verify_artifact`, :meth:`Verifier.verify_dsse`
+/// and :func:`verify`. Failures raise a :exc:`VerificationError` instead.
+#[gen_stub_pyclass]
+#[pyclass(name = "VerificationResult", module = "sigstore._internal", frozen)]
+pub struct PyVerificationResult {
+    identity: Option<String>,
+    issuer: Option<String>,
+    integrated_time: Option<i64>,
+    verified_timestamps: Vec<i64>,
+    certificate_verified: bool,
+    sct_verified: bool,
+    tlog_verified: bool,
+    identity_policy_checked: bool,
+}
+
+impl From<&VerificationResult> for PyVerificationResult {
+    fn from(r: &VerificationResult) -> Self {
+        PyVerificationResult {
+            identity: r.identity().map(|i| i.as_str().to_string()),
+            issuer: r.issuer().map(str::to_string),
+            integrated_time: r.integrated_time().map(|t| t.as_second()),
+            verified_timestamps: r.verified_timestamps().iter().map(|t| t.as_second()).collect(),
+            certificate_verified: r.certificate_verified(),
+            sct_verified: r.sct_verified(),
+            tlog_verified: r.tlog_verified(),
+            identity_policy_checked: r.identity_policy_checked(),
+        }
+    }
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyVerificationResult {
+    /// The signer identity from the certificate (email or URI), if any.
+    #[getter]
+    fn identity(&self) -> Option<&str> {
+        self.identity.as_deref()
+    }
+
+    /// The OIDC issuer recorded in the certificate, if any.
+    #[getter]
+    fn issuer(&self) -> Option<&str> {
+        self.issuer.as_deref()
+    }
+
+    /// The transparency log integrated time as an aware UTC ``datetime``.
+    #[getter]
+    fn integrated_time<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        self.integrated_time.map(|t| utc_datetime(py, t)).transpose()
+    }
+
+    /// Verified RFC 3161 timestamps as aware UTC ``datetime`` objects.
+    #[getter]
+    fn verified_timestamps<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
+        self.verified_timestamps.iter().map(|t| utc_datetime(py, *t)).collect()
+    }
+
+    /// Whether the certificate chain was verified.
+    #[getter]
+    fn certificate_verified(&self) -> bool {
+        self.certificate_verified
+    }
+
+    /// Whether the signed certificate timestamp (SCT) was verified.
+    #[getter]
+    fn sct_verified(&self) -> bool {
+        self.sct_verified
+    }
+
+    /// Whether transparency log inclusion was verified.
+    #[getter]
+    fn tlog_verified(&self) -> bool {
+        self.tlog_verified
+    }
+
+    /// Whether an identity policy was checked against the signer.
+    #[getter]
+    fn identity_policy_checked(&self) -> bool {
+        self.identity_policy_checked
+    }
+
+    fn __repr__(&self) -> String {
+        let opt = |v: &Option<String>| match v {
+            Some(s) => format!("{s:?}"),
+            None => "None".to_string(),
+        };
+        format!(
+            "VerificationResult(identity={}, issuer={}, tlog_verified={}, certificate_verified={})",
+            opt(&self.identity),
+            opt(&self.issuer),
+            if self.tlog_verified { "True" } else { "False" },
+            if self.certificate_verified { "True" } else { "False" },
+        )
+    }
+}
 
 // ---------------------------------------------------------------------------
 // PyIdentity — wraps VerificationPolicy
@@ -28,6 +139,14 @@ use sigstore_verify::{VerificationPolicy, Verifier};
 ///         ``"https://github.com/org/repo/.github/workflows/ci.yml@refs/heads/main"``).
 ///     issuer:   The expected OIDC issuer URL. Strongly recommended;
 ///         if omitted, any issuer is accepted for the given identity.
+///     skip_tlog_unsafe: **Unsafe.** Do not require transparency log
+///         inclusion. Only for trust domains without an accessible log
+///         (e.g. GitHub private-repository attestations) or testing.
+///     skip_sct: Do not require a signed certificate timestamp. Needed for
+///         trust domains whose certificates carry no public CT SCT (e.g.
+///         GitHub's attestation instance).
+///     skip_certificate_chain: **Unsafe.** Do not verify the certificate
+///         chain (also skips the SCT). Testing only.
 ///
 /// Example::
 ///
@@ -54,6 +173,25 @@ fn build_policy(identity: &str, issuer: Option<&str>) -> VerificationPolicy {
     }
 }
 
+/// Apply the opt-out flags to a policy.
+fn apply_flags(
+    mut policy: VerificationPolicy,
+    skip_tlog_unsafe: bool,
+    skip_sct: bool,
+    skip_certificate_chain: bool,
+) -> VerificationPolicy {
+    if skip_tlog_unsafe {
+        policy = policy.skip_tlog_unsafe();
+    }
+    if skip_sct {
+        policy = policy.skip_sct();
+    }
+    if skip_certificate_chain {
+        policy = policy.skip_certificate_chain();
+    }
+    policy
+}
+
 fn verifier_from_root(root: &TrustedRoot) -> PyResult<Verifier> {
     Verifier::new(root).map_err(verify_error)
 }
@@ -62,10 +200,21 @@ fn verifier_from_root(root: &TrustedRoot) -> PyResult<Verifier> {
 #[pymethods]
 impl PyIdentity {
     #[new]
-    #[pyo3(signature = (identity, issuer=None))]
-    fn new(identity: &str, issuer: Option<&str>) -> Self {
+    #[pyo3(signature = (identity, issuer=None, *, skip_tlog_unsafe=false, skip_sct=false, skip_certificate_chain=false))]
+    fn new(
+        identity: &str,
+        issuer: Option<&str>,
+        skip_tlog_unsafe: bool,
+        skip_sct: bool,
+        skip_certificate_chain: bool,
+    ) -> Self {
         PyIdentity {
-            inner: build_policy(identity, issuer),
+            inner: apply_flags(
+                build_policy(identity, issuer),
+                skip_tlog_unsafe,
+                skip_sct,
+                skip_certificate_chain,
+            ),
             identity: identity.to_string(),
             issuer: issuer.map(str::to_string),
         }
@@ -108,7 +257,8 @@ impl PyIdentity {
 ///                       issuer="https://accounts.google.com")
 ///
 ///     verifier.verify_artifact(open("artifact.bin", "rb").read(), bundle, policy)
-///     # raises VerificationError on failure, returns None on success
+///     result = verifier.verify_artifact(data, bundle, policy)
+///     # raises VerificationError on failure; returns a VerificationResult
 #[gen_stub_pyclass]
 #[pyclass(name = "Verifier", module = "sigstore._internal")]
 pub struct PyVerifier {
@@ -177,27 +327,26 @@ impl PyVerifier {
         })
     }
 
-    /// Verify a raw artifact against a Sigstore bundle.
+    /// Verify an artifact against a Sigstore bundle.
     ///
-    /// Returns ``None`` on success. Raises :exc:`VerificationError` if
-    /// verification fails for any reason (invalid signature, identity
-    /// mismatch, expired certificate, etc.).
+    /// Returns a :class:`VerificationResult` on success. Raises
+    /// :exc:`VerificationError` (or a more specific subclass such as
+    /// :exc:`IdentityMismatchError`) if verification fails.
     ///
     /// Args:
-    ///     input:   The raw artifact bytes to verify.
+    ///     input:   The artifact: raw ``bytes`` or a pre-computed :class:`Hashed`.
     ///     bundle:  The :class:`Bundle` produced during signing.
     ///     policy:  The :class:`Identity` asserting the expected signer.
     fn verify_artifact(
         &self,
-        input: &Bound<'_, pyo3::types::PyBytes>,
+        input: &Bound<'_, PyAny>,
         bundle: &PyBundle,
         policy: &PyIdentity,
-    ) -> PyResult<()> {
-        // Construct Artifact<'_> transiently — lifetime is scoped to this call
-        let artifact = Artifact::from(input.as_bytes());
+    ) -> PyResult<PyVerificationResult> {
+        let artifact = extract_artifact(input)?;
         self.inner
-            .verify(artifact, &bundle.inner, &policy.inner)
-            .map(|_| ())
+            .verify(artifact.as_artifact(), &bundle.inner, &policy.inner)
+            .map(|r| PyVerificationResult::from(&r))
             .map_err(verify_error)
     }
 
@@ -211,8 +360,8 @@ impl PyVerifier {
     /// Raises :exc:`VerificationError` if verification fails.
     ///
     /// Args:
-    ///     artifact: The raw artifact bytes whose digest is claimed by the
-    ///               in-toto statement.
+    ///     artifact: The artifact (``bytes`` or :class:`Hashed`) whose digest is
+    ///               claimed by the in-toto statement.
     ///     bundle:   The DSSE :class:`Bundle` produced during signing.
     ///     policy:   The :class:`Identity` asserting the expected signer.
     ///
@@ -221,15 +370,15 @@ impl PyVerifier {
     fn verify_dsse<'py>(
         &self,
         py: Python<'py>,
-        artifact: &Bound<'_, pyo3::types::PyBytes>,
+        artifact: &Bound<'_, PyAny>,
         bundle: &PyBundle,
         policy: &PyIdentity,
     ) -> PyResult<(String, pyo3::Py<pyo3::types::PyBytes>)> {
         use sigstore_types::SignatureContent;
 
-        let art = Artifact::from(artifact.as_bytes());
+        let art = extract_artifact(artifact)?;
         self.inner
-            .verify(art, &bundle.inner, &policy.inner)
+            .verify(art.as_artifact(), &bundle.inner, &policy.inner)
             .map_err(verify_error)?;
 
         // Extract (payload_type, payload_bytes) from the DSSE envelope
@@ -261,7 +410,7 @@ impl PyVerifier {
 /// :class:`Verifier` once and reusing it.
 ///
 /// Args:
-///     input:        The raw artifact bytes to verify.
+///     input:        The artifact: raw ``bytes`` or a :class:`Hashed` digest.
 ///     bundle:       A :class:`Bundle` object or a JSON string.
 ///     identity:     The expected signer identity string.
 ///     issuer:       The expected OIDC issuer URL. Strongly recommended.
@@ -278,12 +427,12 @@ impl PyVerifier {
 #[pyo3(signature = (input, bundle, identity, issuer=None, *, trusted_root=None))]
 pub fn py_verify(
     py: Python<'_>,
-    input: &Bound<'_, pyo3::types::PyBytes>,
+    input: &Bound<'_, PyAny>,
     bundle: &Bound<'_, PyAny>,
     identity: &str,
     issuer: Option<&str>,
     trusted_root: Option<&PyTrustedRoot>,
-) -> PyResult<()> {
+) -> PyResult<PyVerificationResult> {
     // Accept Bundle object or JSON string.
     let owned_bundle: sigstore_types::Bundle =
         if let Ok(b) = bundle.extract::<PyRef<PyBundle>>() {
@@ -310,8 +459,8 @@ pub fn py_verify(
         &owned_root
     };
 
-    let artifact = Artifact::from(input.as_bytes());
-    sigstore_verify::verify(artifact, &owned_bundle, &policy, root_ref)
-        .map(|_| ())
+    let artifact = extract_artifact(input)?;
+    sigstore_verify::verify(artifact.as_artifact(), &owned_bundle, &policy, root_ref)
+        .map(|r| PyVerificationResult::from(&r))
         .map_err(verify_error)
 }

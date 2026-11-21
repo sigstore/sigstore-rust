@@ -52,6 +52,40 @@ impl PyBundle {
         self.inner.media_type.as_str()
     }
 
+    /// Serialize the bundle to indented JSON.
+    fn to_json_pretty(&self) -> PyResult<String> {
+        self.inner
+            .to_json_pretty()
+            .map_err(bundle_error)
+    }
+
+    /// The signing certificate as a PEM string, if the bundle carries one.
+    #[getter]
+    fn signing_certificate_pem(&self) -> Option<String> {
+        self.inner.signing_certificate().map(|c| c.to_pem())
+    }
+
+    /// Whether the bundle contains a transparency log inclusion proof.
+    #[getter]
+    fn has_inclusion_proof(&self) -> bool {
+        self.inner.has_inclusion_proof()
+    }
+
+    /// Whether the bundle contains a transparency log inclusion promise (SET).
+    #[getter]
+    fn has_inclusion_promise(&self) -> bool {
+        self.inner.has_inclusion_promise()
+    }
+
+    /// Whether the bundle wraps a DSSE envelope (as opposed to a plain signature).
+    #[getter]
+    fn is_dsse(&self) -> bool {
+        matches!(
+            self.inner.content,
+            sigstore_types::SignatureContent::DsseEnvelope(_)
+        )
+    }
+
     fn __repr__(&self) -> String {
         format!("Bundle(media_type={:?})", self.inner.media_type.as_str())
     }

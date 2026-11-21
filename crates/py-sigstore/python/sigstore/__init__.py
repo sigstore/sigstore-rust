@@ -30,6 +30,8 @@ from sigstore._internal import (
     TrustedRoot,
     Identity,
     Verifier,
+    VerificationResult,
+    Hashed,
     # Signing + OIDC
     IdentityToken,
     Signer,
@@ -63,6 +65,8 @@ __all__ = [
     "TrustedRoot",
     "Identity",
     "Verifier",
+    "VerificationResult",
+    "Hashed",
     # Signing + OIDC
     "IdentityToken",
     "Signer",
