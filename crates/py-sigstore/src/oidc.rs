@@ -1,6 +1,6 @@
 //! Python binding for `sigstore_oidc::IdentityToken`.
 
-use crate::errors::IdentityTokenError;
+use crate::errors::{token_error, IdentityTokenError};
 use crate::runtime::get_runtime;
 use pyo3::prelude::*;
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pymethods};
@@ -39,7 +39,7 @@ impl PyIdentityToken {
     fn from_jwt(_cls: &Bound<'_, pyo3::types::PyType>, token: &str) -> PyResult<Self> {
         IdentityToken::from_jwt(token)
             .map(|inner| PyIdentityToken { inner })
-            .map_err(|e| IdentityTokenError::new_err(e.to_string()))
+            .map_err(token_error)
     }
 
     /// Detect an ambient OIDC credential from the current environment.
@@ -54,7 +54,7 @@ impl PyIdentityToken {
         let py = cls.py();
         let maybe_token = py
             .detach(|| get_runtime().block_on(IdentityToken::detect_ambient()))
-            .map_err(|e| IdentityTokenError::new_err(e.to_string()))?;
+            .map_err(token_error)?;
 
         maybe_token
             .map(|inner| PyIdentityToken { inner })

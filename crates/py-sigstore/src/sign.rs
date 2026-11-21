@@ -2,7 +2,7 @@
 //! convenience function.
 
 use crate::bundle::PyBundle;
-use crate::errors::{IdentityTokenError, SigningError};
+use crate::errors::{sign_error, token_error, IdentityTokenError};
 use crate::oidc::PyIdentityToken;
 use crate::runtime::get_runtime;
 use pyo3::prelude::*;
@@ -32,7 +32,7 @@ fn build_signer(
                 }
             })
         })
-        .map_err(|e| SigningError::new_err(e.to_string()))?;
+        .map_err(sign_error)?;
     Ok(ctx.signer(token))
 }
 
@@ -121,7 +121,7 @@ impl PySigner {
         let data = input.as_bytes().to_vec();
         py.detach(|| get_runtime().block_on(self.inner.sign(&data)))
             .map(|inner| PyBundle { inner })
-            .map_err(|e| SigningError::new_err(e.to_string()))
+            .map_err(sign_error)
     }
 
     /// Sign an in-toto DSSE statement and return a Sigstore bundle.
@@ -162,7 +162,7 @@ impl PySigner {
         let payload_data = payload.as_bytes().to_vec();
         py.detach(|| get_runtime().block_on(self.inner.sign_raw_statement(&payload_data)))
             .map(|inner| PyBundle { inner })
-            .map_err(|e| SigningError::new_err(e.to_string()))
+            .map_err(sign_error)
     }
 }
 
@@ -207,7 +207,7 @@ pub fn py_sign(
             py_token.inner.clone()
         } else if let Ok(jwt_str) = t.extract::<String>() {
             IdentityToken::from_jwt(&jwt_str)
-                .map_err(|e| IdentityTokenError::new_err(e.to_string()))?
+                .map_err(token_error)?
         } else {
             return Err(pyo3::exceptions::PyTypeError::new_err(
                 "token must be an IdentityToken object or a JWT string",
@@ -217,7 +217,7 @@ pub fn py_sign(
         // Attempt ambient detection
         let maybe = py
             .detach(|| get_runtime().block_on(IdentityToken::detect_ambient()))
-            .map_err(|e| IdentityTokenError::new_err(e.to_string()))?;
+            .map_err(token_error)?;
         maybe.ok_or_else(|| {
             IdentityTokenError::new_err(
                 "No ambient OIDC credential found and no token provided. \
@@ -232,5 +232,5 @@ pub fn py_sign(
     let input_data = input.as_bytes().to_vec();
     py.detach(|| get_runtime().block_on(signer.sign(&input_data)))
         .map(|inner| PyBundle { inner })
-        .map_err(|e| SigningError::new_err(e.to_string()))
+        .map_err(sign_error)
 }

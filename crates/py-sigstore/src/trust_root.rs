@@ -1,6 +1,6 @@
 //! Python binding for `sigstore_trust_root::TrustedRoot`.
 
-use crate::errors::TrustedRootError;
+use crate::errors::trust_root_error;
 use crate::runtime::get_runtime;
 use pyo3::prelude::*;
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pymethods};
@@ -45,7 +45,7 @@ impl PyTrustedRoot {
         let py = cls.py();
         py.detach(|| get_runtime().block_on(TrustedRoot::production()))
             .map(|inner| PyTrustedRoot { inner })
-            .map_err(|e| TrustedRootError::new_err(e.to_string()))
+            .map_err(trust_root_error)
     }
 
     /// Fetch the Sigstore staging trusted root via TUF.
@@ -59,7 +59,7 @@ impl PyTrustedRoot {
         let py = cls.py();
         py.detach(|| get_runtime().block_on(TrustedRoot::staging()))
             .map(|inner| PyTrustedRoot { inner })
-            .map_err(|e| TrustedRootError::new_err(e.to_string()))
+            .map_err(trust_root_error)
     }
 
     /// Load the GitHub Actions trusted root (embedded, no network required).
@@ -73,7 +73,7 @@ impl PyTrustedRoot {
     fn github(_cls: &Bound<'_, pyo3::types::PyType>) -> PyResult<Self> {
         TrustedRoot::from_json(SIGSTORE_GITHUB_TRUSTED_ROOT)
             .map(|inner| PyTrustedRoot { inner })
-            .map_err(|e| TrustedRootError::new_err(e.to_string()))
+            .map_err(trust_root_error)
     }
 
     /// Parse a trusted root from a JSON string.
@@ -83,7 +83,7 @@ impl PyTrustedRoot {
     fn from_json(_cls: &Bound<'_, pyo3::types::PyType>, data: &str) -> PyResult<Self> {
         TrustedRoot::from_json(data)
             .map(|inner| PyTrustedRoot { inner })
-            .map_err(|e| TrustedRootError::new_err(e.to_string()))
+            .map_err(trust_root_error)
     }
 
     /// Load a trusted root from a JSON file on disk.
@@ -96,7 +96,7 @@ impl PyTrustedRoot {
     fn from_file(_cls: &Bound<'_, pyo3::types::PyType>, path: &str) -> PyResult<Self> {
         TrustedRoot::from_file(path)
             .map(|inner| PyTrustedRoot { inner })
-            .map_err(|e| TrustedRootError::new_err(e.to_string()))
+            .map_err(trust_root_error)
     }
 
     fn __repr__(&self) -> String {
