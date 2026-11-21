@@ -2,7 +2,7 @@
 //! module-level `verify()` convenience function.
 
 use crate::bundle::PyBundle;
-use crate::errors::{BundleError, TrustedRootError, VerificationError};
+use crate::errors::{bundle_error, trust_root_error, verify_error, VerificationError};
 use crate::runtime::get_runtime;
 use crate::trust_root::PyTrustedRoot;
 use pyo3::prelude::*;
@@ -55,7 +55,7 @@ fn build_policy(identity: &str, issuer: Option<&str>) -> VerificationPolicy {
 }
 
 fn verifier_from_root(root: &TrustedRoot) -> PyResult<Verifier> {
-    Verifier::new(root).map_err(|e| TrustedRootError::new_err(e.to_string()))
+    Verifier::new(root).map_err(verify_error)
 }
 
 #[gen_stub_pymethods]
@@ -128,7 +128,7 @@ impl PyVerifier {
         let py = cls.py();
         let root = py
             .detach(|| get_runtime().block_on(TrustedRoot::production()))
-            .map_err(|e| TrustedRootError::new_err(e.to_string()))?;
+            .map_err(trust_root_error)?;
         Ok(PyVerifier {
             inner: verifier_from_root(&root)?,
         })
@@ -144,7 +144,7 @@ impl PyVerifier {
         let py = cls.py();
         let root = py
             .detach(|| get_runtime().block_on(TrustedRoot::staging()))
-            .map_err(|e| TrustedRootError::new_err(e.to_string()))?;
+            .map_err(trust_root_error)?;
         Ok(PyVerifier {
             inner: verifier_from_root(&root)?,
         })
@@ -160,7 +160,7 @@ impl PyVerifier {
     fn github(_cls: &Bound<'_, pyo3::types::PyType>) -> PyResult<Self> {
         use sigstore_trust_root::SIGSTORE_GITHUB_TRUSTED_ROOT;
         let root = TrustedRoot::from_json(SIGSTORE_GITHUB_TRUSTED_ROOT)
-            .map_err(|e| TrustedRootError::new_err(e.to_string()))?;
+            .map_err(trust_root_error)?;
         Ok(PyVerifier {
             inner: verifier_from_root(&root)?,
         })
@@ -198,7 +198,7 @@ impl PyVerifier {
         self.inner
             .verify(artifact, &bundle.inner, &policy.inner)
             .map(|_| ())
-            .map_err(|e| VerificationError::new_err(e.to_string()))
+            .map_err(verify_error)
     }
 
     /// Verify a DSSE envelope bundle against an artifact and return the payload.
@@ -230,7 +230,7 @@ impl PyVerifier {
         let art = Artifact::from(artifact.as_bytes());
         self.inner
             .verify(art, &bundle.inner, &policy.inner)
-            .map_err(|e| VerificationError::new_err(e.to_string()))?;
+            .map_err(verify_error)?;
 
         // Extract (payload_type, payload_bytes) from the DSSE envelope
         match &bundle.inner.content {
@@ -290,7 +290,7 @@ pub fn py_verify(
             b.inner.clone()
         } else if let Ok(s) = bundle.extract::<String>() {
             use sigstore_types::Bundle;
-            Bundle::from_json(&s).map_err(|e| BundleError::new_err(e.to_string()))?
+            Bundle::from_json(&s).map_err(bundle_error)?
         } else {
             return Err(pyo3::exceptions::PyTypeError::new_err(
                 "bundle must be a Bundle object or a JSON string",
@@ -306,12 +306,12 @@ pub fn py_verify(
     } else {
         owned_root = py
             .detach(|| get_runtime().block_on(TrustedRoot::production()))
-            .map_err(|e| TrustedRootError::new_err(e.to_string()))?;
+            .map_err(trust_root_error)?;
         &owned_root
     };
 
     let artifact = Artifact::from(input.as_bytes());
     sigstore_verify::verify(artifact, &owned_bundle, &policy, root_ref)
         .map(|_| ())
-        .map_err(|e| VerificationError::new_err(e.to_string()))
+        .map_err(verify_error)
 }

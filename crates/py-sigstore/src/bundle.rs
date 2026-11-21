@@ -1,6 +1,6 @@
 //! Python binding for `sigstore_types::Bundle`.
 
-use crate::errors::BundleError;
+use crate::errors::bundle_error;
 use pyo3::prelude::*;
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pymethods};
 use sigstore_types::Bundle;
@@ -31,7 +31,7 @@ impl PyBundle {
     fn from_json(_cls: &Bound<'_, pyo3::types::PyType>, data: &str) -> PyResult<Self> {
         Bundle::from_json(data)
             .map(|inner| PyBundle { inner })
-            .map_err(|e| BundleError::new_err(e.to_string()))
+            .map_err(bundle_error)
     }
 
     /// Serialize the bundle to a JSON string.
@@ -40,7 +40,7 @@ impl PyBundle {
     fn to_json(&self) -> PyResult<String> {
         self.inner
             .to_json()
-            .map_err(|e| BundleError::new_err(e.to_string()))
+            .map_err(bundle_error)
     }
 
     /// The bundle media type string.

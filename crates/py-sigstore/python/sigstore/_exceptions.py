@@ -1,0 +1,43 @@
+"""Exception classes for sigstore (defined in the native extension)."""
+
+from sigstore._internal import (
+    SigstoreError,
+    VerificationError,
+    SigningError,
+    BundleError,
+    TrustedRootError,
+    IdentityTokenError,
+    IdentityMismatchError,
+    SignatureInvalidError,
+    ArtifactMismatchError,
+    CertificateError,
+    TransparencyLogError,
+    TimestampError,
+    UnsupportedAlgorithmError,
+    SigningConfigError,
+    RekorError,
+    FulcioError,
+    TsaError,
+    TufError,
+)
+
+__all__ = [
+    "SigstoreError",
+    "VerificationError",
+    "SigningError",
+    "BundleError",
+    "TrustedRootError",
+    "IdentityTokenError",
+    "IdentityMismatchError",
+    "SignatureInvalidError",
+    "ArtifactMismatchError",
+    "CertificateError",
+    "TransparencyLogError",
+    "TimestampError",
+    "UnsupportedAlgorithmError",
+    "SigningConfigError",
+    "RekorError",
+    "FulcioError",
+    "TsaError",
+    "TufError",
+]
