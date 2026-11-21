@@ -1,0 +1,49 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "py-sigstore"
+dynamic = ["version"]
+description = "Python bindings for sigstore-rust — fast Sigstore signing and verification"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+readme = "README.md"
+keywords = ["sigstore", "signing", "verification", "supply-chain", "security"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Topic :: Security :: Cryptography",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+
+[project.urls]
+Repository = "https://github.com/prefix-dev/sigstore-rust"
+Issues = "https://github.com/prefix-dev/sigstore-rust/issues"
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "network: requires live network access to Sigstore infrastructure",
+    "ci: requires GitHub Actions OIDC environment (ACTIONS_ID_TOKEN_REQUEST_URL)",
+]
+
+[tool.maturin]
+# Use workspace version from Cargo.toml
+# Mixed layout: Rust extension + pure Python package
+python-source = "python"
+# The compiled extension is named _internal; re-exported by __init__.py
+module-name = "py_sigstore._internal"
+bindings = "pyo3"
