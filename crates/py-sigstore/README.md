@@ -4,11 +4,9 @@ Python bindings for [sigstore-rust](https://github.com/prefix-dev/sigstore-rust)
 
 > **Status: alpha.** The API may change before 1.0.
 >
-> **Naming:** like py-rattler, the package is
-> installed as `py-sigstore`; it is imported as `py_sigstore`. It is a separate,
-> Rust-backed implementation and is not a drop-in replacement for the PyPI
-> package [`sigstore`](https://pypi.org/project/sigstore/) (sigstore-python),
-> although the two can be installed side by side.
+> **Naming:** the package is installed as `py-sigstore`; it is imported as `py_sigstore`.
+> It is a separate,  Rust-backed implementation and is not a drop-in replacement for the PyPI
+> package [`sigstore`](https://pypi.org/project/sigstore/) (sigstore-python), although the two can be installed side by side.
 
 ## Installation
 
