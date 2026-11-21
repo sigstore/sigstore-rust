@@ -109,7 +109,7 @@ fn subject_digest(
 ///     bundle = signer.sign_dsse(statement_json_bytes,
 ///                               "application/vnd.in-toto+json")
 #[gen_stub_pyclass]
-#[pyclass(name = "Signer", module = "sigstore._internal")]
+#[pyclass(name = "Signer", module = "py_sigstore._internal")]
 pub struct PySigner {
     /// The inner Rust signer. Wrapped in a Box so PySigner is `Send`.
     inner: Box<Signer>,
@@ -275,7 +275,7 @@ impl PySigner {
 ///     :exc:`SigningError`:        If signing fails.
 ///     :exc:`IdentityTokenError`:  If no token is provided and ambient
 ///                                 detection fails, or if the token is expired.
-#[gen_stub_pyfunction(module = "sigstore._internal")]
+#[gen_stub_pyfunction(module = "py_sigstore._internal")]
 #[pyfunction]
 #[pyo3(signature = (input, token=None, *, staging=false))]
 pub fn py_sign(

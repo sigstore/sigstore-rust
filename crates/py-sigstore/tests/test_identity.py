@@ -1,5 +1,5 @@
 """Tests for the Identity (verification policy) Python API."""
-from sigstore import Identity
+from py_sigstore import Identity
 
 GITHUB_WORKFLOW_URI = (
     "https://github.com/org/repo/.github/workflows/release.yml@refs/heads/main"

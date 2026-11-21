@@ -21,7 +21,7 @@ use sigstore_oidc::IdentityToken;
 ///
 ///     token = IdentityToken.from_jwt(os.environ["SIGSTORE_TOKEN"])
 #[gen_stub_pyclass]
-#[pyclass(name = "IdentityToken", module = "sigstore._internal")]
+#[pyclass(name = "IdentityToken", module = "py_sigstore._internal")]
 pub struct PyIdentityToken {
     pub inner: IdentityToken,
 }

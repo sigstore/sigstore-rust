@@ -1,12 +1,12 @@
 """
-Type stubs for sigstore public API.
+Type stubs for the py_sigstore public API.
 
 Classes and functions come from the compiled _internal extension;
 exceptions are defined here because pyo3::create_exception! cannot
 be auto-stubbed with dotted module paths.
 """
 
-from sigstore._internal import (
+from py_sigstore._internal import (
     Bundle as Bundle,
     TrustedRoot as TrustedRoot,
     Identity as Identity,
@@ -18,7 +18,7 @@ from sigstore._internal import (
     py_verify as verify,
     py_sign as sign,
 )
-from sigstore._exceptions import (
+from py_sigstore._exceptions import (
     SigstoreError as SigstoreError,
     VerificationError as VerificationError,
     SigningError as SigningError,

@@ -1,7 +1,7 @@
 """Tests for the TrustedRoot Python API."""
 import pytest
 
-from sigstore import TrustedRoot, TrustedRootError
+from py_sigstore import TrustedRoot, TrustedRootError
 
 
 class TestTrustedRootOffline:

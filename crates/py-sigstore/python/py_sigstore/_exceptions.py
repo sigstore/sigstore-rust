@@ -1,12 +1,6 @@
-"""
-py-sigstore: Python bindings for the sigstore-rust library.
+"""Exception classes for py_sigstore (defined in the native extension)."""
 
-Provides fast Sigstore artifact signing and verification backed by a
-native Rust implementation.
-"""
-
-from sigstore._internal import (
-    # Exceptions
+from py_sigstore._internal import (
     SigstoreError,
     VerificationError,
     SigningError,
@@ -25,23 +19,9 @@ from sigstore._internal import (
     FulcioError,
     TsaError,
     TufError,
-    # Core types
-    Bundle,
-    TrustedRoot,
-    Identity,
-    Verifier,
-    VerificationResult,
-    Hashed,
-    # Signing + OIDC
-    IdentityToken,
-    Signer,
-    # Convenience functions (exported under cleaner public names)
-    py_verify as verify,
-    py_sign as sign,
 )
 
 __all__ = [
-    # Exceptions
     "SigstoreError",
     "VerificationError",
     "SigningError",
@@ -60,17 +40,4 @@ __all__ = [
     "FulcioError",
     "TsaError",
     "TufError",
-    # Core types
-    "Bundle",
-    "TrustedRoot",
-    "Identity",
-    "Verifier",
-    "VerificationResult",
-    "Hashed",
-    # Signing + OIDC
-    "IdentityToken",
-    "Signer",
-    # Convenience functions
-    "verify",
-    "sign",
 ]

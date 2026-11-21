@@ -25,7 +25,7 @@ use sigstore_trust_root::{TrustedRoot, SIGSTORE_GITHUB_TRUSTED_ROOT};
 ///     # Load from a local file:
 ///     root = TrustedRoot.from_file("/path/to/trusted_root.json")
 #[gen_stub_pyclass]
-#[pyclass(name = "TrustedRoot", module = "sigstore._internal")]
+#[pyclass(name = "TrustedRoot", module = "py_sigstore._internal")]
 pub struct PyTrustedRoot {
     pub inner: TrustedRoot,
 }
