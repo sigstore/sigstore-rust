@@ -9,6 +9,33 @@ use pyo3::prelude::*;
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pymethods, gen_stub_pyfunction};
 use sigstore_sign::{Signer, SigningContext};
 
+/// Build a signer for the given instance, fetching the signing config via TUF.
+///
+/// Releases the GIL during the network fetch.
+fn build_signer(
+    py: Python<'_>,
+    token: sigstore_oidc::IdentityToken,
+    staging: bool,
+) -> PyResult<Signer> {
+    if token.is_expired() {
+        return Err(IdentityTokenError::new_err(
+            "identity token is expired; obtain a fresh token before signing",
+        ));
+    }
+    let ctx = py
+        .detach(|| {
+            get_runtime().block_on(async {
+                if staging {
+                    SigningContext::staging().await
+                } else {
+                    SigningContext::production().await
+                }
+            })
+        })
+        .map_err(|e| SigningError::new_err(e.to_string()))?;
+    Ok(ctx.signer(token))
+}
+
 // ---------------------------------------------------------------------------
 // PySigner
 // ---------------------------------------------------------------------------
@@ -46,16 +73,13 @@ impl PySigner {
     /// Args:
     ///     token: An :class:`IdentityToken` for authentication with Fulcio.
     ///
-    /// Raises :exc:`IdentityTokenError` if the token is expired.
+    /// Fetches the signing config via TUF (network request).
+    ///
+    /// Raises :exc:`IdentityTokenError` if the token is expired and
+    /// :exc:`SigningError` if the signing config cannot be loaded.
     #[classmethod]
-    fn production(_cls: &Bound<'_, pyo3::types::PyType>, token: &PyIdentityToken) -> PyResult<Self> {
-        if token.inner.is_expired() {
-            return Err(IdentityTokenError::new_err(
-                "Identity token is expired. Obtain a fresh token before signing.",
-            ));
-        }
-        let ctx = SigningContext::production();
-        let signer = ctx.signer(token.inner.clone());
+    fn production(cls: &Bound<'_, pyo3::types::PyType>, token: &PyIdentityToken) -> PyResult<Self> {
+        let signer = build_signer(cls.py(), token.inner.clone(), false)?;
         Ok(PySigner {
             inner: Box::new(signer),
         })
@@ -71,14 +95,8 @@ impl PySigner {
     ///
     /// Raises :exc:`IdentityTokenError` if the token is expired.
     #[classmethod]
-    fn staging(_cls: &Bound<'_, pyo3::types::PyType>, token: &PyIdentityToken) -> PyResult<Self> {
-        if token.inner.is_expired() {
-            return Err(IdentityTokenError::new_err(
-                "Identity token is expired. Obtain a fresh token before signing.",
-            ));
-        }
-        let ctx = SigningContext::staging();
-        let signer = ctx.signer(token.inner.clone());
+    fn staging(cls: &Bound<'_, pyo3::types::PyType>, token: &PyIdentityToken) -> PyResult<Self> {
+        let signer = build_signer(cls.py(), token.inner.clone(), true)?;
         Ok(PySigner {
             inner: Box::new(signer),
         })
@@ -208,18 +226,7 @@ pub fn py_sign(
         })?
     };
 
-    if identity_token.is_expired() {
-        return Err(IdentityTokenError::new_err(
-            "Identity token is expired. Obtain a fresh token before signing.",
-        ));
-    }
-
-    let ctx = if staging {
-        SigningContext::staging()
-    } else {
-        SigningContext::production()
-    };
-    let signer = ctx.signer(identity_token);
+    let signer = build_signer(py, identity_token, staging)?;
 
     // Extract before detach() — Bound is !Send.
     let input_data = input.as_bytes().to_vec();

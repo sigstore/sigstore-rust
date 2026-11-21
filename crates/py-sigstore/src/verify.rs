@@ -27,7 +27,7 @@ use sigstore_verify::{VerificationPolicy, Verifier};
 ///         workflow URI (e.g.
 ///         ``"https://github.com/org/repo/.github/workflows/ci.yml@refs/heads/main"``).
 ///     issuer:   The expected OIDC issuer URL. Strongly recommended;
-///         if omitted any issuer is accepted.
+///         if omitted, any issuer is accepted for the given identity.
 ///
 /// Example::
 ///
@@ -39,6 +39,23 @@ use sigstore_verify::{VerificationPolicy, Verifier};
 #[pyclass(name = "Identity", module = "sigstore._internal")]
 pub struct PyIdentity {
     pub inner: VerificationPolicy,
+    identity: String,
+    issuer: Option<String>,
+}
+
+/// Build a certificate-identity policy.
+///
+/// With an issuer this is `VerificationPolicy::new`. Without one, only the
+/// identity is required (any issuer is accepted).
+fn build_policy(identity: &str, issuer: Option<&str>) -> VerificationPolicy {
+    match issuer {
+        Some(iss) => VerificationPolicy::new(identity, iss),
+        None => VerificationPolicy::any_identity().require_identity(identity),
+    }
+}
+
+fn verifier_from_root(root: &TrustedRoot) -> PyResult<Verifier> {
+    Verifier::new(root).map_err(|e| TrustedRootError::new_err(e.to_string()))
 }
 
 #[gen_stub_pymethods]
@@ -47,30 +64,29 @@ impl PyIdentity {
     #[new]
     #[pyo3(signature = (identity, issuer=None))]
     fn new(identity: &str, issuer: Option<&str>) -> Self {
-        let mut policy = VerificationPolicy::with_identity(identity);
-        if let Some(iss) = issuer {
-            policy = policy.require_issuer(iss);
+        PyIdentity {
+            inner: build_policy(identity, issuer),
+            identity: identity.to_string(),
+            issuer: issuer.map(str::to_string),
         }
-        PyIdentity { inner: policy }
     }
 
-    /// The required identity string, if set.
+    /// The required identity string.
     #[getter]
-    fn identity(&self) -> Option<&str> {
-        self.inner.identity.as_deref()
+    fn identity(&self) -> &str {
+        &self.identity
     }
 
     /// The required issuer URL, if set.
     #[getter]
     fn issuer(&self) -> Option<&str> {
-        self.inner.issuer.as_deref()
+        self.issuer.as_deref()
     }
 
     fn __repr__(&self) -> String {
-        match (&self.inner.identity, &self.inner.issuer) {
-            (Some(id), Some(iss)) => format!("Identity(identity={id:?}, issuer={iss:?})"),
-            (Some(id), None) => format!("Identity(identity={id:?})"),
-            _ => "Identity()".to_string(),
+        match &self.issuer {
+            Some(iss) => format!("Identity(identity={:?}, issuer={iss:?})", self.identity),
+            None => format!("Identity(identity={:?})", self.identity),
         }
     }
 }
@@ -114,7 +130,7 @@ impl PyVerifier {
             .detach(|| get_runtime().block_on(TrustedRoot::production()))
             .map_err(|e| TrustedRootError::new_err(e.to_string()))?;
         Ok(PyVerifier {
-            inner: Verifier::new(&root),
+            inner: verifier_from_root(&root)?,
         })
     }
 
@@ -130,7 +146,7 @@ impl PyVerifier {
             .detach(|| get_runtime().block_on(TrustedRoot::staging()))
             .map_err(|e| TrustedRootError::new_err(e.to_string()))?;
         Ok(PyVerifier {
-            inner: Verifier::new(&root),
+            inner: verifier_from_root(&root)?,
         })
     }
 
@@ -146,7 +162,7 @@ impl PyVerifier {
         let root = TrustedRoot::from_json(SIGSTORE_GITHUB_TRUSTED_ROOT)
             .map_err(|e| TrustedRootError::new_err(e.to_string()))?;
         Ok(PyVerifier {
-            inner: Verifier::new(&root),
+            inner: verifier_from_root(&root)?,
         })
     }
 
@@ -157,7 +173,7 @@ impl PyVerifier {
     #[classmethod]
     fn from_root(_cls: &Bound<'_, pyo3::types::PyType>, root: &PyTrustedRoot) -> PyResult<Self> {
         Ok(PyVerifier {
-            inner: Verifier::new(&root.inner),
+            inner: verifier_from_root(&root.inner)?,
         })
     }
 
@@ -220,11 +236,15 @@ impl PyVerifier {
         match &bundle.inner.content {
             SignatureContent::DsseEnvelope(env) => {
                 let payload_type = env.payload_type.clone();
-                let payload_bytes = env.decode_payload().to_vec();
-                Ok((payload_type, pyo3::types::PyBytes::new(py, &payload_bytes).into()))
+                let payload_bytes: &[u8] = env.payload.as_ref();
+                Ok((payload_type, pyo3::types::PyBytes::new(py, payload_bytes).into()))
             }
             SignatureContent::MessageSignature(_) => Err(VerificationError::new_err(
                 "verify_dsse called on a MessageSignature bundle; use verify_artifact instead",
+            )),
+            // `SignatureContent` is `#[non_exhaustive]`.
+            _ => Err(VerificationError::new_err(
+                "unsupported bundle content type for verify_dsse",
             )),
         }
     }
@@ -277,10 +297,7 @@ pub fn py_verify(
             ));
         };
 
-    let mut policy = VerificationPolicy::with_identity(identity);
-    if let Some(iss) = issuer {
-        policy = policy.require_issuer(iss);
-    }
+    let policy = build_policy(identity, issuer);
 
     // Load or reuse trusted root
     let owned_root: TrustedRoot;

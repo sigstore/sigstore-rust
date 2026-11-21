@@ -66,7 +66,7 @@ class Identity:
             workflow URI (e.g.
             ``"https://github.com/org/repo/.github/workflows/ci.yml@refs/heads/main"``).
         issuer:   The expected OIDC issuer URL. Strongly recommended;
-            if omitted any issuer is accepted.
+            if omitted, any issuer is accepted for the given identity.
     
     Example::
     
@@ -76,9 +76,9 @@ class Identity:
         )
     """
     @property
-    def identity(self) -> typing.Optional[builtins.str]:
+    def identity(self) -> builtins.str:
         r"""
-        The required identity string, if set.
+        The required identity string.
         """
     @property
     def issuer(self) -> typing.Optional[builtins.str]:
@@ -182,7 +182,10 @@ class Signer:
         Args:
             token: An :class:`IdentityToken` for authentication with Fulcio.
         
-        Raises :exc:`IdentityTokenError` if the token is expired.
+        Fetches the signing config via TUF (network request).
+        
+        Raises :exc:`IdentityTokenError` if the token is expired and
+        :exc:`SigningError` if the signing config cannot be loaded.
         """
     @classmethod
     def staging(cls, token: IdentityToken) -> Signer:
@@ -197,7 +200,7 @@ class Signer:
         
         Raises :exc:`IdentityTokenError` if the token is expired.
         """
-    def sign_artifact(self, input: builtins.bytes) -> Bundle:
+    def sign_artifact(self, input: bytes) -> Bundle:
         r"""
         Sign raw artifact bytes and return a Sigstore bundle.
         
@@ -213,16 +216,19 @@ class Signer:
         
         Raises :exc:`SigningError` on any failure.
         """
-    def sign_dsse(self, payload: builtins.bytes, payload_type: builtins.str) -> Bundle:
+    def sign_dsse(self, payload: bytes, payload_type: builtins.str) -> Bundle:
         r"""
         Sign an in-toto DSSE statement and return a Sigstore bundle.
         
         The ``payload`` must be a valid JSON-serialized in-toto statement.
-        ``payload_type`` should be ``"application/vnd.in-toto+json"``.
+        ``payload_type`` **must** be ``"application/vnd.in-toto+json"`` — this
+        is the only value currently supported. Passing any other string raises
+        :exc:`ValueError`.
         
         Args:
             payload:      The raw statement bytes (JSON-encoded in-toto statement).
-            payload_type: The DSSE payload type URI.
+            payload_type: The DSSE payload type URI. Currently only
+                          ``"application/vnd.in-toto+json"`` is accepted.
         
         Returns:
             A :class:`Bundle` containing the DSSE envelope and verification material.
@@ -357,7 +363,7 @@ class Verifier:
         Use this when you have already loaded or cached the trusted root and
         want to avoid a repeated network fetch.
         """
-    def verify_artifact(self, input: builtins.bytes, bundle: Bundle, policy: Identity) -> None:
+    def verify_artifact(self, input: bytes, bundle: Bundle, policy: Identity) -> None:
         r"""
         Verify a raw artifact against a Sigstore bundle.
         
@@ -370,7 +376,7 @@ class Verifier:
             bundle:  The :class:`Bundle` produced during signing.
             policy:  The :class:`Identity` asserting the expected signer.
         """
-    def verify_dsse(self, artifact: builtins.bytes, bundle: Bundle, policy: Identity) -> tuple[builtins.str, builtins.bytes]:
+    def verify_dsse(self, artifact: bytes, bundle: Bundle, policy: Identity) -> tuple[builtins.str, bytes]:
         r"""
         Verify a DSSE envelope bundle against an artifact and return the payload.
         
@@ -391,7 +397,7 @@ class Verifier:
             A ``(str, bytes)`` tuple of ``(payload_type, payload_bytes)``.
         """
 
-def py_sign(input: builtins.bytes, token: typing.Union[IdentityToken, builtins.str, None] = None, *, staging: builtins.bool = False) -> Bundle:
+def py_sign(input: bytes, token: typing.Optional[typing.Any] = None, *, staging: builtins.bool = False) -> Bundle:
     r"""
     One-shot artifact signing.
     
@@ -415,7 +421,7 @@ def py_sign(input: builtins.bytes, token: typing.Union[IdentityToken, builtins.s
                                     detection fails, or if the token is expired.
     """
 
-def py_verify(input: builtins.bytes, bundle: typing.Union[Bundle, builtins.str], identity: builtins.str, issuer: typing.Optional[builtins.str] = None, *, trusted_root: typing.Optional[TrustedRoot] = None) -> None:
+def py_verify(input: bytes, bundle: typing.Any, identity: builtins.str, issuer: typing.Optional[builtins.str] = None, *, trusted_root: typing.Optional[TrustedRoot] = None) -> None:
     r"""
     One-shot artifact verification.
     
@@ -437,3 +443,4 @@ def py_verify(input: builtins.bytes, bundle: typing.Union[Bundle, builtins.str],
         :exc:`BundleError`:       If ``bundle`` is a string that cannot be parsed.
         :exc:`TrustedRootError`:  If the trusted root cannot be fetched.
     """
+

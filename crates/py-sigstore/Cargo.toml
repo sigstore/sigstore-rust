@@ -5,8 +5,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-# Per-crate MSRV override: pyo3 0.29 requires Rust 1.76+
-rust-version = "1.76"
+# Inherit the workspace MSRV (pyo3 0.29 is compatible with it)
+rust-version.workspace = true
 publish = false
 
 [lib]
@@ -22,14 +22,14 @@ path = "src/bin/stub_gen.rs"
 [dependencies]
 pyo3 = { version = "0.29", features = ["abi3-py310"] }
 pyo3-stub-gen = { version = "0.23" }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 # Sigstore workspace crates
-# Explicitly enable `rustls` (TLS backend) since the workspace sets
-# default-features = false for most sigstore-* crates.
+# The workspace sets default-features = false for most sigstore-* crates, so
+# explicitly enable `rustls` (TLS backend), `tuf` (trust material / signing
+# config fetch) and `aws-lc-rs` (crypto provider).
 sigstore-types = { workspace = true }
-sigstore-bundle = { workspace = true, features = ["rustls"] }
-sigstore-verify = { workspace = true, features = ["rustls", "tuf"] }
-sigstore-sign = { workspace = true, features = ["rustls"] }
+sigstore-verify = { workspace = true, features = ["rustls", "tuf", "aws-lc-rs"] }
+sigstore-sign = { workspace = true, features = ["rustls", "tuf", "aws-lc-rs"] }
 sigstore-oidc = { workspace = true, features = ["rustls"] }
 sigstore-trust-root = { workspace = true, features = ["tuf", "rustls"] }
