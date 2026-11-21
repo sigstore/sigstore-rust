@@ -1801,6 +1801,7 @@ version = "0.16.0"
 dependencies = [
  "pyo3",
  "pyo3-stub-gen",
+ "serde_json",
  "sigstore-oidc",
  "sigstore-sign",
  "sigstore-trust-root",

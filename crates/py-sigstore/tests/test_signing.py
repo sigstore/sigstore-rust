@@ -90,7 +90,38 @@ class TestSignerCi:
         # Identity matches the ambient token's identity
         policy = Identity(ambient_token.identity, issuer=ambient_token.issuer)
         result = verifier.verify_artifact(artifact, bundle, policy)
-        assert result is None  # success
+        assert result.identity == ambient_token.identity
+
+    def test_sign_hashed_then_verify(self, ambient_token):
+        import hashlib
+
+        from sigstore import Hashed
+
+        artifact = b"hashed artifact"
+        h = Hashed(hashlib.sha256(artifact).digest())
+        bundle = Signer.production(ambient_token).sign_artifact(h)
+        policy = Identity(ambient_token.identity, issuer=ambient_token.issuer)
+        # A digest-signed bundle verifies against either form of the artifact.
+        Verifier.production().verify_artifact(artifact, bundle, policy)
+        Verifier.production().verify_artifact(h, bundle, policy)
+
+    def test_sign_attestation_then_verify_dsse(self, ambient_token):
+        import hashlib
+
+        artifact = b"attested artifact"
+        digest = hashlib.sha256(artifact).hexdigest()
+        bundle = Signer.production(ambient_token).sign_attestation(
+            "https://slsa.dev/provenance/v1",
+            {"buildDefinition": {}},
+            [("artifact.bin", {"sha256": digest})],
+        )
+        assert bundle.is_dsse
+        policy = Identity(ambient_token.identity, issuer=ambient_token.issuer)
+        payload_type, payload = Verifier.production().verify_dsse(
+            artifact, bundle, policy
+        )
+        assert payload_type == "application/vnd.in-toto+json"
+        assert json.loads(payload)["predicateType"] == "https://slsa.dev/provenance/v1"
 
     def test_sign_convenience_with_ambient_token(self, ambient_token):
         bundle = sign(b"convenience sign test", ambient_token)

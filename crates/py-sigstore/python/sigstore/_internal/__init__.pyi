@@ -5,10 +5,12 @@ import builtins
 import typing
 __all__ = [
     "Bundle",
+    "Hashed",
     "Identity",
     "IdentityToken",
     "Signer",
     "TrustedRoot",
+    "VerificationResult",
     "Verifier",
     "py_sign",
     "py_verify",
@@ -36,6 +38,26 @@ class Bundle:
         For example:
         ``"application/vnd.dev.sigstore.bundle.v0.3+json"``
         """
+    @property
+    def signing_certificate_pem(self) -> typing.Optional[builtins.str]:
+        r"""
+        The signing certificate as a PEM string, if the bundle carries one.
+        """
+    @property
+    def has_inclusion_proof(self) -> builtins.bool:
+        r"""
+        Whether the bundle contains a transparency log inclusion proof.
+        """
+    @property
+    def has_inclusion_promise(self) -> builtins.bool:
+        r"""
+        Whether the bundle contains a transparency log inclusion promise (SET).
+        """
+    @property
+    def is_dsse(self) -> builtins.bool:
+        r"""
+        Whether the bundle wraps a DSSE envelope (as opposed to a plain signature).
+        """
     @classmethod
     def from_json(cls, data: builtins.str) -> Bundle:
         r"""
@@ -49,7 +71,51 @@ class Bundle:
         
         Raises :exc:`BundleError` on serialization failure (extremely rare).
         """
+    def to_json_pretty(self) -> builtins.str:
+        r"""
+        Serialize the bundle to indented JSON.
+        """
     def __repr__(self) -> builtins.str: ...
+
+@typing.final
+class Hashed:
+    r"""
+    A pre-computed artifact digest.
+    
+    Pass a ``Hashed`` wherever an artifact is expected (``Verifier.verify_artifact``,
+    ``Signer.sign_artifact``) to avoid loading or re-hashing a large file.
+    
+    Args:
+        digest:    The raw digest bytes.
+        algorithm: ``"sha256"`` (default), ``"sha384"`` or ``"sha512"``.
+    
+    Raises:
+        ValueError: If the algorithm is unknown or the digest has the wrong length.
+    
+    Example::
+    
+        import hashlib
+        h = Hashed(hashlib.sha256(data).digest())
+        verifier.verify_artifact(h, bundle, policy)
+    """
+    @property
+    def algorithm(self) -> builtins.str:
+        r"""
+        The hash algorithm name (``"sha256"``, ``"sha384"`` or ``"sha512"``).
+        """
+    @property
+    def digest(self) -> bytes:
+        r"""
+        The raw digest bytes.
+        """
+    def __new__(cls, digest: bytes, algorithm: builtins.str = 'sha256') -> Hashed: ...
+    @classmethod
+    def from_hex(cls, digest: builtins.str, algorithm: builtins.str = 'sha256') -> Hashed:
+        r"""
+        Build a ``Hashed`` from a hex-encoded digest.
+        """
+    def __repr__(self) -> builtins.str: ...
+    def __eq__(self, other: Hashed) -> builtins.bool: ...
 
 @typing.final
 class Identity:
@@ -67,6 +133,14 @@ class Identity:
             ``"https://github.com/org/repo/.github/workflows/ci.yml@refs/heads/main"``).
         issuer:   The expected OIDC issuer URL. Strongly recommended;
             if omitted, any issuer is accepted for the given identity.
+        skip_tlog_unsafe: **Unsafe.** Do not require transparency log
+            inclusion. Only for trust domains without an accessible log
+            (e.g. GitHub private-repository attestations) or testing.
+        skip_sct: Do not require a signed certificate timestamp. Needed for
+            trust domains whose certificates carry no public CT SCT (e.g.
+            GitHub's attestation instance).
+        skip_certificate_chain: **Unsafe.** Do not verify the certificate
+            chain (also skips the SCT). Testing only.
     
     Example::
     
@@ -85,7 +159,7 @@ class Identity:
         r"""
         The required issuer URL, if set.
         """
-    def __new__(cls, identity: builtins.str, issuer: typing.Optional[builtins.str] = None) -> Identity: ...
+    def __new__(cls, identity: builtins.str, issuer: typing.Optional[builtins.str] = None, *, skip_tlog_unsafe: builtins.bool = False, skip_sct: builtins.bool = False, skip_certificate_chain: builtins.bool = False) -> Identity: ...
     def __repr__(self) -> builtins.str: ...
 
 @typing.final
@@ -200,7 +274,7 @@ class Signer:
         
         Raises :exc:`IdentityTokenError` if the token is expired.
         """
-    def sign_artifact(self, input: bytes) -> Bundle:
+    def sign_artifact(self, input: typing.Any) -> Bundle:
         r"""
         Sign raw artifact bytes and return a Sigstore bundle.
         
@@ -209,7 +283,8 @@ class Signer:
         I/O.
         
         Args:
-            input: The raw artifact bytes to sign.
+            input: The artifact to sign: raw ``bytes`` or a pre-computed
+                   :class:`Hashed` digest.
         
         Returns:
             A :class:`Bundle` containing the signature and verification material.
@@ -234,6 +309,26 @@ class Signer:
             A :class:`Bundle` containing the DSSE envelope and verification material.
         
         Raises :exc:`SigningError` on any failure.
+        """
+    def sign_attestation(self, predicate_type: builtins.str, predicate: typing.Any, subjects: typing.Sequence[tuple[builtins.str, typing.Mapping[builtins.str, builtins.str]]]) -> Bundle:
+        r"""
+        Sign an in-toto attestation and return a Sigstore bundle.
+        
+        Builds the in-toto statement from the arguments, wraps it in a DSSE
+        envelope and signs it.
+        
+        Args:
+            predicate_type: The predicate type URI, e.g.
+                ``"https://slsa.dev/provenance/v1"``.
+            predicate:      The predicate: a JSON ``str``/``bytes`` document, or
+                any JSON-serializable Python object (``dict``, ``list``, ...).
+            subjects:       A list of ``(name, digest)`` pairs, where ``digest``
+                is a mapping of algorithm to hex digest
+                (``{"sha256": "..."}``; ``sha512`` is also accepted).
+        
+        Raises:
+            ValueError:   If a subject digest or the predicate is malformed.
+            SigningError: On any signing failure.
         """
 
 @typing.final
@@ -310,6 +405,56 @@ class TrustedRoot:
     def __repr__(self) -> builtins.str: ...
 
 @typing.final
+class VerificationResult:
+    r"""
+    Details of a successful verification.
+    
+    Returned by :meth:`Verifier.verify_artifact`, :meth:`Verifier.verify_dsse`
+    and :func:`verify`. Failures raise a :exc:`VerificationError` instead.
+    """
+    @property
+    def identity(self) -> typing.Optional[builtins.str]:
+        r"""
+        The signer identity from the certificate (email or URI), if any.
+        """
+    @property
+    def issuer(self) -> typing.Optional[builtins.str]:
+        r"""
+        The OIDC issuer recorded in the certificate, if any.
+        """
+    @property
+    def integrated_time(self) -> typing.Optional[typing.Any]:
+        r"""
+        The transparency log integrated time as an aware UTC ``datetime``.
+        """
+    @property
+    def verified_timestamps(self) -> builtins.list[typing.Any]:
+        r"""
+        Verified RFC 3161 timestamps as aware UTC ``datetime`` objects.
+        """
+    @property
+    def certificate_verified(self) -> builtins.bool:
+        r"""
+        Whether the certificate chain was verified.
+        """
+    @property
+    def sct_verified(self) -> builtins.bool:
+        r"""
+        Whether the signed certificate timestamp (SCT) was verified.
+        """
+    @property
+    def tlog_verified(self) -> builtins.bool:
+        r"""
+        Whether transparency log inclusion was verified.
+        """
+    @property
+    def identity_policy_checked(self) -> builtins.bool:
+        r"""
+        Whether an identity policy was checked against the signer.
+        """
+    def __repr__(self) -> builtins.str: ...
+
+@typing.final
 class Verifier:
     r"""
     Verifies Sigstore bundles against a trusted root.
@@ -325,7 +470,8 @@ class Verifier:
                           issuer="https://accounts.google.com")
     
         verifier.verify_artifact(open("artifact.bin", "rb").read(), bundle, policy)
-        # raises VerificationError on failure, returns None on success
+        result = verifier.verify_artifact(data, bundle, policy)
+        # raises VerificationError on failure; returns a VerificationResult
     """
     @classmethod
     def production(cls) -> Verifier:
@@ -363,20 +509,20 @@ class Verifier:
         Use this when you have already loaded or cached the trusted root and
         want to avoid a repeated network fetch.
         """
-    def verify_artifact(self, input: bytes, bundle: Bundle, policy: Identity) -> None:
+    def verify_artifact(self, input: typing.Any, bundle: Bundle, policy: Identity) -> VerificationResult:
         r"""
-        Verify a raw artifact against a Sigstore bundle.
+        Verify an artifact against a Sigstore bundle.
         
-        Returns ``None`` on success. Raises :exc:`VerificationError` if
-        verification fails for any reason (invalid signature, identity
-        mismatch, expired certificate, etc.).
+        Returns a :class:`VerificationResult` on success. Raises
+        :exc:`VerificationError` (or a more specific subclass such as
+        :exc:`IdentityMismatchError`) if verification fails.
         
         Args:
-            input:   The raw artifact bytes to verify.
+            input:   The artifact: raw ``bytes`` or a pre-computed :class:`Hashed`.
             bundle:  The :class:`Bundle` produced during signing.
             policy:  The :class:`Identity` asserting the expected signer.
         """
-    def verify_dsse(self, artifact: bytes, bundle: Bundle, policy: Identity) -> tuple[builtins.str, bytes]:
+    def verify_dsse(self, artifact: typing.Any, bundle: Bundle, policy: Identity) -> tuple[builtins.str, bytes]:
         r"""
         Verify a DSSE envelope bundle against an artifact and return the payload.
         
@@ -388,8 +534,8 @@ class Verifier:
         Raises :exc:`VerificationError` if verification fails.
         
         Args:
-            artifact: The raw artifact bytes whose digest is claimed by the
-                      in-toto statement.
+            artifact: The artifact (``bytes`` or :class:`Hashed`) whose digest is
+                      claimed by the in-toto statement.
             bundle:   The DSSE :class:`Bundle` produced during signing.
             policy:   The :class:`Identity` asserting the expected signer.
         
@@ -397,7 +543,7 @@ class Verifier:
             A ``(str, bytes)`` tuple of ``(payload_type, payload_bytes)``.
         """
 
-def py_sign(input: bytes, token: typing.Optional[typing.Any] = None, *, staging: builtins.bool = False) -> Bundle:
+def py_sign(input: typing.Any, token: typing.Optional[typing.Any] = None, *, staging: builtins.bool = False) -> Bundle:
     r"""
     One-shot artifact signing.
     
@@ -406,7 +552,7 @@ def py_sign(input: bytes, token: typing.Optional[typing.Any] = None, *, staging:
     :class:`Signer` once and reusing it.
     
     Args:
-        input:   The raw artifact bytes to sign.
+        input:   The artifact: raw ``bytes`` or a :class:`Hashed` digest.
         token:   An :class:`IdentityToken` or a raw JWT string. If ``None``,
                  ambient OIDC detection is attempted (suitable for CI).
         staging: If ``True``, use the Sigstore staging infrastructure instead
@@ -421,7 +567,7 @@ def py_sign(input: bytes, token: typing.Optional[typing.Any] = None, *, staging:
                                     detection fails, or if the token is expired.
     """
 
-def py_verify(input: bytes, bundle: typing.Any, identity: builtins.str, issuer: typing.Optional[builtins.str] = None, *, trusted_root: typing.Optional[TrustedRoot] = None) -> None:
+def py_verify(input: typing.Any, bundle: typing.Any, identity: builtins.str, issuer: typing.Optional[builtins.str] = None, *, trusted_root: typing.Optional[TrustedRoot] = None) -> VerificationResult:
     r"""
     One-shot artifact verification.
     
@@ -430,7 +576,7 @@ def py_verify(input: bytes, bundle: typing.Any, identity: builtins.str, issuer: 
     :class:`Verifier` once and reusing it.
     
     Args:
-        input:        The raw artifact bytes to verify.
+        input:        The artifact: raw ``bytes`` or a :class:`Hashed` digest.
         bundle:       A :class:`Bundle` object or a JSON string.
         identity:     The expected signer identity string.
         issuer:       The expected OIDC issuer URL. Strongly recommended.

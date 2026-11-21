@@ -54,7 +54,7 @@ class TestVerifyArtifact:
         verifier = Verifier.from_root(production_root)
         policy = Identity(COSIGN_IDENTITY, issuer=COSIGN_ISSUER)
         result = verifier.verify_artifact(cosign_artifact, cosign_bundle, policy)
-        assert result is None  # success returns None
+        assert result.identity == COSIGN_IDENTITY  # returns a VerificationResult
 
     def test_verify_artifact_wrong_bytes_raises(
         self, cosign_bundle, production_root
@@ -142,7 +142,7 @@ class TestConvenienceVerify:
             issuer=COSIGN_ISSUER,
             trusted_root=production_root,
         )
-        assert result is None
+        assert result.tlog_verified
 
     def test_verify_with_json_string(
         self, cosign_artifact, cosign_bundle_json, production_root
@@ -154,7 +154,7 @@ class TestConvenienceVerify:
             issuer=COSIGN_ISSUER,
             trusted_root=production_root,
         )
-        assert result is None
+        assert result.identity == COSIGN_IDENTITY
 
     def test_verify_wrong_bundle_type_raises(self, cosign_artifact, production_root):
         with pytest.raises(TypeError):
