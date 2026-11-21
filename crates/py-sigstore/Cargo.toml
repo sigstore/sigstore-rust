@@ -19,7 +19,13 @@ crate-type = ["cdylib", "rlib"]
 name = "stub_gen"
 path = "src/bin/stub_gen.rs"
 
+[features]
+# Build aws-lc-rs with prebuilt NASM objects (used for Windows wheels, where
+# NASM is not guaranteed to be installed).
+prebuilt-nasm = ["dep:aws-lc-rs", "aws-lc-rs/prebuilt-nasm"]
+
 [dependencies]
+aws-lc-rs = { version = "1", optional = true, default-features = false }
 pyo3 = { version = "0.29", features = ["abi3-py310"] }
 pyo3-stub-gen = { version = "0.23" }
 serde_json = { workspace = true }

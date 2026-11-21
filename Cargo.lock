@@ -1799,6 +1799,7 @@ dependencies = [
 name = "py-sigstore"
 version = "0.16.0"
 dependencies = [
+ "aws-lc-rs",
  "pyo3",
  "pyo3-stub-gen",
  "serde_json",
