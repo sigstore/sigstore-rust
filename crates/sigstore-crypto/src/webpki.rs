@@ -6,7 +6,7 @@
 
 use crate::provider::default_provider;
 use crate::signing::SigningScheme;
-use crate::verification::validate_raw_public_key;
+use crate::verification::{validate_ed25519_signature, validate_raw_public_key};
 use rustls_pki_types::{
     alg_id, AlgorithmIdentifier, InvalidSignature, SignatureVerificationAlgorithm,
 };
@@ -34,6 +34,9 @@ impl SignatureVerificationAlgorithm for WebpkiVerificationAlg {
         signature: &[u8],
     ) -> Result<(), InvalidSignature> {
         validate_raw_public_key(self.scheme, public_key).map_err(|_| InvalidSignature)?;
+        if self.scheme == SigningScheme::Ed25519 {
+            validate_ed25519_signature(signature).map_err(|_| InvalidSignature)?;
+        }
         default_provider()
             .verify_raw(self.scheme, public_key, message, signature)
             .map_err(|_| InvalidSignature)

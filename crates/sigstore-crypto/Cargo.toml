@@ -17,6 +17,7 @@ aws-lc-rs = { workspace = true, optional = true }
 der = { workspace = true }
 spki = { workspace = true }
 const-oid = { workspace = true }
+curve25519-dalek = { workspace = true }
 thiserror = { workspace = true }
 x509-cert = { workspace = true }
 jiff = { workspace = true }
