@@ -37,6 +37,8 @@ thiserror = "2.0"
 aws-lc-rs = { version = "1.18" }
 boring = { version = "5", features = ["mldsa"] }
 rand = "0.10.0"
+# Ed25519 point checks the verification backends do not perform
+curve25519-dalek = { version = "5.0", default-features = false }
 
 # ASN.1 / X.509
 der = { version = "0.7", features = ["alloc", "derive", "oid"] }

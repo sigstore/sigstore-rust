@@ -7,6 +7,7 @@ use const_oid::db::rfc5912::{
     ID_EC_PUBLIC_KEY, RSA_ENCRYPTION, SECP_256_R_1, SECP_384_R_1, SECP_521_R_1,
 };
 use const_oid::ObjectIdentifier;
+use curve25519_dalek::edwards::CompressedEdwardsY;
 use der::Decode;
 use sigstore_types::{DerPublicKey, HashAlgorithm, SignatureBytes};
 use spki::SubjectPublicKeyInfoRef;
@@ -105,6 +106,8 @@ struct RsaPublicKey<'a> {
 /// - ECDSA P-256, P-384 and P-521 public keys must use uncompressed SEC1 point encoding (`0x04` prefix).
 /// - RSA public keys must be valid DER-encoded PKCS#1 `RSAPublicKey` structures with no trailing
 ///   bytes and a 2048–8192 bit modulus.
+/// - Ed25519 public keys must be the canonical 32-byte encoding of a curve point that is not of
+///   small order.
 pub fn validate_raw_public_key(scheme: SigningScheme, spki_pubkey_bytes: &[u8]) -> Result<()> {
     match scheme.key_algorithm() {
         KeyAlgorithm::EcdsaP256 | KeyAlgorithm::EcdsaP384 | KeyAlgorithm::EcdsaP521 => {
@@ -130,11 +133,56 @@ pub fn validate_raw_public_key(scheme: SigningScheme, spki_pubkey_bytes: &[u8]) 
             }
             Ok(())
         }
-        KeyAlgorithm::Ed25519
-        | KeyAlgorithm::MlDsa44
-        | KeyAlgorithm::MlDsa65
-        | KeyAlgorithm::MlDsa87 => Ok(()),
+        KeyAlgorithm::Ed25519 => validate_ed25519_public_key(spki_pubkey_bytes),
+        KeyAlgorithm::MlDsa44 | KeyAlgorithm::MlDsa65 | KeyAlgorithm::MlDsa87 => Ok(()),
     }
+}
+
+/// Requires an Ed25519 public key to be a canonically encoded curve point that
+/// is not of small order. aws-lc-rs and BoringSSL do not check this themselves.
+fn validate_ed25519_public_key(bytes: &[u8]) -> Result<()> {
+    let bytes: [u8; 32] = bytes.try_into().map_err(|_| {
+        Error::InvalidKey(format!(
+            "Ed25519 public key must be 32 bytes, got {}",
+            bytes.len()
+        ))
+    })?;
+    let point = CompressedEdwardsY(bytes)
+        .decompress()
+        .ok_or_else(|| Error::InvalidKey("Ed25519 public key is not a curve point".into()))?;
+    // decompress() reduces y modulo p and ignores the sign of x = 0, so a
+    // non-canonical encoding only shows up on re-encoding.
+    if point.compress().to_bytes() != bytes {
+        return Err(Error::InvalidKey(
+            "Ed25519 public key is not canonically encoded".into(),
+        ));
+    }
+    if point.is_small_order() {
+        return Err(Error::InvalidKey(
+            "Ed25519 public key is a small-order point".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Reject an Ed25519 signature whose `R` is a small-order point.
+///
+/// With a prime-order key, the backends accept such a signature only when `R`
+/// is the identity, which no honest signer produces. Malformed signatures are
+/// left to the backend to reject.
+pub(crate) fn validate_ed25519_signature(signature: &[u8]) -> Result<()> {
+    let Some(r) = signature.first_chunk::<32>() else {
+        return Ok(());
+    };
+    if CompressedEdwardsY(*r)
+        .decompress()
+        .is_some_and(|point| point.is_small_order())
+    {
+        return Err(Error::Verification(
+            "Ed25519 signature R is a small-order point".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// A public key for verification
@@ -222,6 +270,9 @@ impl VerificationKey {
         validate_raw_public_key(self.scheme, &self.bytes).map_err(|_| {
             Error::Verification(format!("{} signature invalid", self.scheme.name()))
         })?;
+        if self.scheme == SigningScheme::Ed25519 {
+            validate_ed25519_signature(signature)?;
+        }
         default_provider().verify_raw(self.scheme, &self.bytes, data, signature)
     }
 
@@ -476,6 +527,77 @@ mod tests {
             validate_raw_public_key(SigningScheme::RsaPkcs1Sha256, &make_rsa_der(&mod_2048))
                 .is_ok()
         );
+    }
+
+    /// The canonical encodings of the eight points of order dividing 8.
+    const ED25519_SMALL_ORDER_KEYS: [&str; 8] = [
+        // Neutral element (order 1)
+        "0100000000000000000000000000000000000000000000000000000000000000",
+        // Order 2
+        "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        // Order 4
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000080",
+        // Order 8
+        "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+        "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+        "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+        "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+    ];
+
+    fn assert_ed25519_key_rejected(key: &[u8], expected: &str) {
+        match validate_raw_public_key(SigningScheme::Ed25519, key) {
+            Err(Error::InvalidKey(message)) => {
+                assert_eq!(message, expected, "key {}", hex::encode(key))
+            }
+            other => panic!("key {}: got {other:?}", hex::encode(key)),
+        }
+    }
+
+    #[test]
+    fn ed25519_small_order_keys_rejected() {
+        for key in ED25519_SMALL_ORDER_KEYS {
+            assert_ed25519_key_rejected(
+                &hex::decode(key).unwrap(),
+                "Ed25519 public key is a small-order point",
+            );
+        }
+    }
+
+    #[test]
+    fn ed25519_non_canonical_key_rejected() {
+        // y = 3 is the y-coordinate of a point of large order.
+        let canonical =
+            hex::decode("0300000000000000000000000000000000000000000000000000000000000000")
+                .unwrap();
+        validate_raw_public_key(SigningScheme::Ed25519, &canonical).unwrap();
+        // y = p + 3 decodes to the same point.
+        let non_canonical =
+            hex::decode("f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")
+                .unwrap();
+        assert_ed25519_key_rejected(
+            &non_canonical,
+            "Ed25519 public key is not canonically encoded",
+        );
+    }
+
+    #[test]
+    fn ed25519_off_curve_key_rejected() {
+        // (y^2 - 1) / (d y^2 + 1) is not a square for y = 2.
+        let off_curve =
+            hex::decode("0200000000000000000000000000000000000000000000000000000000000000")
+                .unwrap();
+        assert_ed25519_key_rejected(&off_curve, "Ed25519 public key is not a curve point");
+    }
+
+    #[test]
+    fn ed25519_wrong_length_key_rejected() {
+        for len in [0, 31, 33, 44] {
+            assert_ed25519_key_rejected(
+                &vec![0x03; len],
+                &format!("Ed25519 public key must be 32 bytes, got {len}"),
+            );
+        }
     }
 
     #[cfg(feature = "aws-lc-rs")]
@@ -740,6 +862,96 @@ mod tests {
             let sig = SignatureBytes::new(sig_bytes.to_vec());
             assert!(vk.verify([0x72], &sig).is_ok());
             assert!(vk.verify([0x73], &sig).is_err());
+        }
+
+        #[test]
+        fn ed25519_honest_key_passes_validation_and_verifies() {
+            let data = b"honest ed25519 message";
+            let (raw_pubkey, sig) = crate::aws_lc::test_support::sign_ed25519(data);
+            validate_raw_public_key(SigningScheme::Ed25519, &raw_pubkey).unwrap();
+
+            let spki = spki_der(ID_ED25519, None, &raw_pubkey);
+            let vk = VerificationKey::from_spki(&spki).unwrap();
+            vk.verify(data, &sig).unwrap();
+            verify_signature(&spki, data, &sig, SigningScheme::Ed25519).unwrap();
+            crate::webpki::ED25519
+                .verify_signature(&raw_pubkey, data, sig.as_bytes())
+                .unwrap();
+        }
+
+        /// The identity-point key is rejected by every verification entry point.
+        #[test]
+        fn ed25519_identity_key_rejected() {
+            // RFC 8410 SPKI prefix || 0x01 || 0x00 * 31
+            let spki = DerPublicKey::from_bytes(
+                &hex::decode(
+                    "302a300506032b6570032100\
+                     0100000000000000000000000000000000000000000000000000000000000000",
+                )
+                .unwrap(),
+            );
+            let mut sig_bytes = vec![0u8; 64];
+            sig_bytes[0] = 0x01;
+            let sig = SignatureBytes::new(sig_bytes);
+
+            let vk = VerificationKey::from_spki(&spki).unwrap();
+            assert_eq!(vk.scheme(), SigningScheme::Ed25519);
+            assert!(matches!(
+                validate_raw_public_key(SigningScheme::Ed25519, vk.as_bytes()),
+                Err(Error::InvalidKey(message)) if message == "Ed25519 public key is a small-order point"
+            ));
+
+            for msg in [&b""[..], b"message one", b"message two"] {
+                // The backend on its own accepts this signature; the key
+                // check is what rejects it below.
+                default_provider()
+                    .verify_raw(SigningScheme::Ed25519, vk.as_bytes(), msg, sig.as_bytes())
+                    .unwrap();
+
+                assert!(matches!(
+                    vk.verify(msg, &sig),
+                    Err(Error::Verification(message)) if message == "ED25519 signature invalid"
+                ));
+                assert!(matches!(
+                    verify_signature(&spki, msg, &sig, SigningScheme::Ed25519),
+                    Err(Error::Verification(message)) if message == "ED25519 signature invalid"
+                ));
+                assert!(crate::webpki::ED25519
+                    .verify_signature(vk.as_bytes(), msg, sig.as_bytes())
+                    .is_err());
+            }
+        }
+
+        /// A key holder can make a signature with `R` = identity by setting
+        /// `S = h * a`; the backend accepts it, the `R` check does not.
+        #[test]
+        fn ed25519_small_order_r_rejected() {
+            use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+
+            let a = Scalar::from_bytes_mod_order([0x07; 32]);
+            let public_key = (ED25519_BASEPOINT_POINT * a).compress().to_bytes();
+            validate_raw_public_key(SigningScheme::Ed25519, &public_key).unwrap();
+
+            let data = b"message signed with an identity R";
+            let mut r = [0u8; 32];
+            r[0] = 0x01;
+            let h = Scalar::from_bytes_mod_order_wide(
+                &default_provider().sha512(&[&r[..], &public_key, data].concat()),
+            );
+            let sig = SignatureBytes::new([r, (h * a).to_bytes()].concat());
+
+            default_provider()
+                .verify_raw(SigningScheme::Ed25519, &public_key, data, sig.as_bytes())
+                .unwrap();
+
+            let vk = VerificationKey::from_spki(&spki_der(ID_ED25519, None, &public_key)).unwrap();
+            assert!(matches!(
+                vk.verify(data, &sig),
+                Err(Error::Verification(message)) if message == "Ed25519 signature R is a small-order point"
+            ));
+            assert!(crate::webpki::ED25519
+                .verify_signature(&public_key, data, sig.as_bytes())
+                .is_err());
         }
 
         #[test]
