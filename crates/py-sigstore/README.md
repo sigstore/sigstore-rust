@@ -97,6 +97,29 @@ sr.verify(artifact_bytes, bundle_json_str, identity="user@example.com",
 bundle = sr.sign(artifact_bytes)
 ```
 
+## Development
+
+Requires a Rust toolchain and [maturin](https://www.maturin.rs/).
+
+```bash
+cd crates/py-sigstore
+python -m venv .venv && source .venv/bin/activate
+pip install maturin pytest
+maturin develop            # debug build, installs into the venv
+pytest -m "not ci and not network"
+```
+
+Test markers:
+
+| Marker | Meaning | Run with |
+|---|---|---|
+| *(none)* | offline, uses fixture bundles from the workspace | `pytest -m "not ci and not network"` |
+| `network` | needs live Sigstore infrastructure | `pytest -m network` |
+| `ci` | needs a GitHub Actions OIDC environment; skipped automatically elsewhere | CI only |
+
+Run a single file or test with `pytest tests/test_verifier.py -k cosign`.
+
 ## License
 
 Apache-2.0
+
