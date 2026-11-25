@@ -33,15 +33,22 @@ pub enum Error {
         actual: Option<String>,
     },
 
-    /// The signature does not verify over the artifact (or DSSE payload)
-    /// with the signing key.
-    #[error("invalid signature: {0}")]
-    SignatureInvalid(String),
+    /// The signature does not verify with the signing key.
+    #[error("invalid {content} signature: {source}")]
+    SignatureInvalid {
+        /// What was signed
+        content: SignedContent,
+        /// Why the signature check failed
+        #[source]
+        source: sigstore_crypto::Error,
+    },
 
-    /// The bundle does not describe the supplied artifact: a digest or
-    /// attestation subject does not match it.
-    #[error("artifact mismatch: {0}")]
-    ArtifactMismatch(String),
+    /// The bundle does not describe the supplied artifact.
+    #[error("artifact does not match the bundle's {binding}")]
+    ArtifactMismatch {
+        /// Which part of the bundle the artifact failed to match
+        binding: ArtifactBinding,
+    },
 
     /// The artifact was supplied in a form this verification cannot use, for
     /// example a digest of the wrong algorithm or a reader for a signing
@@ -139,7 +146,11 @@ pub enum CertificateError {
         not_after: jiff::Timestamp,
     },
 
-    /// The certificate's Signed Certificate Timestamp is missing or invalid.
+    /// The certificate carries no Signed Certificate Timestamp.
+    #[error("certificate has no signed certificate timestamp")]
+    SctMissing,
+
+    /// The certificate's Signed Certificate Timestamp is invalid.
     #[error("invalid signed certificate timestamp: {0}")]
     Sct(String),
 }
@@ -158,6 +169,31 @@ pub enum TransparencyLogError {
     /// The inclusion proof does not prove the entry is in the log.
     #[error("invalid inclusion proof: {0}")]
     InclusionProof(String),
+
+    /// An inclusion proof was required but the entry has none.
+    #[error("log entry has no inclusion proof")]
+    MissingInclusionProof,
+
+    /// An inclusion promise (SET) was required but the entry has none.
+    #[error("log entry has no inclusion promise")]
+    MissingInclusionPromise,
+
+    /// The inclusion proof carries no checkpoint.
+    #[error("inclusion proof has no checkpoint")]
+    MissingCheckpoint,
+
+    /// The entry carries neither an inclusion proof nor an inclusion promise.
+    #[error("log entry has neither an inclusion proof nor an inclusion promise")]
+    NoInclusionEvidence,
+
+    /// The checkpoint's root hash differs from the inclusion proof's.
+    #[error("checkpoint root hash {} does not match the inclusion proof's {}", checkpoint_root.to_hex(), proof_root.to_hex())]
+    CheckpointRootMismatch {
+        /// The root hash in the signed checkpoint
+        checkpoint_root: sigstore_types::Sha256Hash,
+        /// The root hash in the inclusion proof
+        proof_root: sigstore_types::Sha256Hash,
+    },
 
     /// The checkpoint (signed tree head) is missing, malformed, inconsistent
     /// with the inclusion proof, or carries an invalid signature.
@@ -240,6 +276,47 @@ pub enum TimestampError {
     /// No trusted signing time could be established.
     #[error("no verified timestamp: {0}")]
     NoVerifiedTimestamp(String),
+}
+
+/// What a signature covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SignedContent {
+    /// A DSSE envelope's pre-authentication encoding
+    DsseEnvelope,
+    /// The artifact (a message signature)
+    Artifact,
+}
+
+impl std::fmt::Display for SignedContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::DsseEnvelope => "DSSE envelope",
+            Self::Artifact => "artifact",
+        })
+    }
+}
+
+/// The part of a bundle that binds it to an artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ArtifactBinding {
+    /// The message signature's `messageDigest`
+    MessageDigest,
+    /// The subjects of the in-toto statement in a DSSE envelope
+    StatementSubject,
+    /// The artifact digest recorded in a transparency log entry
+    LogEntryDigest,
+}
+
+impl std::fmt::Display for ArtifactBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::MessageDigest => "message digest",
+            Self::StatementSubject => "attestation subjects",
+            Self::LogEntryDigest => "log entry digest",
+        })
+    }
 }
 
 /// Constructors for the categorized errors, so call sites stay short.

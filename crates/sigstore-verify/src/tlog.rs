@@ -18,7 +18,7 @@
 //! entry only proves that the log included *this entry*; the caller must still
 //! check that the entry describes the signature at hand.
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::verify_impl::tlog::{
     verify_checkpoint_with, verify_entry_inclusion_with, verify_merkle_inclusion, verify_set_with,
     LogKeys,
@@ -102,7 +102,7 @@ fn inclusion_proof(
     entry
         .inclusion_proof
         .as_ref()
-        .ok_or_else(|| Error::inclusion_proof("log entry has no inclusion proof".to_string()))
+        .ok_or(crate::TransparencyLogError::MissingInclusionProof.into())
 }
 
 fn checkpoint(entry: &TransparencyLogEntry, keys: LogKeys<'_>) -> Result<()> {
@@ -117,9 +117,7 @@ fn checkpoint(entry: &TransparencyLogEntry, keys: LogKeys<'_>) -> Result<()> {
 
 fn require_evidence(entry: &TransparencyLogEntry) -> Result<()> {
     if entry.inclusion_proof.is_none() && entry.inclusion_promise.is_none() {
-        return Err(Error::inclusion_proof(
-            "log entry has neither an inclusion proof nor an inclusion promise".to_string(),
-        ));
+        return Err(crate::TransparencyLogError::NoInclusionEvidence.into());
     }
     Ok(())
 }
