@@ -249,10 +249,9 @@ impl TrustedRoot {
             };
             let key_id = key_id(&tlog.log_id.key_id)?;
             if keyring.key(&key_id).is_some() {
-                return Err(Error::InvalidKey(format!(
-                    "duplicate Rekor log ID: {}",
-                    tlog.log_id.key_id
-                )));
+                return Err(Error::DuplicateLogId {
+                    log_id: tlog.log_id.key_id.clone(),
+                });
             }
             keyring.add_key_with_validity(key_id, key, tlog.public_key.valid_for);
         }
@@ -274,7 +273,9 @@ impl TrustedRoot {
                 return Ok(tlog.public_key.raw_bytes.clone());
             }
         }
-        Err(Error::KeyNotFound(log_id.to_string()))
+        Err(Error::KeyNotFound {
+            log_id: log_id.clone(),
+        })
     }
 
     /// Get a specific Rekor public key by log ID, valid at the given time
@@ -295,7 +296,9 @@ impl TrustedRoot {
                 }
             }
         }
-        Err(Error::KeyNotFound(log_id.to_string()))
+        Err(Error::KeyNotFound {
+            log_id: log_id.clone(),
+        })
     }
 
     /// Build a keyring containing all Certificate Transparency log keys.
@@ -576,7 +579,7 @@ mod tests {
             .is_ok());
         assert!(matches!(
             root.rekor_key_for_log(&LogKeyId::from_bytes(test_key_id("future-key").as_bytes())),
-            Err(Error::KeyNotFound(_))
+            Err(Error::KeyNotFound { .. })
         ));
     }
 
@@ -704,7 +707,10 @@ mod tests {
         let duplicate = value["tlogs"][0].clone();
         value["tlogs"].as_array_mut().unwrap().push(duplicate);
         let root = TrustedRoot::from_json(&value.to_string()).unwrap();
-        assert!(matches!(root.rekor_keys(), Err(Error::InvalidKey(_))));
+        assert!(matches!(
+            root.rekor_keys(),
+            Err(Error::DuplicateLogId { .. })
+        ));
     }
 
     #[test]
