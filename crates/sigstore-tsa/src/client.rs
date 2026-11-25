@@ -1,7 +1,7 @@
 //! TSA client for RFC 3161 Time-Stamp Protocol
 
 use crate::asn1::{AlgorithmIdentifier, Asn1MessageImprint, TimeStampReq};
-use crate::error::{Error, Result};
+use crate::error::{Error, ResponseField, Result};
 use sigstore_types::{ArtifactDigest, SignatureBytes, TimestampToken, USER_AGENT};
 use std::time::Duration;
 
@@ -43,7 +43,7 @@ impl TimestampClientBuilder {
                 .timeout(DEFAULT_TIMEOUT)
                 .user_agent(USER_AGENT)
                 .build()
-                .map_err(|e| Error::Http(format!("failed to build HTTP client: {e}")))?,
+                .map_err(|e| Error::Transport(Box::new(e)))?,
         };
         Ok(TimestampClient {
             url: self.url,
@@ -87,9 +87,7 @@ impl TimestampClient {
         let request = TimeStampReq::new(imprint);
 
         // Encode to DER
-        let request_der = request
-            .to_der()
-            .map_err(|e| Error::Asn1(format!("failed to encode request: {}", e)))?;
+        let request_der = request.to_der().map_err(|e| Error::Other(Box::new(e)))?;
 
         // Send HTTP request
         let response = self
@@ -99,20 +97,24 @@ impl TimestampClient {
             .body(request_der)
             .send()
             .await
-            .map_err(|e| Error::Http(e.to_string()))?;
+            .map_err(|e| Error::Transport(Box::new(e)))?;
 
-        if !response.status().is_success() {
-            return Err(Error::Http(format!(
-                "TSA returned status {}",
-                response.status()
-            )));
+        let status = response.status();
+        if !status.is_success() {
+            return Err(Error::Status {
+                status: status.as_u16(),
+                message: status
+                    .canonical_reason()
+                    .unwrap_or("unknown status")
+                    .to_string(),
+            });
         }
 
         // Get response bytes
         let response_bytes = response
             .bytes()
             .await
-            .map_err(|e| Error::Http(e.to_string()))?;
+            .map_err(|e| Error::Transport(Box::new(e)))?;
 
         validate_response(&request, &response_bytes)
     }
@@ -141,27 +143,22 @@ fn validate_response(request: &TimeStampReq, response_bytes: &[u8]) -> Result<Ti
     if tst_info.message_imprint.hash_algorithm.algorithm
         != request.message_imprint.hash_algorithm.algorithm
     {
-        return Err(Error::InvalidResponse(format!(
-            "TSA response hash algorithm mismatch: expected {}, got {}",
-            request.message_imprint.hash_algorithm.algorithm,
-            tst_info.message_imprint.hash_algorithm.algorithm
-        )));
+        return Err(Error::ResponseMismatch {
+            field: ResponseField::HashAlgorithm,
+        });
     }
     if tst_info.message_imprint.hashed_message != request.message_imprint.hashed_message {
-        return Err(Error::InvalidResponse(format!(
-            "TSA response message imprint mismatch: expected {}, got {}",
-            hex::encode(request.message_imprint.hashed_message.as_bytes()),
-            hex::encode(tst_info.message_imprint.hashed_message.as_bytes())
-        )));
+        return Err(Error::ResponseMismatch {
+            field: ResponseField::MessageImprint,
+        });
     }
 
     // Verify the nonce matches the request nonce
     if let Some(req_nonce) = &request.nonce {
         if tst_info.nonce.as_ref() != Some(req_nonce) {
-            return Err(Error::InvalidResponse(format!(
-                "TSA response nonce mismatch: expected {:?}, got {:?}",
-                req_nonce, tst_info.nonce
-            )));
+            return Err(Error::ResponseMismatch {
+                field: ResponseField::Nonce,
+            });
         }
     }
 
@@ -208,7 +205,12 @@ mod tests {
 
         let err = validate_response(&req, &token).unwrap_err();
         assert!(
-            matches!(&err, Error::InvalidResponse(msg) if msg.contains("hash algorithm mismatch")),
+            matches!(
+                &err,
+                Error::ResponseMismatch {
+                    field: ResponseField::HashAlgorithm
+                }
+            ),
             "unexpected error: {err:?}"
         );
     }
@@ -220,7 +222,12 @@ mod tests {
 
         let err = validate_response(&req, &token).unwrap_err();
         assert!(
-            matches!(&err, Error::InvalidResponse(msg) if msg.contains("message imprint mismatch")),
+            matches!(
+                &err,
+                Error::ResponseMismatch {
+                    field: ResponseField::MessageImprint
+                }
+            ),
             "unexpected error: {err:?}"
         );
     }
@@ -232,7 +239,12 @@ mod tests {
 
         let err = validate_response(&req, &token).unwrap_err();
         assert!(
-            matches!(&err, Error::InvalidResponse(msg) if msg.contains("nonce mismatch")),
+            matches!(
+                &err,
+                Error::ResponseMismatch {
+                    field: ResponseField::Nonce
+                }
+            ),
             "unexpected error: {err:?}"
         );
     }

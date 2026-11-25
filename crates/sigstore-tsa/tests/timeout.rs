@@ -37,6 +37,9 @@ async fn request_timeout_covers_stalled_headers_and_body() {
         )
         .await;
         server.abort();
-        assert!(matches!(result.expect("request hung"), Err(Error::Http(_))));
+        assert!(matches!(
+            result.expect("request hung"),
+            Err(Error::Transport(_))
+        ));
     }
 }
