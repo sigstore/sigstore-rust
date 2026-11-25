@@ -286,10 +286,11 @@ fn validate_integrated_time(entry: &TransparencyLogEntry, bundle: &Bundle) -> Re
                     .map_err(|e| Error::cert_malformed(format!("invalid notAfter time: {}", e)))?;
 
             if integrated_time < not_before || integrated_time > not_after {
-                return Err(Error::integrated_time(format!(
-                    "integrated time {} is outside certificate validity period ({} to {})",
-                    integrated_time, not_before, not_after
-                )));
+                return Err(Error::integrated_time_outside_certificate(
+                    integrated_time,
+                    not_before,
+                    not_after,
+                ));
             }
         }
     }
