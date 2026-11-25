@@ -225,7 +225,7 @@ impl OAuthClient {
             .timeout(Duration::from_secs(30))
             .user_agent(USER_AGENT)
             .build()
-            .map_err(|e| Error::Http(format!("failed to build HTTP client: {e}")))?;
+            .map_err(|e| Error::Transport(Box::new(e)))?;
         Ok(Self::with_http_client(config, client))
     }
 
@@ -352,11 +352,8 @@ impl OAuthClient {
                 self.wait_for_callback(&listener, state, callback),
             )
             .await
-            .map_err(|_| {
-                Error::OAuth(format!(
-                    "timed out waiting for browser callback after {} seconds",
-                    CALLBACK_TIMEOUT.as_secs()
-                ))
+            .map_err(|_| Error::CallbackTimedOut {
+                seconds: CALLBACK_TIMEOUT.as_secs(),
             })??;
 
             // Exchange code for token
@@ -492,16 +489,14 @@ impl OAuthClient {
         // Check for errors
         if let Some(err) = error {
             let msg = error_description.unwrap_or(err);
-            return Err(Error::OAuth(format!("authorization failed: {}", msg)));
+            return Err(Error::AuthorizationDenied(msg));
         }
 
         // Verify state to prevent CSRF attacks
         let received_state =
             state.ok_or_else(|| Error::OAuth("missing state parameter".to_string()))?;
         if received_state != expected_state {
-            return Err(Error::OAuth(
-                "state mismatch - possible CSRF attack".to_string(),
-            ));
+            return Err(Error::StateMismatch);
         }
 
         code.ok_or_else(|| Error::OAuth("missing authorization code".to_string()))
@@ -528,11 +523,17 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| Error::Http(e.to_string()))?;
+            .map_err(|e| Error::Transport(Box::new(e)))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            return Err(Error::OAuth(format!("token exchange failed: {status}")));
+        let status = response.status();
+        if !status.is_success() {
+            return Err(Error::Status {
+                status: status.as_u16(),
+                message: status
+                    .canonical_reason()
+                    .unwrap_or("unknown status")
+                    .to_string(),
+            });
         }
 
         let mut response = response;
@@ -540,7 +541,7 @@ impl OAuthClient {
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|e| Error::Http(e.to_string()))?
+            .map_err(|e| Error::Transport(Box::new(e)))?
         {
             if body.len() + chunk.len() > 1024 * 1024 {
                 return Err(Error::OAuth("token response exceeds 1 MiB".into()));
@@ -632,6 +633,33 @@ mod tests {
         )
         .await
         .is_err());
+    }
+
+    #[tokio::test]
+    async fn callback_failures_are_typed() {
+        let client =
+            OAuthClient::new(OAuthConfig::dex("https://oauth2.sigstore.dev/auth")).unwrap();
+        for (request, check) in [
+            (
+                "GET /callback?code=ok&state=wrong HTTP/1.1\r\n\r\n",
+                (|e: &Error| matches!(e, Error::StateMismatch)) as fn(&Error) -> bool,
+            ),
+            (
+                "GET /callback?error=access_denied&error_description=nope&state=expected HTTP/1.1\r\n\r\n",
+                |e: &Error| matches!(e, Error::AuthorizationDenied(reason) if reason == "nope"),
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut socket = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+                .await
+                .unwrap();
+            socket.write_all(request.as_bytes()).await.unwrap();
+            let err = client
+                .wait_for_callback(&listener, "expected", &DefaultAuthCallback)
+                .await
+                .unwrap_err();
+            assert!(check(&err), "unexpected error: {err:?}");
+        }
     }
 
     #[test]
