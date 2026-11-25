@@ -138,7 +138,7 @@ impl CryptoProvider for AwsLcProvider {
     ) -> Result<()> {
         let key = UnparsedPublicKey::new(verification_algorithm(scheme), spki_pubkey_bytes);
         key.verify(data, signature)
-            .map_err(|_| Error::Verification(format!("{} signature invalid", scheme.name())))
+            .map_err(|_| Error::SignatureInvalid { scheme })
     }
 
     fn verify_prehashed(
@@ -158,16 +158,15 @@ impl CryptoProvider for AwsLcProvider {
                 )))
             }
         };
-        let aws_digest = Digest::import_less_safe(digest, aws_algo).map_err(|_| {
-            Error::Verification(format!(
-                "Failed to import digest: len={}, algo_expected_len={}",
-                digest.len(),
-                aws_algo.output_len()
-            ))
-        })?;
+        let aws_digest =
+            Digest::import_less_safe(digest, aws_algo).map_err(|_| Error::DigestLength {
+                scheme,
+                expected: aws_algo.output_len(),
+                actual: digest.len(),
+            })?;
         let key = UnparsedPublicKey::new(verification_algorithm(scheme), spki_pubkey_bytes);
         key.verify_digest(&aws_digest, signature)
-            .map_err(|_| Error::Verification(format!("{} signature invalid", scheme.name())))
+            .map_err(|_| Error::SignatureInvalid { scheme })
     }
 
     fn generate_key_pair(&self, algorithm: KeyAlgorithm) -> Result<Box<dyn SigningKeyPair>> {

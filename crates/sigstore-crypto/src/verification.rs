@@ -267,8 +267,8 @@ impl VerificationKey {
     }
 
     fn verify_inner(&self, data: &[u8], signature: &[u8]) -> Result<()> {
-        validate_raw_public_key(self.scheme, &self.bytes).map_err(|_| {
-            Error::Verification(format!("{} signature invalid", self.scheme.name()))
+        validate_raw_public_key(self.scheme, &self.bytes).map_err(|_| Error::SignatureInvalid {
+            scheme: self.scheme,
         })?;
         if self.scheme == SigningScheme::Ed25519 {
             validate_ed25519_signature(signature)?;
@@ -294,15 +294,15 @@ impl VerificationKey {
         };
 
         if digest.len() != expected_len {
-            return Err(Error::Verification(format!(
-                "Failed to import digest: len={}, algo_expected_len={}",
-                digest.len(),
-                expected_len
-            )));
+            return Err(Error::DigestLength {
+                scheme: self.scheme,
+                expected: expected_len,
+                actual: digest.len(),
+            });
         }
 
-        validate_raw_public_key(self.scheme, &self.bytes).map_err(|_| {
-            Error::Verification(format!("{} signature invalid", self.scheme.name()))
+        validate_raw_public_key(self.scheme, &self.bytes).map_err(|_| Error::SignatureInvalid {
+            scheme: self.scheme,
         })?;
         default_provider().verify_prehashed(self.scheme, &self.bytes, digest, signature.as_bytes())
     }

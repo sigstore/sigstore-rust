@@ -295,21 +295,15 @@ impl KeyPair {
         let algorithm = match self.algorithm() {
             KeyAlgorithm::EcdsaP256 => AlgorithmIdentifier {
                 oid: ID_EC_PUBLIC_KEY,
-                parameters: Some(
-                    der::Any::encode_from(&SECP_256_R_1).map_err(|e| Error::Der(e.to_string()))?,
-                ),
+                parameters: Some(der::Any::encode_from(&SECP_256_R_1).map_err(Error::other)?),
             },
             KeyAlgorithm::EcdsaP384 => AlgorithmIdentifier {
                 oid: ID_EC_PUBLIC_KEY,
-                parameters: Some(
-                    der::Any::encode_from(&SECP_384_R_1).map_err(|e| Error::Der(e.to_string()))?,
-                ),
+                parameters: Some(der::Any::encode_from(&SECP_384_R_1).map_err(Error::other)?),
             },
             KeyAlgorithm::EcdsaP521 => AlgorithmIdentifier {
                 oid: ID_EC_PUBLIC_KEY,
-                parameters: Some(
-                    der::Any::encode_from(&SECP_521_R_1).map_err(|e| Error::Der(e.to_string()))?,
-                ),
+                parameters: Some(der::Any::encode_from(&SECP_521_R_1).map_err(Error::other)?),
             },
             KeyAlgorithm::Rsa => AlgorithmIdentifier {
                 oid: RSA_ENCRYPTION,
@@ -336,10 +330,10 @@ impl KeyPair {
         let spki = SubjectPublicKeyInfo {
             algorithm,
             subject_public_key: BitString::from_bytes(self.public_key_bytes())
-                .map_err(|e| Error::Der(e.to_string()))?,
+                .map_err(Error::other)?,
         };
 
-        let der_bytes = spki.to_der().map_err(|e| Error::Der(e.to_string()))?;
+        let der_bytes = spki.to_der().map_err(Error::other)?;
         Ok(DerPublicKey::new(der_bytes))
     }
 }
