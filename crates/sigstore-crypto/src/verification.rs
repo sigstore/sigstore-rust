@@ -186,6 +186,7 @@ pub(crate) fn validate_ed25519_signature(signature: &[u8]) -> Result<()> {
 }
 
 /// A public key for verification
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerificationKey {
     /// Raw public key bytes (format depends on scheme)
     bytes: Vec<u8>,
