@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1](https://github.com/sigstore/sigstore-rust/compare/sigstore-rekor-v0.17.0...sigstore-rekor-v0.17.1) - 2026-11-28
+
+### Added
+
+- *(rekor,verify)* verify P-384 Rekor v2 hashedrekord entries ([#375](https://github.com/sigstore/sigstore-rust/pull/375))
+
 ## [0.17.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-rekor-v0.16.0...sigstore-rekor-v0.17.0) - 2026-11-22
 
 ### Other
