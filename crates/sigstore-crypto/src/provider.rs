@@ -109,7 +109,8 @@ pub trait CryptoProvider: Send + Sync + std::fmt::Debug + 'static {
     /// Verify a signature over a precomputed `digest`.
     ///
     /// When called via [`VerificationKey::verify_prehashed`](crate::VerificationKey::verify_prehashed),
-    /// only schemes where [`SigningScheme::supports_prehashed`] is `true` (ECDSA and RSA)
+    /// only schemes where [`SigningScheme::supports_prehashed`] is `true` (ECDSA and RSA;
+    /// Ed25519ph is verified directly using the provider's SHA-512 implementation)
     /// are passed to this method, `spki_pubkey_bytes` has been validated by
     /// [`validate_raw_public_key`](crate::validate_raw_public_key), and `digest` is
     /// guaranteed to match the byte length of [`SigningScheme::hash_algorithm`].

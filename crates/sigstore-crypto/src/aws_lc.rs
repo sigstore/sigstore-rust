@@ -73,14 +73,15 @@ impl SigningKeyPair for AwsLcP256KeyPair {
     }
 }
 
-fn verification_algorithm(scheme: SigningScheme) -> &'static dyn VerificationAlgorithm {
-    match scheme {
+fn verification_algorithm(scheme: SigningScheme) -> Option<&'static dyn VerificationAlgorithm> {
+    Some(match scheme {
         SigningScheme::EcdsaP256Sha256 => &ECDSA_P256_SHA256_ASN1,
         SigningScheme::EcdsaP256Sha384 => &ECDSA_P256_SHA384_ASN1,
         SigningScheme::EcdsaP384Sha256 => &ECDSA_P384_SHA256_ASN1,
         SigningScheme::EcdsaP384Sha384 => &ECDSA_P384_SHA384_ASN1,
         SigningScheme::EcdsaP521Sha512 => &ECDSA_P521_SHA512_ASN1,
         SigningScheme::Ed25519 => &ED25519,
+        SigningScheme::Ed25519Ph => return None,
         SigningScheme::RsaPssSha256 => &RSA_PSS_2048_8192_SHA256,
         SigningScheme::RsaPssSha384 => &RSA_PSS_2048_8192_SHA384,
         SigningScheme::RsaPssSha512 => &RSA_PSS_2048_8192_SHA512,
@@ -90,7 +91,7 @@ fn verification_algorithm(scheme: SigningScheme) -> &'static dyn VerificationAlg
         SigningScheme::MlDsa44 => &ML_DSA_44,
         SigningScheme::MlDsa65 => &ML_DSA_65,
         SigningScheme::MlDsa87 => &ML_DSA_87,
-    }
+    })
 }
 
 impl CryptoProvider for AwsLcProvider {
@@ -136,7 +137,18 @@ impl CryptoProvider for AwsLcProvider {
         data: &[u8],
         signature: &[u8],
     ) -> Result<()> {
-        let key = UnparsedPublicKey::new(verification_algorithm(scheme), spki_pubkey_bytes);
+        if scheme == SigningScheme::Ed25519Ph {
+            let prehash = self.sha512(data);
+            return crate::verification::verify_ed25519ph_prehashed(
+                spki_pubkey_bytes,
+                &prehash,
+                signature,
+            );
+        }
+        let alg = verification_algorithm(scheme).ok_or_else(|| {
+            Error::UnsupportedAlgorithm(format!("Scheme {scheme:?} is not supported"))
+        })?;
+        let key = UnparsedPublicKey::new(alg, spki_pubkey_bytes);
         key.verify(data, signature)
             .map_err(|_| Error::Verification(format!("{} signature invalid", scheme.name())))
     }
@@ -148,6 +160,13 @@ impl CryptoProvider for AwsLcProvider {
         digest: &[u8],
         signature: &[u8],
     ) -> Result<()> {
+        if scheme == SigningScheme::Ed25519Ph {
+            return crate::verification::verify_ed25519ph_prehashed(
+                spki_pubkey_bytes,
+                digest,
+                signature,
+            );
+        }
         let aws_algo = match scheme.hash_algorithm() {
             Some(HashAlgorithm::Sha2256) => &SHA256,
             Some(HashAlgorithm::Sha2384) => &SHA384,
@@ -165,7 +184,10 @@ impl CryptoProvider for AwsLcProvider {
                 aws_algo.output_len()
             ))
         })?;
-        let key = UnparsedPublicKey::new(verification_algorithm(scheme), spki_pubkey_bytes);
+        let alg = verification_algorithm(scheme).ok_or_else(|| {
+            Error::UnsupportedAlgorithm(format!("Scheme {scheme:?} is not supported"))
+        })?;
+        let key = UnparsedPublicKey::new(alg, spki_pubkey_bytes);
         key.verify_digest(&aws_digest, signature)
             .map_err(|_| Error::Verification(format!("{} signature invalid", scheme.name())))
     }

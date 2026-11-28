@@ -20,11 +20,12 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use sigstore_protobuf_specs::dev::sigstore::bundle::v1::Bundle as PbBundle;
+use sigstore_protobuf_specs::dev::sigstore::common::v1::PublicKeyDetails as PbPublicKeyDetails;
 use sigstore_protobuf_specs::dev::sigstore::rekor::v2::CreateEntryRequest as PbCreateEntryRequest;
 use sigstore_protobuf_specs::dev::sigstore::trustroot::v1::SigningConfig as PbSigningConfig;
 use sigstore_protobuf_specs::dev::sigstore::trustroot::v1::TrustedRoot as PbTrustedRoot;
 
-use sigstore_rekor::HashedRekordV2;
+use sigstore_rekor::{HashedRekordV2, RekorV2KeyDetails};
 use sigstore_trust_root::{SigningConfig, TrustedRoot};
 use sigstore_types::Bundle;
 
@@ -224,6 +225,39 @@ fn rekor_v2_hashedrekord_public_key_request() {
           }
         }"#,
     );
+}
+
+#[test]
+fn rekor_v2_key_details_match_protobuf_specs() {
+    for variant in [
+        RekorV2KeyDetails::PkixEcdsaP256Sha256,
+        RekorV2KeyDetails::PkixEcdsaP384Sha384,
+        RekorV2KeyDetails::PkixEcdsaP521Sha512,
+        RekorV2KeyDetails::PkixRsaPkcs1v152048Sha256,
+        RekorV2KeyDetails::PkixRsaPkcs1v153072Sha256,
+        RekorV2KeyDetails::PkixRsaPkcs1v154096Sha256,
+        RekorV2KeyDetails::PkixEd25519Ph,
+    ] {
+        let name = variant.as_str();
+        let pb = PbPublicKeyDetails::from_str_name(name)
+            .unwrap_or_else(|| panic!("{name} is not a known protobuf PublicKeyDetails"));
+        assert_eq!(pb.as_str_name(), name);
+        let request = format!(
+            r#"{{
+              "hashedRekordRequestV002": {{
+                "digest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                "signature": {{
+                  "content": "c2lnbmF0dXJl",
+                  "verifier": {{
+                    "x509Certificate": {{"rawBytes": "MAA="}},
+                    "keyDetails": "{name}"
+                  }}
+                }}
+              }}
+            }}"#
+        );
+        check_exact::<HashedRekordV2, PbCreateEntryRequest>(name, &request);
+    }
 }
 
 // ==== Bundles across versions, content types and verification materials ====

@@ -7,7 +7,10 @@ use const_oid::db::rfc5912::{
     ID_EC_PUBLIC_KEY, RSA_ENCRYPTION, SECP_256_R_1, SECP_384_R_1, SECP_521_R_1,
 };
 use const_oid::ObjectIdentifier;
-use curve25519_dalek::edwards::CompressedEdwardsY;
+use curve25519_dalek::{
+    edwards::{CompressedEdwardsY, EdwardsPoint},
+    scalar::Scalar,
+};
 use der::Decode;
 use sigstore_types::{DerPublicKey, HashAlgorithm, SignatureBytes};
 use spki::SubjectPublicKeyInfoRef;
@@ -185,6 +188,61 @@ pub(crate) fn validate_ed25519_signature(signature: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Domain separation prefix `dom2(1, "")` for Ed25519ph with empty context (RFC 8032 §5.1).
+const ED25519PH_DOM2: [u8; 34] = *b"SigEd25519 no Ed25519 collisions\x01\x00";
+
+/// Verify an RFC 8032 Ed25519ph signature over a 64-byte SHA-512 prehash.
+///
+/// Enforces strict verification (`[S]B == R + [k]A`, canonical encodings for `A`,
+/// `R`, and `S`, and non-small-order `A` and `R`). Works with any
+/// [`CryptoProvider`](crate::CryptoProvider) via its SHA-512 implementation.
+pub(crate) fn verify_ed25519ph_prehashed(
+    pubkey_bytes: &[u8],
+    prehash: &[u8],
+    signature: &[u8],
+) -> Result<()> {
+    let err = || Error::Verification("ED25519_PH signature invalid".into());
+    let pubkey: [u8; 32] = pubkey_bytes.try_into().map_err(|_| err())?;
+    let prehash: [u8; 64] = prehash.try_into().map_err(|_| err())?;
+    if signature.len() != 64 {
+        return Err(err());
+    }
+    let r_bytes: [u8; 32] = signature[..32].try_into().map_err(|_| err())?;
+    let s_bytes: [u8; 32] = signature[32..].try_into().map_err(|_| err())?;
+
+    let a_point = CompressedEdwardsY(pubkey).decompress().ok_or_else(err)?;
+    if a_point.compress().to_bytes() != pubkey || a_point.is_small_order() {
+        return Err(err());
+    }
+    let r_point = CompressedEdwardsY(r_bytes).decompress().ok_or_else(err)?;
+    if r_point.compress().to_bytes() != r_bytes {
+        return Err(err());
+    }
+    if r_point.is_small_order() {
+        return Err(Error::Verification(
+            "Ed25519 signature R is a small-order point".into(),
+        ));
+    }
+    let s = Option::<Scalar>::from(Scalar::from_canonical_bytes(s_bytes)).ok_or_else(err)?;
+
+    let mut hash_input = [0u8; 34 + 32 + 32 + 64];
+    hash_input[..34].copy_from_slice(&ED25519PH_DOM2);
+    hash_input[34..66].copy_from_slice(&r_bytes);
+    hash_input[66..98].copy_from_slice(&pubkey);
+    hash_input[98..162].copy_from_slice(&prehash);
+
+    let k_digest = default_provider().sha512(&hash_input);
+    let k = Scalar::from_bytes_mod_order_wide(&k_digest);
+
+    // RFC 8032 §5.1.7: [S]B == R + [k]A  <=>  [-k]A + [S]B == R.
+    let computed_r = EdwardsPoint::vartime_double_scalar_mul_basepoint(&(-k), &a_point, &s);
+    if computed_r == r_point {
+        Ok(())
+    } else {
+        Err(err())
+    }
+}
+
 /// A public key for verification
 pub struct VerificationKey {
     /// Raw public key bytes (format depends on scheme)
@@ -273,6 +331,10 @@ impl VerificationKey {
         if self.scheme == SigningScheme::Ed25519 {
             validate_ed25519_signature(signature)?;
         }
+        if self.scheme == SigningScheme::Ed25519Ph {
+            let prehash = default_provider().sha512(data);
+            return verify_ed25519ph_prehashed(&self.bytes, &prehash, signature);
+        }
         default_provider().verify_raw(self.scheme, &self.bytes, data, signature)
     }
 
@@ -304,6 +366,9 @@ impl VerificationKey {
         validate_raw_public_key(self.scheme, &self.bytes).map_err(|_| {
             Error::Verification(format!("{} signature invalid", self.scheme.name()))
         })?;
+        if self.scheme == SigningScheme::Ed25519Ph {
+            return verify_ed25519ph_prehashed(&self.bytes, digest, signature.as_bytes());
+        }
         default_provider().verify_prehashed(self.scheme, &self.bytes, digest, signature.as_bytes())
     }
 }
@@ -952,6 +1017,122 @@ mod tests {
             assert!(crate::webpki::ED25519
                 .verify_signature(&public_key, data, sig.as_bytes())
                 .is_err());
+        }
+
+        #[test]
+        fn ed25519ph_rfc8032_test_vector_and_rejection_cases() {
+            // RFC 8032 §7.3 TEST (message = "abc", empty context)
+            let raw_pk =
+                hex::decode("ec172b93ad5e563bf4932c70e1245034c35467ef2efd4d64ebf819683467e2bf")
+                    .unwrap();
+            let sig_bytes = hex::decode(
+                "98a70222f0b8121aa9d30f813d683f809e462b469c7ff87639499bb94e6dae41\
+                 31f85042463c2a355a2003d062adf5aaa10b8c61e636062aaad11c2a26083406",
+            )
+            .unwrap();
+            let spki = spki_der(ID_ED25519, None, &raw_pk);
+            let sig = SignatureBytes::new(sig_bytes.clone());
+
+            let vk =
+                VerificationKey::from_spki_with_scheme(&spki, SigningScheme::Ed25519Ph).unwrap();
+            assert_eq!(vk.scheme(), SigningScheme::Ed25519Ph);
+            assert!(vk.scheme().supports_prehashed());
+            assert_eq!(vk.scheme().hash_algorithm(), Some(HashAlgorithm::Sha2512));
+
+            // Raw and prehashed verification both succeed on the RFC 8032 vector.
+            vk.verify(b"abc", &sig).unwrap();
+            let prehash = crate::hash::sha512(b"abc");
+            vk.verify_prehashed(prehash.as_slice(), &sig).unwrap();
+            verify_signature(&spki, b"abc", &sig, SigningScheme::Ed25519Ph).unwrap();
+            verify_signature_prehashed(&spki, prehash.as_slice(), &sig, SigningScheme::Ed25519Ph)
+                .unwrap();
+
+            // Wrong message, wrong prehash, wrong digest length fail closed.
+            assert!(vk.verify(b"abd", &sig).is_err());
+            let wrong_prehash = crate::hash::sha512(b"abd");
+            assert!(vk.verify_prehashed(wrong_prehash.as_slice(), &sig).is_err());
+            let sha256_digest = crate::hash::sha256(b"abc");
+            assert!(vk.verify_prehashed(sha256_digest.as_bytes(), &sig).is_err());
+
+            // Tampered signature and wrong length fail closed.
+            let mut tampered = sig_bytes.clone();
+            tampered[0] ^= 0x01;
+            assert!(vk.verify(b"abc", &SignatureBytes::new(tampered)).is_err());
+            assert!(vk
+                .verify(b"abc", &SignatureBytes::new(sig_bytes[..63].to_vec()))
+                .is_err());
+
+            // Non-canonical S (S + L) is rejected.
+            let mut non_canonical_s = sig_bytes.clone();
+            // Add Ed25519 group order L (little-endian) to S.
+            const L: [u8; 32] = [
+                0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9,
+                0xde, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x10,
+            ];
+            let mut carry = 0u16;
+            for i in 0..32 {
+                let sum = non_canonical_s[32 + i] as u16 + L[i] as u16 + carry;
+                non_canonical_s[32 + i] = sum as u8;
+                carry = sum >> 8;
+            }
+            assert!(vk
+                .verify(b"abc", &SignatureBytes::new(non_canonical_s))
+                .is_err());
+
+            // Pure Ed25519 does not accept an Ed25519ph signature and vice versa.
+            let vk_pure =
+                VerificationKey::from_spki_with_scheme(&spki, SigningScheme::Ed25519).unwrap();
+            assert!(vk_pure.verify(b"abc", &sig).is_err());
+
+            let (pure_pk, pure_sig) = crate::aws_lc::test_support::sign_ed25519(b"abc");
+            let pure_spki = spki_der(ID_ED25519, None, &pure_pk);
+            let vk_ph_on_pure =
+                VerificationKey::from_spki_with_scheme(&pure_spki, SigningScheme::Ed25519Ph)
+                    .unwrap();
+            assert!(vk_ph_on_pure.verify(b"abc", &pure_sig).is_err());
+        }
+
+        #[test]
+        fn ed25519ph_small_order_key_and_r_rejected() {
+            use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+
+            // Small-order public key rejected.
+            let identity_spki = spki_der(
+                ID_ED25519,
+                None,
+                &hex::decode(ED25519_SMALL_ORDER_KEYS[0]).unwrap(),
+            );
+            let vk_id =
+                VerificationKey::from_spki_with_scheme(&identity_spki, SigningScheme::Ed25519Ph)
+                    .unwrap();
+            let mut dummy_sig = vec![0u8; 64];
+            dummy_sig[0] = 0x01;
+            assert!(vk_id
+                .verify(b"msg", &SignatureBytes::new(dummy_sig))
+                .is_err());
+
+            // Signature with identity R (S = k * a) rejected.
+            let a = Scalar::from_bytes_mod_order([0x07; 32]);
+            let public_key = (ED25519_BASEPOINT_POINT * a).compress().to_bytes();
+            let prehash = default_provider().sha512(b"message signed with identity R");
+            let mut r = [0u8; 32];
+            r[0] = 0x01;
+            let mut hash_input = [0u8; 34 + 32 + 32 + 64];
+            hash_input[..34].copy_from_slice(&ED25519PH_DOM2);
+            hash_input[34..66].copy_from_slice(&r);
+            hash_input[66..98].copy_from_slice(&public_key);
+            hash_input[98..162].copy_from_slice(&prehash);
+            let k = Scalar::from_bytes_mod_order_wide(&default_provider().sha512(&hash_input));
+            let sig = SignatureBytes::new([r, (k * a).to_bytes()].concat());
+
+            let spki = spki_der(ID_ED25519, None, &public_key);
+            let vk =
+                VerificationKey::from_spki_with_scheme(&spki, SigningScheme::Ed25519Ph).unwrap();
+            assert!(matches!(
+                vk.verify_prehashed(&prehash, &sig),
+                Err(Error::Verification(message)) if message == "Ed25519 signature R is a small-order point"
+            ));
         }
 
         #[test]

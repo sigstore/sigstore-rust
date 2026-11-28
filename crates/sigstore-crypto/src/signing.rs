@@ -25,8 +25,10 @@ pub enum SigningScheme {
     EcdsaP384Sha384,
     /// ECDSA P-521 with SHA-512
     EcdsaP521Sha512,
-    /// Ed25519
+    /// Ed25519 (pure, RFC 8032)
     Ed25519,
+    /// Ed25519ph (prehashed Ed25519 with SHA-512, RFC 8032)
+    Ed25519Ph,
     /// RSA PSS with SHA-256
     RsaPssSha256,
     /// RSA PSS with SHA-384
@@ -54,7 +56,7 @@ impl SigningScheme {
             Self::EcdsaP256Sha256 | Self::EcdsaP256Sha384 => KeyAlgorithm::EcdsaP256,
             Self::EcdsaP384Sha256 | Self::EcdsaP384Sha384 => KeyAlgorithm::EcdsaP384,
             Self::EcdsaP521Sha512 => KeyAlgorithm::EcdsaP521,
-            Self::Ed25519 => KeyAlgorithm::Ed25519,
+            Self::Ed25519 | Self::Ed25519Ph => KeyAlgorithm::Ed25519,
             Self::RsaPssSha256
             | Self::RsaPssSha384
             | Self::RsaPssSha512
@@ -76,6 +78,7 @@ impl SigningScheme {
             SigningScheme::EcdsaP384Sha384 => "ECDSA_P384_SHA384",
             SigningScheme::EcdsaP521Sha512 => "ECDSA_P521_SHA512",
             SigningScheme::Ed25519 => "ED25519",
+            SigningScheme::Ed25519Ph => "ED25519_PH",
             SigningScheme::RsaPssSha256 => "RSA_PSS_SHA256",
             SigningScheme::RsaPssSha384 => "RSA_PSS_SHA384",
             SigningScheme::RsaPssSha512 => "RSA_PSS_SHA512",
@@ -90,8 +93,9 @@ impl SigningScheme {
 
     /// Check if this scheme supports prehashed verification.
     ///
-    /// Ed25519 doesn't support prehashed verification (it signs the full message).
-    /// ECDSA and RSA schemes support prehashed verification.
+    /// Pure Ed25519 and ML-DSA sign the full message and do not support
+    /// prehashed verification. ECDSA, RSA, and Ed25519ph support prehashed
+    /// verification.
     pub fn supports_prehashed(&self) -> bool {
         !matches!(
             self,
@@ -113,7 +117,7 @@ impl SigningScheme {
             | Self::EcdsaP384Sha384
             | Self::RsaPssSha384
             | Self::RsaPkcs1Sha384 => Some(HashAlgorithm::Sha2384),
-            Self::EcdsaP521Sha512 | Self::RsaPssSha512 | Self::RsaPkcs1Sha512 => {
+            Self::EcdsaP521Sha512 | Self::Ed25519Ph | Self::RsaPssSha512 | Self::RsaPkcs1Sha512 => {
                 Some(HashAlgorithm::Sha2512)
             }
             Self::Ed25519 | Self::MlDsa44 | Self::MlDsa65 | Self::MlDsa87 => None,
