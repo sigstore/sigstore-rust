@@ -155,8 +155,8 @@ cargo run -p sigstore-verify --example verify_bundle -- \
 
 By default, `sigstore-rust` uses [aws-lc-rs](https://github.com/aws/aws-lc-rs) for cryptographic operations and `rustls` (with `aws-lc-rs`) for HTTPS transport. It supports:
 
-- ECDSA (P-256, P-384) signature verification and P-256 signing
-- Ed25519, RSA (PKCS#1 v1.5 and PSS), and ML-DSA (44, 65, 87) signature verification
+- ECDSA (P-256, P-384, P-521) signature verification and P-256 signing
+- Ed25519 (pure and Ed25519ph), RSA (PKCS#1 v1.5 and PSS), and ML-DSA (44, 65, 87) signature verification
 - SHA-256/SHA-384/SHA-512 hashing
 - X.509 certificate parsing and chain validation
 

@@ -417,7 +417,7 @@ fn validate_v2_entry(entry: &TransparencyLogEntry, request: &HashedRekordV2) -> 
         (None, Some(logged), None, Some(requested)) => logged.raw_bytes == requested.content,
         _ => false,
     };
-    if logged.data.algorithm != sigstore_types::HashAlgorithm::Sha2256
+    if logged.data.algorithm != requested.signature.verifier.key_details.hash_algorithm()
         || logged.data.digest.as_bytes() != requested.digest.as_bytes()
         || logged.signature.content != requested.signature.content
         || logged.signature.verifier.key_details != requested.signature.verifier.key_details

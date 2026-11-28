@@ -1799,6 +1799,184 @@ fn test_verify_managed_key_p384_rekor_v2_bundle() {
 }
 
 #[test]
+fn test_verify_rekor_v2_managed_key_all_remaining_algorithms() {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use sigstore_types::{Artifact, ArtifactDigest, HashAlgorithm};
+
+    // Real OpenSSL 4.1 keys and signatures over b"artifact" and over the in-toto DSSE PAE below.
+    let artifact = b"artifact";
+    let statement = format!(
+        r#"{{"_type":"https://in-toto.io/Statement/v1","subject":[{{"name":"a","digest":{{"sha256":"{}"}}}}],"predicateType":"https://example.com/predicate/v1","predicate":{{}}}}"#,
+        sigstore_crypto::sha256(artifact).to_hex()
+    )
+    .into_bytes();
+    let payload_type = "application/vnd.in-toto+json";
+    let pae = sigstore_types::pae(payload_type, &statement);
+
+    let cases: &[(&str, HashAlgorithm, &str, &str, &str)] = &[
+        (
+            "PKIX_ECDSA_P521_SHA_512",
+            HashAlgorithm::Sha2512,
+            "MIGbMBAGByqGSM49AgEGBSuBBAAjA4GGAAQAZEF9WGS0QHBx6alJ8zR5/hGIQgsuuuPxWreALuawfc5AD2hfLJoyLvBcwVcjiAmSOo0gkYM2r+QnEbWuVLoqcQkAfwvNVoSTEhTG7gwVrA6V8AAw92KCLhoU+wOiah1J3uXYyb22F7VKBuV055i+TSN3Vc+++yCnasowCp0n564+vyw=",
+            "MIGIAkIBVJZIe3ZkImCTvbDpeUcBQZ43v4IpfIGbGfHPuy2417e6wPd83Vsvim5TkNK88QVGpwnBkOm3DmxQfDZNS7bKAw0CQgEtGJxMtdPQjc2UovNSFGed6Ra4cWNmUQI2SqVC8kbBKgIaPf9i9QiQKCTyQOWdAbYcA7+YjbH2ITFoEUEkQQTK9A==",
+            "MIGIAkIBVp/tE74nG1TSrjHseY+2PzY87/oIswxD0fksuQBNYdvIQPYEYR9K8dS24xWobarcr2vSebSNk4Nx4ryu2ajYjG0CQgDg6Q4Sp8WY39XdVOLa+tCCKqvcRHumJwsJ/SHeflrTgU/1bX15SdEiBES7I3Qy9IzUGWUvNsdYyy2o8p/uOegDXw==",
+        ),
+        (
+            "PKIX_RSA_PKCS1V15_2048_SHA256",
+            HashAlgorithm::Sha2256,
+            "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw0XTRQ9s+hbdbNghC52qxjAQjuxUHZKbD3sWlcg3STVxIGjX/m1yHMJz2GRhZVPUFe6BDUeJRTaSxBOtcFvWuYlbJTS8SM/5MmtlWkb5PALa+lBg2HqtJrNkLT6D+eWOneHfh/7Inf2N7E9CAslR3WW0ViKqWUoK60ygD7bAtFr5PpkXaqEw3R4RIoO7wEtzjvp1q6pt+0GLafUyJBKYXXCN2QIpwkGLdMdHkBc6DcJxu1wvt1AVOYYmUjLCdigCqJ+qugk5ayx3ftX6ujXxwvuFM4RKx5hsndwB//M9BW1cd6u1DaTFuZ5lI8qqUkJla9DheoiXArm/4cKRW13GDwIDAQAB",
+            "iLs9Bm5KOwWClTyp6ILPlCrM3+nU1mcBGmRNd9QILRtHGaJBf3NUWQhmPsQYnHX98ur8wZUK5XAS9Oosc1vD+BDoG/uo+vQOrh3SOV4u5yLvI0mcMR/PD6DIDD0HofF9IjgDDrA3mHLiqmyHu6cXitNnvk56O1wW6lRnYw9mFIsI9GiAPd8LtC0q2yIE/9hmjJHkBabY3bXlCa03EjrmlLz+yvIDW6wWIzsKM3U32kadldFrH2Ow407snOw15Lm4m5dAzF5HOpbVGuRlR2vDjmCBjd49/GAPRxOqd8nIigeTS7FmWoxkO08nseqjmmH4FC9a/vw9wmOYJtDFBXNUKA==",
+            "eZxcp6X7A1yP4v6OdL9N/t4JECXgZw1pQyKdQ0pzosDeBTrYfD6h54mdrKmxG1MZCWpaV9+anEPsmloBYZk/tyneKfqs5TuQJ5TEGqM0HmkHpMvZqWj4b3jPp+KNLcyfiLvBmvuGDZN80MZIyLxzM48kBgG3Q1Ya5jQ54Q03fHerR/sr0G02PavsrWYpr3z5ezNep1lQp/Oy6AKuUlii/x61vR3D6P6n5XiI2E7fKLcJnKU7cjzWZ85V42yJt0q/sJt3dFhKRWeHQPiI8BOZBIiUZqhB/6gqsHwaqr0mZqHnKX8xfW1FOyGpeTqEpN+/gXbyPxBrzoPqr0ipGTlrjA==",
+        ),
+        (
+            "PKIX_RSA_PKCS1V15_3072_SHA256",
+            HashAlgorithm::Sha2256,
+            "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAij3GJZQoruUKd/NR3byrEor3a5pE7j1lNZNCe9rbu9oATE3tC0r0ckx/FE0N04r9JtY8yEDdA/1VYxjkha0hQLxa0nfykqGddQn7D19zt2sya2m+r0T5ztJroEu6qft5XcJu47ntmIgVMWhFHCJl2s8sXyfE2Ts+x0kXPtqDPOYufNjMDWYC5eG0sOZxcvmkk+tcioGS+z1OF1nTeI4wGs8q53HwpZQH9fyn8HpN8iCCgmR2u0KPRr5hYnALL59vz2asD/wDJN5QwGzP184/VAp8cWbWBLobZG03j8GuKLB86pWYfbdgV6z65K5IbgkH27dh5SM54qrjfO1EeJFRryD0bk9YmEaeTshPiFN0emHm+zqOMNypeWcWnMP11DkZpCkcZJseuGfc9Bn0KfYDgL38aCB3VkNhAiyE01fIbrQnINc3jpPYp58b8oNEk5JFKjQRFUa4Ebd3b9R15E7ZpHKru+z8JVpe2xFWBlEZe57G8aRVw+hBvS6bj1ejYD8BAgMBAAE=",
+            "PUc6Y/qvA/8YmSXzbff0iMFz8ae3R6BKsM8A7Qe/oK+WvHA0DEiw7g5Riwl+CbHtuAuey5I3lnOBDyLSI+Vpn/JZg4wr7xMw0JKtZqAnuwA6RkD+F5WblnLOj27UveOaayIkqs6h+xOuN2U40/4Lsjz7iAZT35MtO9MyN++yNEtRyXkYmxDm8yqo5ASymav5KLQvbYc81HLQuLbyvNhIjYNKsdJQTvMi7VDfCa6tSThKeb5w4/clwTz+wwL1Qmf3HvLhJSyLOC+VENS22saSUb1YCwGQLF0L4X+a+SrlkfOOP260mkuVymx4JFC8R2ltLpRttGmmCD30LB0QEoEUgh5LmSbmEp8eCprwN5X5zBuLbx0KeKnOXXVTZ3rIa6O7rl8B6hQK/PMiUl30gLD+roELwfxVl6q7jHUB7ihVIh1Y+2lFtvKikOSVXJt8DyAsrUPc1CAy4CjwwJaqxe726HwpYGTqrn/6o00P2ifGGCWLRo8LlQX/XFNLh/Pnzw2n",
+            "L7NDumZZeA2scTPn9+vDWkT+/XGaAhUcs3uButuZDNMpiFs4B3w4AhyadoXj9Ho7f+q1xQen/aye3otYa4AziEYsHKabZkzzbmyn5Xj2W8uuYrH/g1q3z4lF5o0o37og2gnyoZx5KRPhQ6Cv2QZGJGkH2oDx9zKwoWSr19JMyd7BBVUZnGJeeQCyYNp/JAJHxsXXwMnUi2lh43OqhzaLE1bB1N60laz1BBDRLPN2fZkeK6gHHFKyZDmtmhVCEl3Bsoi3n17YZRX6NMCKWt70U5oI/F9R4Eo1BXcy9c7FimIbEhe81XJHbztWJRkkWzttvFzDty+HPDjd8Ro69j8+OMywk4AigdV4++vRoII4ZPqm/62JfW1RNSOxT9LisgUlPM4+uSgEsYOh8em4zLCDvMaeLnfUuM4RAoqj+ebz1K+6q0t9ueU8UXU2j9XWdgPooQmaSjONU/zMzhHSSBQUNt/wTJyJ5Dizf2f6HtycjH9dXK+3GcFp84ZW9mcC8Nuy",
+        ),
+        (
+            "PKIX_RSA_PKCS1V15_4096_SHA256",
+            HashAlgorithm::Sha2256,
+            "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAwzT/IH1bbRa3LVdDVTatIx2E3dUFVDfY4rkCl6obqV37+e/pWq9LZxcL/sBKLORD2l67xaZSIlvxVAcsX+xkQMqHChVc4jvVUuAWI1sYIgC8Ym+oAHkvOGaQKdZKNWbZI9NtEbjEB82VKrv+Otk0fvgOgc16XU5aCVkt8O/zTZppEWDSidLs+vd3LbQiFf3k27+mP1MsNm4UkqFNxMkp257gnz63MMwJLDEAhDov82+XGYEYiACpwoY2Y9I0p82lu9mCO9sERPNG2UQ47fI1qk0GdV1bme6sgCDufJHRHXWD2MPITrRJnyzg6YYn7tX7g32xKZqAA7jJyCpcjTHHsXwP8U03XAiU4U22D1necgXYuIa+rCRQpPjUMI0MX+JfL+npkgefk2ygTOprI+dqclD9WBJiSYevln24cOJlORjG7mg13TuxVJQq0YsKDsan0FZpovLyBuj9LrgzeJpaiBmuznhoVFVOBImrgROVRSHQxFNCYCCf5gqEFaNcbXaUrcPOA/5EuSrhvY+xBaYhnb7bR9u7znR2J9BI7VC2lxlRNu1LnmjholreI9GcLhS3+5aAHgsrG09BmHn4YMgCXWP1J+JVy+VYtfGe3tspwuSLhBEnNP9XXQr4ii30WH5hpyXHzkJOHqIwickDUqhdptkhfNoe/ttlRByLl7EVpk0CAwEAAQ==",
+            "E9vBEzjDn1pcGvb+Dt0lX99YsgZEWACQJEKtRpLgSLoj0ezGsx/0NILb5vabVT7MMIb2oCRkYa2FrwuG1t0cKgy+Xo3UE5UwkdPimfMHObeKF6vp6nnWzoE1FiFOhPJWrzTHAWIv1NZSg7w9XEEltEqDaf9uH7Vwf7AlIQTiZvuDAZjEzDUjizwOubmS0D9GUDJLbsBgV5bkF/0T060XY15UgcQe0+qefRY0RKlyl7WyFv7lz4Yk0Xu4ldn7mEE+rmIfs8WLbwAhaGpWmSZaUdsppZ3Y4/Ry+IR8YDk06660uQ1XkpZbXQqfXxP00Ezc2EbR/miEDu9+kRy6JYaNEBPQhLoHcIWc6cigeRs1lRbLUESJzB2mDNBOvDEfiBWVO3iSO+kB2wbuqrjnflP7qJKwSEFoFG4eVO0Rwz8O0XI0Sc1HvVtxpSqGJQsQKyCIaVrZK23YPOjnvRJ8ct5EOlJVwqOqxtdgkQXXuLVECGcPC/LJHFN5ESGt9c2oJDL6cXMp5Jw1xRYCZ4ZNdeBs7L3l+TkIy6aUzdl28wGYid5QWTkfIDAnO5V7Wql2rfjDwSpfHRwQPCuGpWPy0CqVOBOfj7Ryy9kQrHHhAfXVDDRqlvPT+RsDbXf8BQzmoJgrbT8PkQU3Jt820bPk5pCmFGrrt4vnVt/sEfDNDd1S3O8=",
+            "f6oF9L+1w7pmP5HftU9ViAoMMYOKVL50FPmo+XaxWIaujl9mFBo65nWfpMs+DfEijhBmB3+/ZlxZ5gqXgC5AhFkQoIq4xQs3li5ndHp2v/1WEccrQqRnMpuFiWEOF/tG7HmaD8ogjfPxnWvCQB64ycNzI++KKSoyGdmxS/UVJfNWIT/VaozJMDy/9G1teVU7StR5TCeftz7vdGnVvzdb7GtpG8XMXcaYTwRhNNKQmaZOtOszGT00NpjagYqt5/ThDfeud/VnjBoPqvS/fv7kEnSt+y07Yo+a9gG2ZyOwy2m0ydIBAgsL9FfX//I7dESCHVyTXhVPH1hraKwUAVp3U994S8uW7rceAKRxwdINEvXlvOrq+fpK5xTmGEEH+uyTE0wLTU8WCp0DUnqgKRT3Iuo3YEaQsuIiGOag0U5RS5cS8f+XXcugzIxQMkTwb0CJ8pJyUjMre50r6VCLqjA+0FC0/sWtF9ma/yeczUdtXqy4YAkLe1lw5mVRH2GgQljVFvw/ttjAE5tZdKFLUX7lMdR+VNtIPKEVdDEJJi2ccyUbaV08fA0qxQ3Gyc2Wd2vGQjEvddoAz1Sy6Gp0EtvBBz8p7NFPqC7lpDK2YSCq1/0pTgCa4QdeRfn6mAxXGVIBSoIoTFEyDrBYfKfe3hvpJi6572IE1hx2pLFx3hnCivY=",
+        ),
+        (
+            "PKIX_ED25519_PH",
+            HashAlgorithm::Sha2512,
+            "MCowBQYDK2VwAyEAB31fpkySzG9cBMZ8NGA26DmcuIHJ4x7K9gqRNNssOss=",
+            "k1hW6IMxktQjXIunaP7Zqj/vIAH3QmMJxy/vDbvSCf9NNlCDAxfCwKIzMzLCDsoPX3f3jm5Qy01dVFiWoXR2Aw==",
+            "xqQe4TsTy+a0cm9xRiInLMQRYJe4dkpgmkv/K6Cf8szIUHbSrnuMO9bDytG9azqajViWNSadzO+/YfhRi75VCg==",
+        ),
+    ];
+
+    let verifier = Verifier::new(&production_root()).unwrap();
+    let hash_bytes = |alg: HashAlgorithm, data: &[u8]| -> Vec<u8> {
+        let mut h = sigstore_crypto::ArtifactHasher::new(alg).unwrap();
+        h.update(data);
+        h.finalize().as_bytes().to_vec()
+    };
+
+    for &(key_details, hash_alg, pub_b64, msg_sig_b64, pae_sig_b64) in cases {
+        let key = sigstore_types::DerPublicKey::new(STANDARD.decode(pub_b64).unwrap());
+        let policy = PublicKeyVerificationPolicy::new(key).skip_tlog_unsafe();
+
+        // 1. MessageSignature bundle (blob, reader, and pre-computed digest)
+        let msg_digest = hash_bytes(hash_alg, artifact);
+        let msg_body = serde_json::json!({
+            "apiVersion": "0.0.2",
+            "kind": "hashedrekord",
+            "spec": {
+                "hashedRekordV002": {
+                    "data": {
+                        "algorithm": hash_alg.to_string(),
+                        "digest": STANDARD.encode(&msg_digest),
+                    },
+                    "signature": {
+                        "content": msg_sig_b64,
+                        "verifier": {
+                            "keyDetails": key_details,
+                            "publicKey": {"rawBytes": pub_b64},
+                        },
+                    },
+                },
+            },
+        });
+        let msg_bundle_json = serde_json::json!({
+            "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+            "verificationMaterial": {
+                "publicKey": {"hint": "hint"},
+                "tlogEntries": [{
+                    "logIndex": "1",
+                    "logId": {"keyId": STANDARD.encode([0u8; 32])},
+                    "kindVersion": {"kind": "hashedrekord", "version": "0.0.2"},
+                    "canonicalizedBody": STANDARD.encode(msg_body.to_string()),
+                }],
+            },
+            "messageSignature": {
+                "messageDigest": {
+                    "algorithm": hash_alg.to_string(),
+                    "digest": STANDARD.encode(&msg_digest),
+                },
+                "signature": msg_sig_b64,
+            },
+        });
+        let msg_bundle = Bundle::from_json(&msg_bundle_json.to_string()).unwrap();
+
+        verifier
+            .verify(artifact.as_slice(), &msg_bundle, &policy)
+            .unwrap_or_else(|e| panic!("{key_details} message blob failed: {e}"));
+        verifier
+            .verify_reader(&artifact[..], &msg_bundle, &policy)
+            .unwrap_or_else(|e| panic!("{key_details} message reader failed: {e}"));
+        verifier
+            .verify(
+                Artifact::Digest(ArtifactDigest::new(hash_alg, msg_digest.clone()).unwrap()),
+                &msg_bundle,
+                &policy,
+            )
+            .unwrap_or_else(|e| panic!("{key_details} message digest failed: {e}"));
+        assert!(
+            verifier
+                .verify(b"other".as_slice(), &msg_bundle, &policy)
+                .is_err(),
+            "{key_details} must reject wrong artifact"
+        );
+
+        // 2. DSSE envelope bundle
+        let pae_digest = hash_bytes(hash_alg, &pae);
+        let dsse_body = serde_json::json!({
+            "apiVersion": "0.0.2",
+            "kind": "hashedrekord",
+            "spec": {
+                "hashedRekordV002": {
+                    "data": {
+                        "algorithm": hash_alg.to_string(),
+                        "digest": STANDARD.encode(&pae_digest),
+                    },
+                    "signature": {
+                        "content": pae_sig_b64,
+                        "verifier": {
+                            "keyDetails": key_details,
+                            "publicKey": {"rawBytes": pub_b64},
+                        },
+                    },
+                },
+            },
+        });
+        let dsse_bundle_json = serde_json::json!({
+            "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+            "verificationMaterial": {
+                "publicKey": {"hint": "hint"},
+                "tlogEntries": [{
+                    "logIndex": "1",
+                    "logId": {"keyId": STANDARD.encode([0u8; 32])},
+                    "kindVersion": {"kind": "hashedrekord", "version": "0.0.2"},
+                    "canonicalizedBody": STANDARD.encode(dsse_body.to_string()),
+                }],
+            },
+            "dsseEnvelope": {
+                "payload": STANDARD.encode(&statement),
+                "payloadType": payload_type,
+                "signatures": [{"sig": pae_sig_b64, "keyid": ""}],
+            },
+        });
+        let dsse_bundle = Bundle::from_json(&dsse_bundle_json.to_string()).unwrap();
+
+        verifier
+            .verify(artifact.as_slice(), &dsse_bundle, &policy)
+            .unwrap_or_else(|e| panic!("{key_details} DSSE failed: {e}"));
+        assert!(
+            verifier
+                .verify(b"other".as_slice(), &dsse_bundle, &policy)
+                .is_err(),
+            "{key_details} DSSE must reject wrong artifact"
+        );
+    }
+}
+
+#[test]
 fn test_verify_with_key_treats_public_key_hint_as_opaque() {
     for hint in [
         "opaque-key-name",

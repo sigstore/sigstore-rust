@@ -443,14 +443,16 @@ pub(crate) struct HashedRekordSignatureV2 {
 
 /// Signature algorithms of Rekor v2 hashedrekord entries.
 ///
-/// The key details determine the digest algorithm of the logged digest: a
-/// Rekor v2 log derives it from this value and rejects digests of any other
-/// length, so a P-384 entry always carries a 48-byte SHA-384 digest.
+/// Covers the seven default client signing algorithms accepted by Rekor v2
+/// (`rekor-tiles`). The key details determine the digest algorithm of the
+/// logged digest: a Rekor v2 log derives it from this value and rejects digests
+/// of any other length (e.g., 32 bytes for SHA-256, 48 bytes for SHA-384, or
+/// 64 bytes for SHA-512).
 ///
-/// [`HashedRekordV2`] requests carry a SHA-256 digest, so only
-/// [`RekorV2KeyDetails::PkixEcdsaP256Sha256`] produces a valid request. The
-/// other variants are needed to parse and verify entries logged by other
-/// clients.
+/// [`HashedRekordV2`] requests carry a SHA-256 digest, so only the SHA-256
+/// variants ([`RekorV2KeyDetails::PkixEcdsaP256Sha256`] and the RSA PKCS#1 v1.5
+/// variants) produce a valid request. The SHA-384 and SHA-512 variants are
+/// needed to parse and verify entries logged by other clients.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum RekorV2KeyDetails {
@@ -460,6 +462,21 @@ pub enum RekorV2KeyDetails {
     /// ECDSA over P-384 with SHA-384, PKIX-encoded key.
     #[serde(rename = "PKIX_ECDSA_P384_SHA_384")]
     PkixEcdsaP384Sha384,
+    /// ECDSA over P-521 with SHA-512, PKIX-encoded key.
+    #[serde(rename = "PKIX_ECDSA_P521_SHA_512")]
+    PkixEcdsaP521Sha512,
+    /// RSA PKCS#1 v1.5 (2048-bit) with SHA-256, PKIX-encoded key.
+    #[serde(rename = "PKIX_RSA_PKCS1V15_2048_SHA256")]
+    PkixRsaPkcs1v152048Sha256,
+    /// RSA PKCS#1 v1.5 (3072-bit) with SHA-256, PKIX-encoded key.
+    #[serde(rename = "PKIX_RSA_PKCS1V15_3072_SHA256")]
+    PkixRsaPkcs1v153072Sha256,
+    /// RSA PKCS#1 v1.5 (4096-bit) with SHA-256, PKIX-encoded key.
+    #[serde(rename = "PKIX_RSA_PKCS1V15_4096_SHA256")]
+    PkixRsaPkcs1v154096Sha256,
+    /// Ed25519ph (prehashed Ed25519 with SHA-512), PKIX-encoded key.
+    #[serde(rename = "PKIX_ED25519_PH")]
+    PkixEd25519Ph,
 }
 
 impl RekorV2KeyDetails {
@@ -467,8 +484,14 @@ impl RekorV2KeyDetails {
     /// details.
     pub fn hash_algorithm(self) -> HashAlgorithm {
         match self {
-            RekorV2KeyDetails::PkixEcdsaP256Sha256 => HashAlgorithm::Sha2256,
+            RekorV2KeyDetails::PkixEcdsaP256Sha256
+            | RekorV2KeyDetails::PkixRsaPkcs1v152048Sha256
+            | RekorV2KeyDetails::PkixRsaPkcs1v153072Sha256
+            | RekorV2KeyDetails::PkixRsaPkcs1v154096Sha256 => HashAlgorithm::Sha2256,
             RekorV2KeyDetails::PkixEcdsaP384Sha384 => HashAlgorithm::Sha2384,
+            RekorV2KeyDetails::PkixEcdsaP521Sha512 | RekorV2KeyDetails::PkixEd25519Ph => {
+                HashAlgorithm::Sha2512
+            }
         }
     }
 
@@ -477,6 +500,11 @@ impl RekorV2KeyDetails {
         match self {
             RekorV2KeyDetails::PkixEcdsaP256Sha256 => "PKIX_ECDSA_P256_SHA_256",
             RekorV2KeyDetails::PkixEcdsaP384Sha384 => "PKIX_ECDSA_P384_SHA_384",
+            RekorV2KeyDetails::PkixEcdsaP521Sha512 => "PKIX_ECDSA_P521_SHA_512",
+            RekorV2KeyDetails::PkixRsaPkcs1v152048Sha256 => "PKIX_RSA_PKCS1V15_2048_SHA256",
+            RekorV2KeyDetails::PkixRsaPkcs1v153072Sha256 => "PKIX_RSA_PKCS1V15_3072_SHA256",
+            RekorV2KeyDetails::PkixRsaPkcs1v154096Sha256 => "PKIX_RSA_PKCS1V15_4096_SHA256",
+            RekorV2KeyDetails::PkixEd25519Ph => "PKIX_ED25519_PH",
         }
     }
 }
@@ -664,6 +692,31 @@ mod tests {
                 "PKIX_ECDSA_P384_SHA_384",
                 HashAlgorithm::Sha2384,
             ),
+            (
+                RekorV2KeyDetails::PkixEcdsaP521Sha512,
+                "PKIX_ECDSA_P521_SHA_512",
+                HashAlgorithm::Sha2512,
+            ),
+            (
+                RekorV2KeyDetails::PkixRsaPkcs1v152048Sha256,
+                "PKIX_RSA_PKCS1V15_2048_SHA256",
+                HashAlgorithm::Sha2256,
+            ),
+            (
+                RekorV2KeyDetails::PkixRsaPkcs1v153072Sha256,
+                "PKIX_RSA_PKCS1V15_3072_SHA256",
+                HashAlgorithm::Sha2256,
+            ),
+            (
+                RekorV2KeyDetails::PkixRsaPkcs1v154096Sha256,
+                "PKIX_RSA_PKCS1V15_4096_SHA256",
+                HashAlgorithm::Sha2256,
+            ),
+            (
+                RekorV2KeyDetails::PkixEd25519Ph,
+                "PKIX_ED25519_PH",
+                HashAlgorithm::Sha2512,
+            ),
         ] {
             let json = serde_json::to_string(&details).unwrap();
             assert_eq!(json, format!("\"{name}\""));
@@ -674,7 +727,16 @@ mod tests {
             assert_eq!(details.to_string(), name);
             assert_eq!(details.hash_algorithm(), algorithm);
         }
-        assert!(serde_json::from_str::<RekorV2KeyDetails>("\"PKIX_ECDSA_P384_SHA_256\"").is_err());
+        for rejected in [
+            "\"PKIX_ECDSA_P384_SHA_256\"",
+            "\"PKIX_ED25519\"",
+            "\"PKIX_RSA_PSS_2048_SHA256\"",
+        ] {
+            assert!(
+                serde_json::from_str::<RekorV2KeyDetails>(rejected).is_err(),
+                "should reject {rejected}"
+            );
+        }
     }
 
     #[test]

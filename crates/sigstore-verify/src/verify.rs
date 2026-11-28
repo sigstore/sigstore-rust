@@ -141,6 +141,7 @@ enum Prepared<'a> {
     Certificate {
         policy: &'a VerificationPolicy,
         cert_info: Box<sigstore_crypto::CertificateInfo>,
+        scheme: SigningScheme,
     },
     PublicKey {
         policy: &'a PublicKeyVerificationPolicy,
@@ -666,8 +667,12 @@ impl Verifier {
         requirements: &ArtifactRequirements,
     ) -> Result<VerificationResult> {
         match prepared {
-            Prepared::Certificate { policy, cert_info } => {
-                self.verify_certificate(artifact, bundle, policy, &cert_info, requirements)
+            Prepared::Certificate {
+                policy,
+                cert_info,
+                scheme,
+            } => {
+                self.verify_certificate(artifact, bundle, policy, &cert_info, scheme, requirements)
             }
             Prepared::PublicKey { policy, scheme } => {
                 self.verify_public_key(artifact, bundle, policy, scheme, requirements)
@@ -681,6 +686,7 @@ impl Verifier {
         bundle: &Bundle,
         policy: &VerificationPolicy,
         cert_info: &sigstore_crypto::CertificateInfo,
+        signing_scheme: SigningScheme,
         requirements: &ArtifactRequirements,
     ) -> Result<VerificationResult> {
         let mut result = VerificationResult::new();
@@ -805,11 +811,7 @@ impl Verifier {
         //      public key.
         // For DSSE envelopes, verify using PAE (Pre-Authentication Encoding)
         if let SignatureContent::DsseEnvelope(envelope) = &bundle.content {
-            verify_dsse_envelope_signature(
-                envelope,
-                &cert_info.public_key,
-                cert_info.key_algorithm.default_signing_scheme(),
-            )?;
+            verify_dsse_envelope_signature(envelope, &cert_info.public_key, signing_scheme)?;
 
             // Verify the payload binds the artifact
             requirements.verify_binding(&artifact)?;
@@ -823,7 +825,12 @@ impl Verifier {
             // regardless of `policy.verify_tlog` so the signature is always checked;
             // the transparency-log path (step 8) performs an equivalent check when
             // enabled, but must not be the only place verification happens.
-            verify_message_signature_crypto(cert_info, msg_sig, &artifact)?;
+            verify_signature_over_artifact(
+                &cert_info.public_key,
+                signing_scheme,
+                &msg_sig.signature,
+                &artifact,
+            )?;
         }
 
         // (8): Verify the transparency log entry's consistency against the other
@@ -1014,11 +1021,33 @@ fn signing_scheme_for_message_signature(
     }
 }
 
-fn signing_scheme_for_content(
+fn has_rekor_v2_ed25519ph_entry(bundle: &Bundle) -> bool {
+    bundle
+        .verification_material
+        .tlog_entries
+        .iter()
+        .any(|entry| {
+            entry.kind_version == KindVersion::HashedRekordV002
+                && matches!(
+                    sigstore_rekor::body::RekorEntryBody::parse(
+                        &entry.canonicalized_body,
+                        entry.kind_version,
+                    ),
+                    Ok(sigstore_rekor::body::RekorEntryBody::HashedRekordV002(body))
+                        if body.spec.hashed_rekord_v002.signature.verifier.key_details
+                            == sigstore_rekor::RekorV2KeyDetails::PkixEd25519Ph
+                )
+        })
+}
+
+fn signing_scheme_for_bundle(
     key_algorithm: KeyAlgorithm,
-    content: &SignatureContent,
+    bundle: &Bundle,
 ) -> Result<SigningScheme> {
-    match content {
+    if key_algorithm == KeyAlgorithm::Ed25519 && has_rekor_v2_ed25519ph_entry(bundle) {
+        return Ok(SigningScheme::Ed25519Ph);
+    }
+    match &bundle.content {
         SignatureContent::MessageSignature(msg_sig) => {
             signing_scheme_for_message_signature(key_algorithm, msg_sig)
         }
@@ -1064,10 +1093,7 @@ fn prepare_public_key(
         ));
     }
     validate_structure(bundle, policy.verify_tlog)?;
-    signing_scheme_for_content(
-        KeyAlgorithm::from_spki(&policy.public_key)?,
-        &bundle.content,
-    )
+    signing_scheme_for_bundle(KeyAlgorithm::from_spki(&policy.public_key)?, bundle)
 }
 
 /// Run the bundle-only checks for `policy` and derive the artifact
@@ -1079,11 +1105,12 @@ fn prepare<'a>(
     let (prepared, scheme) = match policy {
         PolicyKind::Certificate(policy) => {
             let cert_info = prepare_certificate(bundle, policy)?;
-            let scheme = signing_scheme_for_content(cert_info.key_algorithm, &bundle.content)?;
+            let scheme = signing_scheme_for_bundle(cert_info.key_algorithm, bundle)?;
             (
                 Prepared::Certificate {
                     policy,
                     cert_info: Box::new(cert_info),
+                    scheme,
                 },
                 scheme,
             )
@@ -1095,19 +1122,6 @@ fn prepare<'a>(
     };
     let requirements = ArtifactRequirements::new(&bundle.content, scheme)?;
     Ok((prepared, requirements))
-}
-
-fn verify_message_signature_crypto(
-    cert_info: &sigstore_crypto::CertificateInfo,
-    msg_sig: &sigstore_types::bundle::MessageSignature,
-    artifact: &PreparedArtifact<'_>,
-) -> Result<()> {
-    verify_signature_over_artifact(
-        &cert_info.public_key,
-        signing_scheme_for_message_signature(cert_info.key_algorithm, msg_sig)?,
-        &msg_sig.signature,
-        artifact,
-    )
 }
 
 /// Convenience function to verify an artifact against a bundle

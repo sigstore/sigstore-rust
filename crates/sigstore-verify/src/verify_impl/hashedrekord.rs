@@ -119,9 +119,14 @@ fn validate_artifact_hash(artifact_hash: &[u8], expected_hash: &[u8]) -> Result<
 fn v002_digest_algorithm(logged: &HashedRekordV002Data) -> Result<HashAlgorithm> {
     let verifier = &logged.signature.verifier;
     let key_details = verifier.key_details;
-    let expected_key = match key_details {
-        RekorV2KeyDetails::PkixEcdsaP256Sha256 => KeyAlgorithm::EcdsaP256,
-        RekorV2KeyDetails::PkixEcdsaP384Sha384 => KeyAlgorithm::EcdsaP384,
+    let (expected_key, expected_rsa_bits) = match key_details {
+        RekorV2KeyDetails::PkixEcdsaP256Sha256 => (KeyAlgorithm::EcdsaP256, None),
+        RekorV2KeyDetails::PkixEcdsaP384Sha384 => (KeyAlgorithm::EcdsaP384, None),
+        RekorV2KeyDetails::PkixEcdsaP521Sha512 => (KeyAlgorithm::EcdsaP521, None),
+        RekorV2KeyDetails::PkixRsaPkcs1v152048Sha256 => (KeyAlgorithm::Rsa, Some(2048)),
+        RekorV2KeyDetails::PkixRsaPkcs1v153072Sha256 => (KeyAlgorithm::Rsa, Some(3072)),
+        RekorV2KeyDetails::PkixRsaPkcs1v154096Sha256 => (KeyAlgorithm::Rsa, Some(4096)),
+        RekorV2KeyDetails::PkixEd25519Ph => (KeyAlgorithm::Ed25519, None),
         other => {
             return Err(Error::UnsupportedBundle(format!(
                 "unsupported Rekor v2 key details: {other}"
@@ -129,11 +134,19 @@ fn v002_digest_algorithm(logged: &HashedRekordV002Data) -> Result<HashAlgorithm>
         }
     };
 
-    let logged_key = logged_key_algorithm(verifier)?;
+    let (logged_spki, logged_key) = logged_verifier_key(verifier)?;
     if logged_key != expected_key {
         return Err(Error::entry_mismatch(format!(
             "Rekor entry key details {key_details} do not match its {logged_key:?} key"
         )));
+    }
+    if let Some(expected_bits) = expected_rsa_bits {
+        let actual_bits = rsa_modulus_bits(&logged_spki)?;
+        if actual_bits != expected_bits {
+            return Err(Error::entry_mismatch(format!(
+                "Rekor entry key details {key_details} require a {expected_bits}-bit RSA key, got {actual_bits} bits"
+            )));
+        }
     }
 
     let algorithm = key_details.hash_algorithm();
@@ -155,30 +168,61 @@ fn v002_digest_algorithm(logged: &HashedRekordV002Data) -> Result<HashAlgorithm>
     Ok(algorithm)
 }
 
-/// Read the algorithm of the entry's sole public-key or certificate verifier.
-fn logged_key_algorithm(verifier: &HashedRekordV002Verifier) -> Result<KeyAlgorithm> {
-    Ok(match (&verifier.public_key, &verifier.x509_certificate) {
-        (Some(key), None) => KeyAlgorithm::from_spki(&key.raw_bytes).map_err(|e| {
-            Error::malformed_entry(format!("invalid public key in Rekor entry: {e}"))
-        })?,
+/// Read the SPKI public key and algorithm of the entry's sole public-key or
+/// certificate verifier.
+fn logged_verifier_key(
+    verifier: &HashedRekordV002Verifier,
+) -> Result<(DerPublicKey, KeyAlgorithm)> {
+    match (&verifier.public_key, &verifier.x509_certificate) {
+        (Some(key), None) => {
+            let algorithm = KeyAlgorithm::from_spki(&key.raw_bytes).map_err(|e| {
+                Error::malformed_entry(format!("invalid public key in Rekor entry: {e}"))
+            })?;
+            Ok((key.raw_bytes.clone(), algorithm))
+        }
         (None, Some(cert)) => {
-            parse_certificate_info(&cert.raw_bytes)
-                .map_err(|e| {
-                    Error::malformed_entry(format!("invalid certificate in Rekor entry: {e}"))
-                })?
-                .key_algorithm
+            let info = parse_certificate_info(&cert.raw_bytes).map_err(|e| {
+                Error::malformed_entry(format!("invalid certificate in Rekor entry: {e}"))
+            })?;
+            Ok((info.public_key, info.key_algorithm))
         }
-        (Some(_), Some(_)) => {
-            return Err(Error::malformed_entry(
-                "Rekor entry verifier has both a public key and a certificate".to_string(),
-            ))
-        }
-        (None, None) => {
-            return Err(Error::malformed_entry(
-                "Rekor entry verifier has neither a public key nor a certificate".to_string(),
-            ))
-        }
-    })
+        (Some(_), Some(_)) => Err(Error::malformed_entry(
+            "Rekor entry verifier has both a public key and a certificate".to_string(),
+        )),
+        (None, None) => Err(Error::malformed_entry(
+            "Rekor entry verifier has neither a public key nor a certificate".to_string(),
+        )),
+    }
+}
+
+/// Return the modulus size in bits of an RSA SPKI public key.
+fn rsa_modulus_bits(spki_der: &DerPublicKey) -> Result<usize> {
+    use x509_cert::der::{asn1::UintRef, Reader as _, SliceReader};
+
+    let spki = x509_cert::spki::SubjectPublicKeyInfoRef::try_from(spki_der.as_bytes())
+        .map_err(|e| Error::malformed_entry(format!("invalid public key in Rekor entry: {e}")))?;
+    let mut reader = SliceReader::new(spki.subject_public_key.raw_bytes()).map_err(|e| {
+        Error::malformed_entry(format!("invalid RSA public key in Rekor entry: {e}"))
+    })?;
+    let modulus = reader
+        .sequence(|r| {
+            let modulus: UintRef<'_> = r.decode()?;
+            let _public_exponent: UintRef<'_> = r.decode()?;
+            Ok(modulus)
+        })
+        .and_then(|modulus| {
+            reader.finish(modulus)?;
+            Ok(modulus)
+        })
+        .map_err(|e| {
+            Error::malformed_entry(format!("invalid RSA public key in Rekor entry: {e}"))
+        })?;
+    let mod_bytes = modulus.as_bytes();
+    let bits = match mod_bytes.first() {
+        Some(&first) => (mod_bytes.len() - 1) * 8 + (8 - first.leading_zeros() as usize),
+        None => 0,
+    };
+    Ok(bits)
 }
 
 /// Validate that the certificate in Rekor matches the certificate in the bundle
@@ -391,9 +435,14 @@ mod tests {
     use sigstore_crypto::SigningScheme;
     use sigstore_types::Artifact;
 
-    /// Test public keys used for curve detection and exact key binding.
+    /// Test public keys used for algorithm/key-size detection and exact key binding.
     const P384_KEY: &str = "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEPjUQjqathWUZXpBdDJWDjVyyt2YdKshU+5yRnQu+LoY/+s+ASLZMFAscoSnyNhtJqIanYUWKH3bcnJvjUhYX8PsLZ4U28uOSh++vOqacWHVOK3CRJGmw47AudN9oHsO6";
     const P256_KEY: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEd1cZefkJQlXtMUcBsptiJ8HfpRyHwukZWXVCjrRIMK8U1k3lOw8CXdzE/iLy5DEiqa4oA8td++rmxiPlJlZUAg==";
+    const P521_KEY: &str = "MIGbMBAGByqGSM49AgEGBSuBBAAjA4GGAAQAZEF9WGS0QHBx6alJ8zR5/hGIQgsuuuPxWreALuawfc5AD2hfLJoyLvBcwVcjiAmSOo0gkYM2r+QnEbWuVLoqcQkAfwvNVoSTEhTG7gwVrA6V8AAw92KCLhoU+wOiah1J3uXYyb22F7VKBuV055i+TSN3Vc+++yCnasowCp0n564+vyw=";
+    const RSA2048_KEY: &str = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw0XTRQ9s+hbdbNghC52qxjAQjuxUHZKbD3sWlcg3STVxIGjX/m1yHMJz2GRhZVPUFe6BDUeJRTaSxBOtcFvWuYlbJTS8SM/5MmtlWkb5PALa+lBg2HqtJrNkLT6D+eWOneHfh/7Inf2N7E9CAslR3WW0ViKqWUoK60ygD7bAtFr5PpkXaqEw3R4RIoO7wEtzjvp1q6pt+0GLafUyJBKYXXCN2QIpwkGLdMdHkBc6DcJxu1wvt1AVOYYmUjLCdigCqJ+qugk5ayx3ftX6ujXxwvuFM4RKx5hsndwB//M9BW1cd6u1DaTFuZ5lI8qqUkJla9DheoiXArm/4cKRW13GDwIDAQAB";
+    const RSA3072_KEY: &str = "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAij3GJZQoruUKd/NR3byrEor3a5pE7j1lNZNCe9rbu9oATE3tC0r0ckx/FE0N04r9JtY8yEDdA/1VYxjkha0hQLxa0nfykqGddQn7D19zt2sya2m+r0T5ztJroEu6qft5XcJu47ntmIgVMWhFHCJl2s8sXyfE2Ts+x0kXPtqDPOYufNjMDWYC5eG0sOZxcvmkk+tcioGS+z1OF1nTeI4wGs8q53HwpZQH9fyn8HpN8iCCgmR2u0KPRr5hYnALL59vz2asD/wDJN5QwGzP184/VAp8cWbWBLobZG03j8GuKLB86pWYfbdgV6z65K5IbgkH27dh5SM54qrjfO1EeJFRryD0bk9YmEaeTshPiFN0emHm+zqOMNypeWcWnMP11DkZpCkcZJseuGfc9Bn0KfYDgL38aCB3VkNhAiyE01fIbrQnINc3jpPYp58b8oNEk5JFKjQRFUa4Ebd3b9R15E7ZpHKru+z8JVpe2xFWBlEZe57G8aRVw+hBvS6bj1ejYD8BAgMBAAE=";
+    const RSA4096_KEY: &str = "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAwzT/IH1bbRa3LVdDVTatIx2E3dUFVDfY4rkCl6obqV37+e/pWq9LZxcL/sBKLORD2l67xaZSIlvxVAcsX+xkQMqHChVc4jvVUuAWI1sYIgC8Ym+oAHkvOGaQKdZKNWbZI9NtEbjEB82VKrv+Otk0fvgOgc16XU5aCVkt8O/zTZppEWDSidLs+vd3LbQiFf3k27+mP1MsNm4UkqFNxMkp257gnz63MMwJLDEAhDov82+XGYEYiACpwoY2Y9I0p82lu9mCO9sERPNG2UQ47fI1qk0GdV1bme6sgCDufJHRHXWD2MPITrRJnyzg6YYn7tX7g32xKZqAA7jJyCpcjTHHsXwP8U03XAiU4U22D1necgXYuIa+rCRQpPjUMI0MX+JfL+npkgefk2ygTOprI+dqclD9WBJiSYevln24cOJlORjG7mg13TuxVJQq0YsKDsan0FZpovLyBuj9LrgzeJpaiBmuznhoVFVOBImrgROVRSHQxFNCYCCf5gqEFaNcbXaUrcPOA/5EuSrhvY+xBaYhnb7bR9u7znR2J9BI7VC2lxlRNu1LnmjholreI9GcLhS3+5aAHgsrG09BmHn4YMgCXWP1J+JVy+VYtfGe3tspwuSLhBEnNP9XXQr4ii30WH5hpyXHzkJOHqIwickDUqhdptkhfNoe/ttlRByLl7EVpk0CAwEAAQ==";
+    const ED25519_KEY: &str = "MCowBQYDK2VwAyEAB31fpkySzG9cBMZ8NGA26DmcuIHJ4x7K9gqRNNssOss=";
     const OTHER_P384_KEY: &str = "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEg9Umw8SVCTf5swPswBu3b1qXDPc4+Uj4T/h/F6bm2I6xkA4O1bXzTy4nnmGXxevyrRlJeUIRrHd/aJLs4p084odVdyJAvgYMmzfiSpib1N2SmCTLKRXOyS45o6N4w40m";
     const SIGNATURE: &str = "c2lnbmF0dXJl";
 
@@ -447,6 +496,33 @@ mod tests {
                 key: P256_KEY,
                 algorithm: "SHA2_256",
                 digest: sigstore_crypto::sha256(&pae()).as_bytes().to_vec(),
+            }
+        }
+
+        fn conforming_p521() -> Self {
+            Self {
+                key_details: "PKIX_ECDSA_P521_SHA_512",
+                key: P521_KEY,
+                algorithm: "SHA2_512",
+                digest: sigstore_crypto::sha512(&pae()).as_bytes().to_vec(),
+            }
+        }
+
+        fn conforming_rsa(key_details: &'static str, key: &'static str) -> Self {
+            Self {
+                key_details,
+                key,
+                algorithm: "SHA2_256",
+                digest: sigstore_crypto::sha256(&pae()).as_bytes().to_vec(),
+            }
+        }
+
+        fn conforming_ed25519ph() -> Self {
+            Self {
+                key_details: "PKIX_ED25519_PH",
+                key: ED25519_KEY,
+                algorithm: "SHA2_512",
+                digest: sigstore_crypto::sha512(&pae()).as_bytes().to_vec(),
             }
         }
 
@@ -537,6 +613,84 @@ mod tests {
     #[test]
     fn test_p256_dsse_entry_binds_sha256_of_pae() {
         Entry::conforming_p256().verify(P256_KEY).unwrap();
+    }
+
+    #[test]
+    fn test_p521_dsse_entry_binds_sha512_of_pae() {
+        Entry::conforming_p521().verify(P521_KEY).unwrap();
+    }
+
+    #[test]
+    fn test_rsa_dsse_entries_bind_sha256_of_pae() {
+        for (details, key) in [
+            ("PKIX_RSA_PKCS1V15_2048_SHA256", RSA2048_KEY),
+            ("PKIX_RSA_PKCS1V15_3072_SHA256", RSA3072_KEY),
+            ("PKIX_RSA_PKCS1V15_4096_SHA256", RSA4096_KEY),
+        ] {
+            Entry::conforming_rsa(details, key).verify(key).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_ed25519ph_dsse_entry_binds_sha512_of_pae() {
+        Entry::conforming_ed25519ph().verify(ED25519_KEY).unwrap();
+    }
+
+    #[test]
+    fn test_rsa_key_size_must_match_key_details() {
+        for (details, wrong_key, expected_bits, actual_bits) in [
+            ("PKIX_RSA_PKCS1V15_2048_SHA256", RSA3072_KEY, 2048, 3072),
+            ("PKIX_RSA_PKCS1V15_2048_SHA256", RSA4096_KEY, 2048, 4096),
+            ("PKIX_RSA_PKCS1V15_3072_SHA256", RSA2048_KEY, 3072, 2048),
+            ("PKIX_RSA_PKCS1V15_4096_SHA256", RSA2048_KEY, 4096, 2048),
+        ] {
+            let entry = Entry::conforming_rsa(details, wrong_key);
+            assert_entry_mismatch(
+                entry.verify(wrong_key),
+                &format!(
+                    "key details {details} require a {expected_bits}-bit RSA key, got {actual_bits} bits"
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn test_p521_and_ed25519ph_message_signature_entries_bind_sha512() {
+        let digest = sigstore_crypto::sha512(b"artifact");
+        for (entry, key, scheme) in [
+            (
+                Entry {
+                    digest: digest.as_bytes().to_vec(),
+                    ..Entry::conforming_p521()
+                },
+                P521_KEY,
+                SigningScheme::EcdsaP521Sha512,
+            ),
+            (
+                Entry {
+                    digest: digest.as_bytes().to_vec(),
+                    ..Entry::conforming_ed25519ph()
+                },
+                ED25519_KEY,
+                SigningScheme::Ed25519Ph,
+            ),
+        ] {
+            let bundle = entry.bundle(json!({"messageSignature": {"signature": SIGNATURE}}));
+            let managed_key = DerPublicKey::new(STANDARD.decode(key).unwrap());
+            let requirements = ArtifactRequirements::new(&bundle.content, scheme).unwrap();
+            let artifact =
+                PreparedArtifact::from_artifact(Artifact::Blob(b"artifact"), &requirements)
+                    .unwrap();
+            let tlog = &bundle.verification_material.tlog_entries[0];
+            verify_hashedrekord_entry(tlog, &bundle, &artifact, Some(&managed_key)).unwrap();
+
+            let wrong =
+                PreparedArtifact::from_artifact(Artifact::Blob(b"other"), &requirements).unwrap();
+            assert!(matches!(
+                verify_hashedrekord_entry(tlog, &bundle, &wrong, Some(&managed_key)),
+                Err(Error::ArtifactMismatch(_))
+            ));
+        }
     }
 
     #[test]
